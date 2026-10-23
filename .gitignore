@@ -1,0 +1,59 @@
+# Agent scratch space and transient build/research artifacts
+/tmp/
+/target/
+
+# macOS / editors
+.DS_Store
+*.swp
+*.swo
+.vscode/
+.idea/
+.zed/*
+!.zed/settings.json
+
+# ESP / embedded outputs
+*.elf
+*.bin
+*.map
+*.uf2
+*.hex
+/.embuild/
+/build/
+/firmware/build*/*
+/firmware/managed_components/
+/firmware/sdkconfig
+/firmware/.cache/
+compile_commands.json
+.cache/
+.clangd/
+
+# Node / web
+dist
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.webpack/
+.svelte-kit/
+.vite/
+coverage/
+web/coverage/
+web/test-results/
+web/playwright-report/
+web/dist/
+
+# Python release-tool environment
+/tools/.venv/
+__pycache__
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+
+# Logs
+*.log

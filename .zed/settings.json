@@ -1,0 +1,58 @@
+{
+  "languages": {
+    "TypeScript": {
+      "language_servers": ["typescript-language-server", "!vtsls", "..."],
+    },
+    "TSX": {
+      "language_servers": ["typescript-language-server", "!vtsls", "..."],
+    },
+    "JavaScript": {
+      "language_servers": ["typescript-language-server", "!vtsls", "..."],
+    },
+    "Svelte": {
+      "enable_language_server": false,
+    },
+    "CSS": {
+      "language_servers": [
+        "tailwindcss-intellisense-css",
+        "!vscode-css-language-server",
+        "...",
+      ],
+    },
+
+    "Rust": {
+      "language_servers": ["!rust-analyzer"],
+    },
+    "C++": {
+      "language_servers": ["clangd", "..."],
+      "format_on_save": "on",
+      "formatter": { "language_server": { "name": "clangd" } },
+    },
+    "C": {
+      "language_servers": ["clangd", "..."],
+      "format_on_save": "on",
+      "formatter": { "language_server": { "name": "clangd" } },
+    },
+  },
+  "lsp": {
+    "tailwindcss-language-server": {
+      "settings": {
+        "lint": {
+          "suggestCanonicalClasses": "ignore",
+        },
+      },
+    },
+    "clangd": {
+      "binary": {
+        "path": "clangd",
+        "arguments": [
+          "--background-index",
+          "--enable-config",
+          "--clang-tidy",
+          "--query-driver=**/xtensa-esp-elf-*",
+          "--header-insertion=never",
+        ],
+      },
+    },
+  },
+}

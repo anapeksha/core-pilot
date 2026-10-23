@@ -1,0 +1,14 @@
+CompileFlags:
+  CompilationDatabase: firmware/build-clang
+Diagnostics:
+  UnusedIncludes: None
+---
+If:
+  PathMatch: firmware/components/.*/test/.*\.cpp
+CompileFlags:
+  CompilationDatabase: firmware/build-tests-clang
+---
+If:
+  PathMatch: .*managed_components/.*
+Diagnostics:
+  Suppress: "*"
