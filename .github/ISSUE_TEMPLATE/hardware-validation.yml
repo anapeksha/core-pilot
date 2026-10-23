@@ -1,0 +1,90 @@
+name: Hardware validation record
+description: Record a bounded CoreS3, Matter, Thread, OTA, display, touch, power, network, or provider validation
+title: "test(hardware): "
+labels: [hardware-validation]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Validation area
+      options:
+        - CoreS3 boot
+        - LCD and TF-card coexistence
+        - Display or touch
+        - PMIC, battery, or charging
+        - Wi-Fi or local HTTP
+        - Matter over Wi-Fi
+        - Gateway H2 or Thread
+        - OTA and recovery
+        - Encrypted storage retention
+        - SMTP
+        - AI provider and TLS
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: build
+    attributes:
+      label: Firmware build
+      description: Exact release tag or commit SHA flashed.
+    validations:
+      required: true
+
+  - type: textarea
+    id: setup
+    attributes:
+      label: Hardware and environment
+      description: Device revisions, attached peripherals, network/provider, SD card, power source, and relevant configuration. Redact secrets.
+    validations:
+      required: true
+
+  - type: textarea
+    id: action
+    attributes:
+      label: Exact action
+      description: Steps performed on the real hardware, network, or provider.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed display, browser, and log behavior
+      description: Include bounded, redacted evidence and distinguish direct observation from inference.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Pass
+        - Fail
+        - Inconclusive
+    validations:
+      required: true
+
+  - type: textarea
+    id: followup
+    attributes:
+      label: Recovery and follow-up
+      description: Record recovery steps, remaining risks, and checks that were not performed.
+
+  - type: checkboxes
+    id: integrity
+    attributes:
+      label: Evidence integrity
+      options:
+        - label: This result came from the relevant real hardware, network, or provider rather than a mock.
+          required: true
+        - label: Logs and screenshots are bounded and contain no secrets or Device Seed material.
+          required: true

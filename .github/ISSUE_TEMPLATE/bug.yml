@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a reproducible Core Pilot firmware or dashboard defect
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report observed behavior only. Redact Wi-Fi credentials, API keys, Matter credentials, Device Seed material, and private network details that are not needed to reproduce the issue.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Firmware runtime
+        - Dashboard
+        - Storage or encryption
+        - Wi-Fi or local networking
+        - Matter
+        - Thread or Gateway H2
+        - OTA or recovery
+        - AI provider or tools
+        - SMTP
+        - CI or release
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What is wrong?
+      placeholder: A concise description of the defect.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start from...
+        2. Perform...
+        3. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Firmware version or commit
+      placeholder: v0.1.0 or commit SHA
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: CoreS3 revision, browser/OS, network topology, SD card, and attached hardware where relevant.
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted logs or screenshots
+      description: Use bounded captures. Never include secrets or Device Seed material.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I removed credentials, API keys, setup payloads, and other secrets.
+          required: true
+        - label: I have not inferred hardware success or failure solely from a mock or host test.
+          required: true

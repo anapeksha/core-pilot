@@ -1,0 +1,63 @@
+name: Feature request
+description: Propose a focused Core Pilot capability or improvement
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Firmware runtime
+        - Dashboard
+        - Automation or scenes
+        - Storage or security
+        - Wi-Fi or local networking
+        - Matter
+        - Thread or Gateway H2
+        - OTA or recovery
+        - AI assistant
+        - Diagnostics or activity
+        - CI or release
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user or operator problem should be solved?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful end-to-end behavior, not only a UI control.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Safety and resource constraints
+      description: Include bounds, persistence, offline behavior, security, memory, flash, network, and hardware implications.
+
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Product principles
+      options:
+        - label: The feature can preserve local control without AI.
+          required: true
+        - label: Unsupported hardware or protocol behavior will remain visibly unavailable until validated.
+          required: true
+        - label: The proposal does not require WAN exposure or dashboard authentication by default.
+          required: true
