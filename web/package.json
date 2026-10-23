@@ -1,0 +1,57 @@
+{
+  "name": "core-pilot-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "format": "prettier --check .",
+    "lint": "eslint .",
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
+    "test:e2e": "playwright test",
+    "dev": "vite dev",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@kobalte/core": "^0.13.14",
+    "@solidjs/router": "^1.0.0",
+    "@tanstack/solid-query": "^5.104.0",
+    "@tanstack/solid-virtual": "^3.13.40",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "solid-hook-form": "^2.5.3",
+    "solid-icons": "^1.2.0",
+    "solid-js": "^1.9.15",
+    "solid-sonner": "^0.3.2",
+    "tailwind-merge": "^3.7.0",
+    "tailwind-variants": "^3.3.1",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "^1.63.0",
+    "@tailwindcss/typography": "^0.5.20",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "^26.5.1",
+    "@typescript-eslint/eslint-plugin": "^8.70.0",
+    "@typescript-eslint/parser": "^8.70.0",
+    "@vitest/browser-playwright": "^5.0.0",
+    "@vitest/coverage-v8": "^5.0.0",
+    "esbuild": "^0.28.2",
+    "eslint": "^10.10.0",
+    "jsdom": "30.0.1",
+    "prettier": "3.9.6",
+    "tailwindcss": "4.3.3",
+    "typescript": "^6.0.3",
+    "vite": "^8.3.0",
+    "vite-plugin-compression": "^0.5.1",
+    "vite-plugin-singlefile": "2.3.3",
+    "vite-plugin-solid": "^2.11.14",
+    "vitest": "^5.0.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

@@ -1,0 +1,15 @@
+export const routePaths = [
+  "/",
+  "/activity",
+  "/devices",
+  "/devices/add",
+  "/devices/configure",
+  "/rooms",
+  "/groups",
+  "/scenes",
+  "/automations",
+  "/ai",
+  "/ai/tools",
+  "/ai/prompts",
+  "/system",
+] as const;
