@@ -100,6 +100,36 @@ TEST_CASE("model DTOs normalize, deduplicate and enforce action bounds", "[core_
                     static_cast<int>(normalize_id("bad%id", id)));
 }
 
+TEST_CASE("persisted model names enforce UTF-8 byte boundaries", "[core_domain]") {
+  char normalized[max_name + 1]{};
+  char exact_ascii[max_name + 1]{};
+  std::memset(exact_ascii, 'a', max_name);
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::ok),
+                    static_cast<int>(normalize_name(exact_ascii, normalized)));
+
+  char oversized_ascii[max_name + 2]{};
+  std::memset(oversized_ascii, 'a', max_name + 1);
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::invalid_name),
+                    static_cast<int>(normalize_name(oversized_ascii, normalized)));
+
+  char exact_multibyte[max_name + 1]{};
+  for (std::size_t i = 0; i < max_name; i += 2) {
+    exact_multibyte[i] = static_cast<char>(0xc3);
+    exact_multibyte[i + 1] = static_cast<char>(0xa9);
+  }
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::ok),
+                    static_cast<int>(normalize_name(exact_multibyte, normalized)));
+
+  char oversized_multibyte[max_name + 3]{};
+  std::memcpy(oversized_multibyte, exact_multibyte, max_name);
+  oversized_multibyte[max_name] = static_cast<char>(0xc3);
+  oversized_multibyte[max_name + 1] = static_cast<char>(0xa9);
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::invalid_name),
+                    static_cast<int>(normalize_name(oversized_multibyte, normalized)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::invalid_name),
+                    static_cast<int>(normalize_name("   ", normalized)));
+}
+
 TEST_CASE("automation grammar rejects invalid dates, masks, delays and levels", "[core_domain]") {
   TriggerSpec trigger{};
   TEST_ASSERT_TRUE(parse_trigger_spec("once|2024-02-29|09:30|+840", trigger));

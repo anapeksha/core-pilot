@@ -26,7 +26,7 @@ import { Flex } from "~/components/flex";
 import { Grid } from "~/components/grid";
 import { OperationStatus } from "~/components/operation-status";
 import { Label } from "~/components/label";
-import { entityLimits } from "~/lib/request-contracts";
+import { entityLimits, modelNameSchema } from "~/lib/request-contracts";
 import {
   Select,
   SelectContent,
@@ -107,7 +107,7 @@ const triggerItems: Choice[] = [{ value: "manual", label: "Manual" }];
 
 const automationFormSchema = z
   .object({
-    name: z.string(),
+    name: modelNameSchema,
     enabled: z.boolean(),
     trigger: z.custom<TriggerDraft>(),
     actions: z.array(z.custom<ActionDraft>()),

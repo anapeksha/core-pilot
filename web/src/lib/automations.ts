@@ -1,7 +1,8 @@
 import type { Automation } from "./api";
+import { entityLimits } from "./request-contracts";
 
-export const MAX_AUTOMATION_ACTIONS = 8;
-export const MAX_NOTIFICATION_BYTES = 72;
+export const MAX_AUTOMATION_ACTIONS = entityLimits.actions;
+export const MAX_NOTIFICATION_BYTES = entityLimits.notification;
 export const MAX_DELAY_MS = 60_000;
 export const MIN_TIMEZONE_OFFSET_MINUTES = -720;
 export const MAX_TIMEZONE_OFFSET_MINUTES = 840;
@@ -148,8 +149,11 @@ export function validateAutomationDraft(
   trigger: TriggerDraft,
   actions: ActionDraft[],
 ): string | null {
-  if (!name.trim() || new TextEncoder().encode(name.trim()).length > 64)
-    return "Enter a name up to 64 bytes.";
+  if (
+    !name.trim() ||
+    new TextEncoder().encode(name.trim()).length > entityLimits.name
+  )
+    return `Enter a name up to ${entityLimits.name} bytes.`;
   if (trigger.type === "legacy")
     return "Select a supported trigger before saving this legacy automation.";
   if (
@@ -191,7 +195,7 @@ export function validateAutomationDraft(
         byteLength(action.message) > MAX_NOTIFICATION_BYTES ||
         action.message.includes("|"))
     )
-      return "Notification messages must be 1–72 bytes.";
+      return `Notification messages must be 1–${entityLimits.notification} bytes.`;
     if (
       action.type === "delay" &&
       (!Number.isFinite(action.milliseconds) ||

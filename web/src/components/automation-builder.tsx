@@ -21,6 +21,7 @@ import {
 import { Flex } from "~/components/flex";
 import { Grid } from "~/components/grid";
 import { Label } from "~/components/label";
+import { entityLimits } from "~/lib/request-contracts";
 import {
   Select,
   SelectContent,
@@ -591,7 +592,10 @@ function ActionFields(props: ActionCardProps): JSX.Element {
           class="sm:col-span-2"
         >
           <TextFieldLabel>Message</TextFieldLabel>
-          <TextFieldInput id={`message-${props.index}`} maxlength={72} />
+          <TextFieldInput
+            id={`message-${props.index}`}
+            maxlength={entityLimits.notification}
+          />
         </TextField>
       </Show>
       <Show when={action().type === "delay"}>

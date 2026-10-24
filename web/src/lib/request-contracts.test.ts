@@ -1,0 +1,58 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  automationUpsertRequestSchema,
+  groupUpsertRequestSchema,
+  matterDeviceRemoveRequestSchema,
+  roomUpsertRequestSchema,
+  sceneUpsertRequestSchema,
+} from "./request-contracts";
+
+const exactName = "😀".repeat(16);
+const oversizedName = `${exactName}a`;
+
+const modelRequests = [
+  ["room", roomUpsertRequestSchema, (name: string) => ({ name })],
+  [
+    "group",
+    groupUpsertRequestSchema,
+    (name: string) => ({ name, device_ids: [] }),
+  ],
+  [
+    "scene",
+    sceneUpsertRequestSchema,
+    (name: string) => ({ name, actions: [] }),
+  ],
+  [
+    "automation",
+    automationUpsertRequestSchema,
+    (name: string) => ({
+      name,
+      enabled: true,
+      trigger: "manual",
+      actions: ["delay|1"],
+    }),
+  ],
+] as const;
+
+describe("persisted name limits", () => {
+  for (const [kind, schema, request] of modelRequests) {
+    it(`enforces the 64-byte ${kind} name limit`, () => {
+      expect(schema.safeParse(request(exactName)).success).toBe(true);
+      expect(schema.safeParse(request(oversizedName)).success).toBe(false);
+      expect(schema.safeParse(request("   ")).success).toBe(false);
+    });
+  }
+
+  it("accepts only nonzero 64-bit hexadecimal Matter node IDs", () => {
+    for (const device_id of ["1", "0000000000001234", "abcdefABCDEF1234"])
+      expect(
+        matterDeviceRemoveRequestSchema.safeParse({ device_id }).success,
+      ).toBe(true);
+
+    for (const device_id of ["", "0", "-1", "+1", "0x12", "g1", "1".repeat(17)])
+      expect(
+        matterDeviceRemoveRequestSchema.safeParse({ device_id }).success,
+      ).toBe(false);
+  });
+});
