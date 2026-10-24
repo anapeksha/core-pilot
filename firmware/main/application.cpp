@@ -270,6 +270,7 @@ void Application::run() {
   std::size_t discovery_node_index = 0;
   bool discovery_in_flight = false;
   bool matter_ready_reported = false;
+  bool ota_update_shown = false;
   std::uint64_t reconciled_terminal_sequence = 0;
   std::uint64_t last_removed_node_id = 0;
   while (true) {
@@ -309,6 +310,12 @@ void Application::run() {
     if (!matter_ready_reported && matter_status.state == CoreMatter::State::ready) {
       matter_ready_reported = true;
       activity.append("matter_started", "Matter and Thread services started.");
+    }
+    const auto ota_status = ota.status();
+    if (!ota_update_shown && ota_status.state == CoreOta::State::activated) {
+      ota_update_shown = true;
+      display.upgrade({CoreDisplay::UpgradePhase::activated, ota_status.written_bytes,
+                       ota_status.size_bytes, ota_status.restart_after_update});
     }
     if (matter_status.commissioning_state == CoreMatter::CommissioningState::complete &&
         matter_status.commissioned_node_id != 0 &&
