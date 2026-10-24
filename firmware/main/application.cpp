@@ -209,6 +209,9 @@ void Application::run() {
     ESP_LOGE(kTag, "AI chat service startup failed: %s", esp_err_to_name(ai_chat_result));
 
   static OtaService ota;
+  const esp_err_t ota_result = ota.start();
+  if (ota_result != ESP_OK)
+    ESP_LOGE(kTag, "OTA service startup failed: %s", esp_err_to_name(ota_result));
 
   static const HttpRuntime http_runtime{network, activity,       automations, matter,  devices,
                                         models,  wifi_provision, ai_storage,  ai_chat, ota,
@@ -267,10 +270,8 @@ void Application::run() {
   std::size_t discovery_node_index = 0;
   bool discovery_in_flight = false;
   bool matter_ready_reported = false;
-  bool ota_started = false;
   std::uint64_t reconciled_terminal_sequence = 0;
   std::uint64_t last_removed_node_id = 0;
-  TickType_t last_ota_attempt = 0;
   while (true) {
     const auto matter_status = matter.status();
     CoreMatter::TerminalCommand terminals[8]{};
@@ -305,18 +306,9 @@ void Application::run() {
         activity.append("matter_device_remove_failed", "Matter device removal failed.");
       }
     }
-    const TickType_t now = xTaskGetTickCount();
     if (!matter_ready_reported && matter_status.state == CoreMatter::State::ready) {
       matter_ready_reported = true;
       activity.append("matter_started", "Matter and Thread services started.");
-    }
-    if (!ota_started && matter_status.state == CoreMatter::State::ready &&
-        now - last_ota_attempt >= pdMS_TO_TICKS(5000)) {
-      last_ota_attempt = now;
-      const esp_err_t ota_result = ota.start();
-      ota_started = ota_result == ESP_OK;
-      if (!ota_started)
-        ESP_LOGE(kTag, "OTA service startup failed: %s", esp_err_to_name(ota_result));
     }
     if (matter_status.commissioning_state == CoreMatter::CommissioningState::complete &&
         matter_status.commissioned_node_id != 0 &&

@@ -31,7 +31,7 @@ private:
   };
 
   static constexpr UBaseType_t kQueueDepth = 1;
-  static constexpr std::uint32_t kTaskStackBytes = 6144;
+  static constexpr std::uint32_t kTaskStackBytes = 8 * 1024;
 
   static void taskEntry(void* context);
   void run();

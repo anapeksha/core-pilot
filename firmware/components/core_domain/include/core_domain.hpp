@@ -26,7 +26,7 @@ inline constexpr size_t max_actions = 8;
 inline constexpr size_t max_members = 32;
 inline constexpr size_t max_notification = 72;
 inline constexpr uint32_t max_delay_ms = 60000;
-inline constexpr uint32_t max_ota_image = 3 * 1024 * 1024;
+inline constexpr uint32_t max_ota_image = 4 * 1024 * 1024;
 inline constexpr size_t max_ota_chunk = 2 * 1024;
 inline constexpr size_t max_ota_chunk_base64 = 3 * 1024;
 

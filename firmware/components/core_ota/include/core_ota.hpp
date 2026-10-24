@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core_domain.hpp"
 #include "esp_err.h"
 #include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
@@ -14,7 +15,7 @@ namespace core_pilot {
 class CoreOta final {
 public:
   static constexpr std::size_t kMaxChunkBytes = 2 * 1024;
-  static constexpr std::uint32_t kMaxImageBytes = 3 * 1024 * 1024;
+  static constexpr std::uint32_t kMaxImageBytes = core_domain::max_ota_image;
   static constexpr std::size_t kSha256Bytes = 32;
   static constexpr std::size_t kMaxVersionBytes = 64;
 

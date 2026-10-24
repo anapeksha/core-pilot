@@ -126,6 +126,9 @@ TEST_CASE("OTA metadata and chunk offsets, padding and size are bounded", "[core
   char encoded[512]{};
   TEST_ASSERT_TRUE(serialize_ota_prepare(prepare, encoded, sizeof encoded));
   TEST_ASSERT_NOT_NULL(std::strstr(encoded, "\"size_bytes\":3"));
+  prepare.size_bytes = 0x380000;
+  TEST_ASSERT_EQUAL(static_cast<int>(OtaError::ok),
+                    static_cast<int>(validate_ota_prepare(prepare)));
   prepare.size_bytes = max_ota_image + 1;
   TEST_ASSERT_FALSE(serialize_ota_prepare(prepare, encoded, sizeof encoded));
   TEST_ASSERT_EQUAL(static_cast<int>(OtaError::image_too_large),
