@@ -119,6 +119,8 @@ function createFirmwareState() {
         availability: "online",
         room: "lab",
         capabilities: ["On/Off", "Level"],
+        node_id: "0000000000001234",
+        endpoint_id: 1,
       },
     ],
     rooms: [{ id: "lab", name: "Lab" }],
@@ -574,6 +576,7 @@ test("routes every dashboard feature page and renders live firmware status", asy
   ).toBeVisible();
   await expect(page.getByText("192.168.29.2").first()).toBeVisible();
   await expect(page.getByText("CorePilot-Setup-XXXX")).toHaveCount(0);
+  await expect(page.getByText("Battery", { exact: true })).toHaveCount(0);
 
   const routes = [
     ["/#/activity", "Activity"],
@@ -611,7 +614,7 @@ test("shows Home card skeletons until its APIs resolve", async ({ page }) => {
   await expect(page.getByText("Loading home status")).toBeAttached();
   const skeleton = page.locator('[data-home-card-skeleton="home status"]');
   await expect(skeleton).toBeVisible();
-  await expect(skeleton.locator("[data-home-status-skeleton]")).toHaveCount(5);
+  await expect(skeleton.locator("[data-home-status-skeleton]")).toHaveCount(4);
   await expect(page.getByText("Lab_WiFi", { exact: false })).toHaveCount(0);
 
   releaseHealth();
@@ -656,7 +659,6 @@ test("provides a bounded operational home dashboard", async ({ page }) => {
   await expect(page.getByRole("img", { name: "OK" })).toHaveCount(3);
   await expect(page.getByText("Lab", { exact: true })).toBeVisible();
   await expect(page.getByText("1 reported devices")).toBeVisible();
-  await expect(page.getByText("not exposed by status API")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "All off · unavailable" }),
   ).toBeDisabled();
@@ -983,17 +985,18 @@ test("exercises local model CRUD pages for rooms, groups, scenes, and automation
 
   await page.goto("/#/groups");
   await page.getByRole("button", { name: "Create group" }).first().click();
-  await page.getByPlaceholder("Downstairs lights").fill("Accent lights");
-  await page
-    .getByPlaceholder("device-1, device-2")
-    .fill("matter-light-1, matter-light-2");
-  await page.getByRole("button", { name: "Create group" }).last().click();
+  const groupSheet = page.getByRole("dialog", { name: "Create group" });
+  await groupSheet.getByPlaceholder("Downstairs lights").fill("Accent lights");
+  await groupSheet.getByRole("button", { name: /^Devices/ }).click();
+  await page.getByRole("option", { name: "Bench Lamp" }).click();
+  await page.keyboard.press("Escape");
+  await groupSheet.getByRole("button", { name: "Create group" }).click();
   await expect(page.getByText("Group saved.")).toBeVisible();
   expect(state.posts.at(-1)).toMatchObject({
     path: "/api/v1/groups/upsert",
     body: {
       name: "Accent lights",
-      device_ids: ["matter-light-1", "matter-light-2"],
+      device_ids: ["matter-light-1"],
     },
   });
 
@@ -1241,6 +1244,13 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   await expect(page.getByText("Bench Lamp")).toBeVisible();
   await expect(page.getByText("On/Off", { exact: true })).toBeVisible();
   await expect(page.getByText("Level", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Remove" }).click();
+  await page.getByRole("button", { name: "Remove device" }).click();
+  await expect(page.getByText("Matter device removal queued.")).toBeVisible();
+  expect(state.posts.at(-1)).toMatchObject({
+    path: "/api/v1/matter/devices/remove",
+    body: { device_id: "0000000000001234" },
+  });
 
   await page.goto("/#/devices/configure");
   await expectHeading(page, "Device Setup");
@@ -1574,6 +1584,14 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
   await page.getByRole("button", { name: "Create room" }).click();
   await page.getByRole("button", { name: "Create room" }).last().click();
   await expect(page.getByText("Enter a room name.")).toBeVisible();
+  await page.getByPlaceholder("Kitchen").fill(`${"😀".repeat(16)}a`);
+  await page.getByRole("button", { name: "Create room" }).last().click();
+  await expect(
+    page.getByText("Room names must be 64 bytes or fewer."),
+  ).toBeVisible();
+  expect(
+    state.posts.filter((request) => request.path === "/api/v1/rooms/upsert"),
+  ).toHaveLength(0);
 
   await page.goto("/#/devices/add");
   await page.getByRole("button", { name: "Validate Wi‑Fi setup code" }).click();

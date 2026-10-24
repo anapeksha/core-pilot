@@ -137,8 +137,8 @@ function CardQueryContent(props: {
 function HomeStatusSkeleton() {
   return (
     <div class="space-y-5">
-      <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
-        <For each={["w-1/2", "w-2/3", "w-2/5", "w-3/5", "w-1/2"]}>
+      <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <For each={["w-1/2", "w-2/3", "w-2/5", "w-3/5"]}>
           {(width) => (
             <div
               class="min-w-0 rounded-lg border bg-muted/15 p-4"
@@ -408,11 +408,6 @@ export default function Overview() {
             ? ("muted" as const)
             : ("pending" as const),
     },
-    {
-      label: "Battery",
-      value: "Not exposed by status API",
-      tone: "unavailable" as const,
-    },
   ];
 
   createEffect(() => {
@@ -536,7 +531,7 @@ export default function Overview() {
                 fallback={<HomeStatusSkeleton />}
               >
                 <div class="space-y-5">
-                  <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+                  <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                     <For each={homeStatusItems()}>
                       {(item) => (
                         <div class="min-w-0 rounded-lg border bg-muted/15 p-4 transition-colors hover:bg-muted/25">

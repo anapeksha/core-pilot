@@ -1,4 +1,4 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
 import { HiOutlineSquares2x2 } from "solid-icons/hi";
 import { toast } from "solid-sonner";
@@ -17,6 +17,16 @@ import {
 import { Flex } from "~/components/flex";
 import { Grid } from "~/components/grid";
 import {
+  Select,
+  SelectContent,
+  SelectDescription,
+  SelectErrorMessage,
+  SelectItem,
+  SelectLabel,
+  SelectTrigger,
+  SelectValue,
+} from "~/components/select";
+import {
   Sheet,
   SheetContent,
   SheetDescription,
@@ -27,16 +37,19 @@ import {
 import { Skeleton } from "~/components/skeleton";
 import {
   TextField,
-  TextFieldDescription,
   TextFieldErrorMessage,
   TextFieldInput,
   TextFieldLabel,
 } from "~/components/text-field";
-import type { Group } from "~/lib/api";
+import type { Device, Group } from "~/lib/api";
 import { bytesAtMost, entityLimits } from "~/lib/request-contracts";
 import { createToastGate } from "~/lib/toast";
 
 import { groupDeleteMutation, groupUpsertMutation } from "~/mutations/models";
+import {
+  fallbackDevices,
+  devicesQuery as createDevicesQuery,
+} from "~/queries/devices";
 import {
   fallbackGroups,
   groupsQuery as createGroupsQuery,
@@ -48,60 +61,59 @@ const groupSchema = z.object({
     "Name must be 64 bytes or fewer.",
   ).refine((value) => value.trim().length > 0, "Name is required."),
   members: z
-    .string()
-    .transform((value) =>
-      value
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    )
-    .refine((members) => members.length <= entityLimits.groupMembers, {
-      message: "A group can contain at most 32 devices.",
-    })
-    .refine(
-      (members) =>
-        members.every(
-          (member) =>
-            member.length > 0 &&
-            new TextEncoder().encode(member).length <= entityLimits.detail,
-        ),
-      { message: "Each device id must be 96 bytes or fewer." },
-    ),
+    .array(bytesAtMost(entityLimits.detail, "Device ID is too long."))
+    .max(entityLimits.groupMembers, "A group can contain at most 32 devices."),
 });
 
 type GroupFormValues = z.input<typeof groupSchema>;
+type DeviceOption = { id: string; name: string };
+
+function deviceId(device: Device): string {
+  return typeof device.id === "string" ? device.id : device.id[0];
+}
 
 export default function Groups() {
   const groupsQuery = createGroupsQuery();
+  const devicesQuery = createDevicesQuery();
   const upsertMutation = groupUpsertMutation();
   const deleteMutation = groupDeleteMutation();
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [sheetOpen, setSheetOpen] = createSignal(false);
-  const { errors, handleSubmit, register, reset, setError, values } =
+  const { errors, handleSubmit, register, reset, setError, setValue, values } =
     createForm<GroupFormValues>({
-      defaultValues: { name: "", members: "" },
+      defaultValues: { name: "", members: [] },
     });
   const shouldShowToast = createToastGate();
 
   const response = () => groupsQuery.data ?? fallbackGroups;
+  const deviceOptions = createMemo<DeviceOption[]>(() =>
+    (devicesQuery.data?.devices ?? fallbackDevices.devices).map((device) => ({
+      id: deviceId(device),
+      name: device.name,
+    })),
+  );
+  const selectedDevices = createMemo(() => {
+    const selectedIds = new Set(values().members);
+    return deviceOptions().filter((device) => selectedIds.has(device.id));
+  });
   const isInitialLoading = () => groupsQuery.isFetching && !groupsQuery.data;
 
   const openCreate = () => {
     setEditingId(null);
-    reset({ name: "", members: "" });
+    reset({ name: "", members: [] });
     setSheetOpen(true);
   };
 
   const edit = (group: Group) => {
     setEditingId(group.id);
-    reset({ name: group.name, members: group.device_ids.join(", ") });
+    reset({ name: group.name, members: group.device_ids });
     setSheetOpen(true);
   };
 
   const closeSheet = () => {
     setSheetOpen(false);
     setEditingId(null);
-    reset({ name: "", members: "" });
+    reset({ name: "", members: [] });
   };
 
   const handleSheetOpenChange = (open: boolean) => {
@@ -236,40 +248,48 @@ export default function Groups() {
                       )}
                     </Show>
                   </TextField>
-                  <TextField
+                  <Select<DeviceOption>
+                    multiple
+                    closeOnSelection={false}
+                    options={deviceOptions()}
+                    optionValue="id"
+                    optionTextValue="name"
+                    value={selectedDevices()}
+                    placeholder="Select devices"
                     validationState={errors.members ? "invalid" : "valid"}
+                    onChange={(devices) =>
+                      setValue(
+                        "members",
+                        devices.map((device) => device.id),
+                      )
+                    }
+                    itemComponent={(itemProps) => (
+                      <SelectItem item={itemProps.item}>
+                        {itemProps.item.rawValue.name}
+                      </SelectItem>
+                    )}
                   >
-                    <TextFieldLabel for="group-members">
-                      Device ids
-                    </TextFieldLabel>
-                    <TextFieldInput
-                      {...register("members", {
-                        validate: (value) => {
-                          const result =
-                            groupSchema.shape.members.safeParse(value);
-                          return (
-                            result.success || result.error.issues[0]?.message
-                          );
-                        },
-                      })}
-                      id="group-members"
-                      value={values().members}
-                      maxlength={
-                        entityLimits.groupMembers * (entityLimits.detail + 2)
-                      }
-                      placeholder="device-1, device-2"
-                    />
-                    <TextFieldDescription>
-                      Optional comma-separated device ids; up to 32 members.
-                    </TextFieldDescription>
+                    <SelectLabel>Devices</SelectLabel>
+                    <SelectTrigger id="group-members">
+                      <SelectValue<DeviceOption>>
+                        {(state) => {
+                          const selected = state.selectedOptions();
+                          return selected.length > 0
+                            ? selected.map((device) => device.name).join(", ")
+                            : "Select devices";
+                        }}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent />
+                    <SelectDescription>
+                      Optional; select up to 32 devices.
+                    </SelectDescription>
                     <Show when={errors.members?.message}>
                       {(message) => (
-                        <TextFieldErrorMessage>
-                          {message()}
-                        </TextFieldErrorMessage>
+                        <SelectErrorMessage>{message()}</SelectErrorMessage>
                       )}
                     </Show>
-                  </TextField>
+                  </Select>
                 </div>
                 <SheetFooter class="shrink-0 gap-2 border-t px-6 py-4">
                   <Button type="button" variant="outline" onClick={closeSheet}>
