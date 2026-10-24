@@ -4,13 +4,6 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
-### Changed
-
-- Simplified the CoreS3 home screen to show an actionable dashboard instruction.
-- Pinned application storage work to core 0 and kept Matter work on core 1.
-
-## [0.1.0] - 2026-10-19
-
 ### Added
 
 - ESP-IDF 5.5.6 C++20 firmware for M5Stack CoreS3 using M5Unified and M5GFX.
@@ -23,6 +16,14 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Queue-owned Matter commissioning, endpoint discovery, and On/Off commands.
 - ESP-Matter controller and OpenThread border-router integration for an H2 RCP.
 - C++ formatting, Clang-Tidy, dashboard tests, browser tests, E2E tests, CI, and Zed configuration.
+- Unified hardware stress and soak validation with bounded recovery checks.
+- Signed release firmware and complete initial-flash release bundles.
+
+### Changed
+
+- Simplified the CoreS3 home screen to show an actionable dashboard instruction.
+- Pinned application storage work to core 0 and kept Matter work on core 1.
+- Derived firmware versions from release tags instead of hardcoding the API version.
 
 ### Security
 
@@ -30,3 +31,4 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Disabled C++ exceptions and RTTI.
 - Added bounded queues, request bodies, HTTP connections, records, and model collections.
 - Prevented credentials, setup payloads, decrypted records, and key material from being logged.
+- Required ESP-IDF publisher signatures for application OTA updates.
