@@ -20,9 +20,8 @@ public:
 
   enum class State : std::uint8_t { idle, prepared, staging, activated, failed };
 
-  // Local upload proves transport integrity only. It does not authenticate the
-  // firmware publisher or replace ESP-IDF secure boot/signature verification.
-  enum class Assurance : std::uint8_t { integrity_only };
+  // ESP-IDF verifies the publisher signature when the completed image is finalized.
+  enum class Assurance : std::uint8_t { signed_update };
 
   enum class Error : std::uint8_t {
     ok,
@@ -34,6 +33,7 @@ public:
     offset_mismatch,
     final_mismatch,
     digest_mismatch,
+    version_mismatch,
     no_memory,
     ota_begin_failed,
     ota_write_failed,
@@ -68,7 +68,7 @@ public:
 
   struct Status final {
     State state{State::idle};
-    Assurance assurance{Assurance::integrity_only};
+    Assurance assurance{Assurance::signed_update};
     Error last_error{Error::ok};
     esp_err_t last_esp_error{ESP_OK};
     std::uint32_t size_bytes{};

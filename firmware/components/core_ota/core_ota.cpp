@@ -166,7 +166,7 @@ CoreOta::Result CoreOta::prepare(const Prepare& request) {
 
   status_ = {};
   status_.state = State::prepared;
-  status_.assurance = Assurance::integrity_only;
+  status_.assurance = Assurance::signed_update;
   status_.size_bytes = request.size_bytes;
   status_.restart_after_update = request.restart_after_update;
   std::memcpy(status_.version, request.version, std::strlen(request.version) + 1);
@@ -222,6 +222,14 @@ CoreOta::Result CoreOta::write(const Chunk& chunk) {
   handle_ = 0;
   if (error != ESP_OK)
     return fail_locked(Error::ota_end_failed, error);
+
+  esp_app_desc_t description{};
+  error = esp_ota_get_partition_description(partition_, &description);
+  if (error != ESP_OK)
+    return fail_locked(Error::ota_end_failed, error);
+  if (std::strcmp(description.version, status_.version) != 0)
+    return fail_locked(Error::version_mismatch, ESP_ERR_INVALID_VERSION);
+
   error = esp_ota_set_boot_partition(partition_);
   if (error != ESP_OK)
     return fail_locked(Error::boot_partition_failed, error);

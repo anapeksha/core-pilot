@@ -10,6 +10,7 @@
 #include "core_storage.hpp"
 #include "device_registry.hpp"
 #include "domain_contract.hpp"
+#include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -480,7 +481,7 @@ esp_err_t systemHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   cJSON* response = cJSON_CreateObject();
   cJSON_AddStringToObject(response, "product", "Core Pilot");
   cJSON_AddStringToObject(response, "hostname", "corepilot.local");
-  cJSON_AddStringToObject(response, "firmware_version", "0.1.0");
+  cJSON_AddStringToObject(response, "firmware_version", esp_app_get_description()->version);
   cJSON_AddNumberToObject(response, "reset_reason", esp_reset_reason());
   cJSON_AddStringToObject(response, "setup_ap",
                           network.mode == CoreNetwork::Mode::setup_ap ? "enabled" : "disabled");
@@ -494,7 +495,7 @@ esp_err_t systemHandler(httpd_req_t* request, const HttpRuntime& runtime) {
                               ? "ready"
                               : "not-ready");
   cJSON_AddStringToObject(response, "ai", ai_configured ? "configured" : "disabled");
-  cJSON_AddStringToObject(response, "ota", "local-integrity-only");
+  cJSON_AddStringToObject(response, "ota", "signed-update");
   cJSON_AddStringToObject(response, "ota_phase", otaState(ota.state));
   cJSON_AddNumberToObject(response, "ota_progress_bytes", ota.written_bytes);
   cJSON_AddNumberToObject(response, "ota_total_bytes", ota.size_bytes);
