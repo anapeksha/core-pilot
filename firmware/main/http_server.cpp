@@ -1480,6 +1480,23 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   return sendJson(request, response);
 }
 
+bool parseMatterNodeId(const cJSON* value, std::uint64_t& node_id) {
+  if (!cJSON_IsString(value) || value->valuestring == nullptr)
+    return false;
+  const std::size_t length = std::strlen(value->valuestring);
+  if (length == 0 || length > 16)
+    return false;
+  for (std::size_t i = 0; i < length; ++i) {
+    const char c = value->valuestring[i];
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+      return false;
+  }
+  errno = 0;
+  char* end = nullptr;
+  node_id = std::strtoull(value->valuestring, &end, 16);
+  return node_id != 0 && errno == 0 && end != nullptr && *end == '\0';
+}
+
 esp_err_t onOffHandler(httpd_req_t* request) {
   auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
   RequestBody body(kMaxRequestBody + 1);
@@ -1495,12 +1512,8 @@ esp_err_t onOffHandler(httpd_req_t* request) {
   const cJSON* device_id = cJSON_GetObjectItemCaseSensitive(document, "device_id");
   const cJSON* endpoint = cJSON_GetObjectItemCaseSensitive(document, "endpoint_id");
   const cJSON* on = cJSON_GetObjectItemCaseSensitive(document, "on");
-  errno = 0;
-  char* end = nullptr;
-  const std::uint64_t node_id =
-      cJSON_IsString(device_id) ? std::strtoull(device_id->valuestring, &end, 16) : 0;
-  const bool valid_id = cJSON_IsString(device_id) && device_id->valuestring[0] != '\0' &&
-                        end != nullptr && *end == '\0' && errno == 0 && node_id != 0;
+  std::uint64_t node_id = 0;
+  const bool valid_id = parseMatterNodeId(device_id, node_id);
   const bool valid_endpoint =
       endpoint == nullptr ||
       (cJSON_IsNumber(endpoint) && endpoint->valuedouble == endpoint->valueint &&
@@ -1555,6 +1568,35 @@ esp_err_t resetModelsHandler(httpd_req_t* request) {
                                      "with an empty one."
                           : !confirmed ? "Provide the exact reset confirmation."
                                        : "The encrypted model database could not be reset safely.");
+  return sendJson(request, response);
+}
+
+esp_err_t removeMatterDeviceHandler(httpd_req_t* request) {
+  auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
+  RequestBody body(256);
+  std::size_t received = 0;
+  if (runtime == nullptr || !body ||
+      readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
+
+  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  const cJSON* device_id =
+      document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "device_id");
+  std::uint64_t node_id = 0;
+  const bool valid = parseMatterNodeId(device_id, node_id);
+  cJSON_Delete(document);
+
+  std::uint32_t operation_id = 0;
+  const esp_err_t result =
+      valid ? runtime->matter.unpairDevice(node_id, operation_id) : ESP_ERR_INVALID_ARG;
+  cJSON* response = cJSON_CreateObject();
+  cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
+  if (result == ESP_OK)
+    cJSON_AddNumberToObject(response, "operation_id", operation_id);
+  cJSON_AddStringToObject(response, "status", result == ESP_OK ? "queued" : "rejected");
+  cJSON_AddStringToObject(response, "detail",
+                          result == ESP_OK ? "Matter device removal queued."
+                                           : "Matter device removal was rejected.");
   return sendJson(request, response);
 }
 
@@ -2318,6 +2360,10 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                            .method = HTTP_POST,
                            .handler = onOffHandler,
                            .user_ctx = const_cast<HttpRuntime*>(&runtime)};
+  const httpd_uri_t device_remove{.uri = "/api/v1/matter/devices/remove",
+                                  .method = HTTP_POST,
+                                  .handler = removeMatterDeviceHandler,
+                                  .user_ctx = const_cast<HttpRuntime*>(&runtime)};
   const httpd_uri_t registry_reset{.uri = "/api/v1/matter/devices/reset",
                                    .method = HTTP_POST,
                                    .handler = resetDeviceRegistryHandler,
@@ -2413,6 +2459,7 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
       httpd_register_uri_handler(server, &thread_dataset) != ESP_OK ||
       httpd_register_uri_handler(server, &automation_run) != ESP_OK ||
       httpd_register_uri_handler(server, &on_off) != ESP_OK ||
+      httpd_register_uri_handler(server, &device_remove) != ESP_OK ||
       httpd_register_uri_handler(server, &registry_reset) != ESP_OK ||
       httpd_register_uri_handler(server, &models_reset) != ESP_OK ||
       httpd_register_uri_handler(server, &commission_cancel) != ESP_OK ||

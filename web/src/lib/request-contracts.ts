@@ -46,7 +46,7 @@ const modelId = trimmedRequired(entityLimits.id, "ID").regex(
   /^[A-Za-z0-9_-]+$/,
   "ID contains unsupported characters.",
 );
-const modelName = trimmedRequired(entityLimits.name, "Name");
+export const modelNameSchema = trimmedRequired(entityLimits.name, "Name");
 const detail = bytesAtMost(entityLimits.detail, "Value is too long.");
 const optionalModelId = modelId.nullish();
 const emptyRequest = z.object({}).strict();
@@ -202,26 +202,26 @@ export const smtpTestRequestSchema = z
 
 export const modelDeleteRequestSchema = z.object({ id: modelId }).strict();
 export const roomUpsertRequestSchema = z
-  .object({ id: optionalModelId, name: modelName })
+  .object({ id: optionalModelId, name: modelNameSchema })
   .strict();
 export const groupUpsertRequestSchema = z
   .object({
     id: optionalModelId,
-    name: modelName,
+    name: modelNameSchema,
     device_ids: z.array(detail).max(entityLimits.groupMembers),
   })
   .strict();
 export const sceneUpsertRequestSchema = z
   .object({
     id: optionalModelId,
-    name: modelName,
+    name: modelNameSchema,
     actions: z.array(detail).max(entityLimits.actions),
   })
   .strict();
 export const automationUpsertRequestSchema = z
   .object({
     id: optionalModelId,
-    name: modelName,
+    name: modelNameSchema,
     enabled: z.boolean(),
     trigger: trimmedRequired(entityLimits.detail, "Trigger"),
     actions: z.array(detail).min(1).max(entityLimits.actions),
@@ -232,12 +232,24 @@ export const matterCommissionCancelRequestSchema = z
   .object({ operation_id: z.number().int().positive() })
   .strict();
 
+const matterNodeId = z
+  .string()
+  .regex(
+    /^[0-9A-Fa-f]{1,16}$/,
+    "Device ID must be a nonzero hexadecimal node ID.",
+  )
+  .refine((value) => !/^0+$/.test(value), "Device ID must be nonzero.");
+
 export const matterOnOffRequestSchema = z
   .object({
-    device_id: trimmedRequired(64, "Device ID"),
+    device_id: matterNodeId,
     endpoint_id: z.number().int().min(0).max(0xffff).optional(),
     on: z.boolean(),
   })
+  .strict();
+
+export const matterDeviceRemoveRequestSchema = z
+  .object({ device_id: matterNodeId })
   .strict();
 
 export const threadDatasetUpdateRequestSchema = z

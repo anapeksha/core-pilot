@@ -9,6 +9,7 @@ import {
 } from "solid-icons/hi";
 
 import { Button } from "~/components/button";
+import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import {
   Card,
   CardContent,
@@ -36,7 +37,10 @@ import {
 } from "~/components/table";
 import type { Device } from "~/lib/api";
 import { cn } from "~/lib/utils";
-import { matterOnOffMutation } from "~/mutations/matter";
+import {
+  matterDeviceRemoveMutation,
+  matterOnOffMutation,
+} from "~/mutations/matter";
 
 import {
   fallbackDevices,
@@ -61,13 +65,14 @@ function DevicesSkeleton() {
               <TableHead>Availability</TableHead>
               <TableHead>Capabilities</TableHead>
               <TableHead>Power</TableHead>
+              <TableHead>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <For each={Array.from({ length: 3 })}>
               {() => (
                 <TableRow>
-                  <For each={["w-32", "w-20", "w-24", "w-40", "w-20"]}>
+                  <For each={["w-32", "w-20", "w-24", "w-40", "w-20", "w-20"]}>
                     {(width) => (
                       <TableCell>
                         <Skeleton class={cn("h-4", width)} />
@@ -134,11 +139,19 @@ function capabilityIcon(capability: string) {
 export default function Devices() {
   const devicesQuery = createDevicesQuery();
   const onOffMutation = matterOnOffMutation();
+  const removeMutation = matterDeviceRemoveMutation();
   const [compact, setCompact] = createSignal(false);
   const [pendingDeviceId, setPendingDeviceId] = createSignal<string | null>(
     null,
   );
   const response = () => devicesQuery.data ?? fallbackDevices;
+
+  const removeDevice = async (device: Device) => {
+    if (!device.node_id)
+      throw new Error("Matter node identity is unavailable.");
+    await removeMutation.mutateAsync({ device_id: device.node_id });
+    toast.success("Matter device removal queued.");
+  };
 
   const setOnOff = async (device: Device, on: boolean) => {
     const id = deviceKey(device);
@@ -267,6 +280,7 @@ export default function Devices() {
                       <TableHead>Availability</TableHead>
                       <TableHead>Capabilities</TableHead>
                       <TableHead>Power</TableHead>
+                      <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -328,6 +342,26 @@ export default function Devices() {
                                   {device.name}
                                 </SwitchLabel>
                               </Switch>
+                            </Show>
+                          </TableCell>
+                          <TableCell>
+                            <Show
+                              when={device.protocol.toLowerCase() === "matter"}
+                            >
+                              <ConfirmDestructiveAction
+                                triggerLabel="Remove"
+                                title={`Remove ${device.name}?`}
+                                description="This will unpair the Matter device and remove it from Core Pilot. This action cannot be undone."
+                                confirmLabel="Remove device"
+                                onConfirm={() => removeDevice(device)}
+                                onError={(error) =>
+                                  toast.error(
+                                    error instanceof Error
+                                      ? error.message
+                                      : "Could not remove Matter device.",
+                                  )
+                                }
+                              />
                             </Show>
                           </TableCell>
                         </TableRow>

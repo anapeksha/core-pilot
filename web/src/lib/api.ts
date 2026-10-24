@@ -11,6 +11,7 @@ import {
   groupUpsertRequestSchema,
   matterCommissionCancelRequestSchema,
   matterCommissionRequestSchema,
+  matterDeviceRemoveRequestSchema,
   matterOnOffRequestSchema,
   mcpInvokeRequestSchema,
   mcpToolPermissionRequestSchema,
@@ -553,6 +554,11 @@ export type MatterOnOffRequest = {
 
 export type MatterOnOffResponse = MutationResponse;
 
+export type MatterDeviceRemoveRequest = { device_id: string };
+export type MatterDeviceRemoveResponse = MutationResponse & {
+  operation_id?: number;
+};
+
 export type Room = {
   id: string;
   name: string;
@@ -918,6 +924,7 @@ const requestSchemas: Readonly<Record<string, z.ZodType>> = {
   "/api/v1/matter/commission": matterCommissionRequestSchema,
   "/api/v1/matter/commission/cancel": matterCommissionCancelRequestSchema,
   "/api/v1/matter/on-off": matterOnOffRequestSchema,
+  "/api/v1/matter/devices/remove": matterDeviceRemoveRequestSchema,
   "/api/v1/matter/thread/dataset": threadDatasetUpdateRequestSchema,
   "/api/v1/ai/provider": aiProviderRequestSchema,
   "/api/v1/ai/chat": aiChatRequestSchema,
@@ -1109,6 +1116,15 @@ export function setMatterOnOff(
 ): Promise<MatterOnOffResponse> {
   return postJson<MatterOnOffResponse, MatterOnOffRequest>(
     "/api/v1/matter/on-off",
+    request,
+  );
+}
+
+export function removeMatterDevice(
+  request: MatterDeviceRemoveRequest,
+): Promise<MatterDeviceRemoveResponse> {
+  return postJson<MatterDeviceRemoveResponse, MatterDeviceRemoveRequest>(
+    "/api/v1/matter/devices/remove",
     request,
   );
 }

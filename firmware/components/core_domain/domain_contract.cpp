@@ -71,6 +71,8 @@ constexpr RouteContract routes[] = {
     {"POST", "/api/v1/matter/commission/cancel", "operation_id:q", "accepted:b status:s detail:s"},
     {"POST", "/api/v1/matter/on-off", "device_id:s endpoint_id:h? on:b",
      "accepted:b status:s detail:s"},
+    {"POST", "/api/v1/matter/devices/remove", "device_id:s",
+     "accepted:b operation_id:q? status:s detail:s"},
     {"POST", "/api/v1/matter/thread/dataset", "active_dataset_tlvs_hex:s",
      "accepted:b status:s detail:s"},
     {"GET", "/api/v1/ai", nullptr,
@@ -291,11 +293,11 @@ bool request_bounds(const RouteContract& route, const cJSON* object) {
   if (std::strcmp(p, "/api/v1/ai/chat") == 0)
     return bounded_string(object, "message", 4096, 1);
   if (std::strcmp(p, "/api/v1/ai/memory/section") == 0)
-    return bounded_string(object, "markdown", 12 * 1024);
+    return bounded_string(object, "id", 48, 1) && bounded_string(object, "markdown", 12 * 1024);
   if (std::strcmp(p, "/api/v1/ai/prompts/file") == 0) {
     const cJSON* encoded = cJSON_GetObjectItemCaseSensitive(object, "markdown_base64");
     const cJSON* markdown = cJSON_GetObjectItemCaseSensitive(object, "markdown");
-    return bounded_string(object, "path", 256, 1) &&
+    return bounded_string(object, "path", 128, 1) &&
            (!markdown || std::strlen(markdown->valuestring) <= 4096) &&
            (!encoded || cJSON_IsNull(encoded) || std::strlen(encoded->valuestring) <= 8192);
   }
@@ -304,7 +306,7 @@ bool request_bounds(const RouteContract& route, const cJSON* object) {
     const cJSON* tokens = cJSON_GetObjectItemCaseSensitive(config, "max_output_tokens");
     const cJSON* timeout = cJSON_GetObjectItemCaseSensitive(config, "timeout_ms");
     const cJSON* key = cJSON_GetObjectItemCaseSensitive(config, "api_key");
-    return bounded_string(config, "base_url", 2048, 1) && bounded_string(config, "model", 256, 1) &&
+    return bounded_string(config, "base_url", 2048, 1) && bounded_string(config, "model", 128, 1) &&
            tokens->valuedouble >= 1 && tokens->valuedouble <= 8192 &&
            timeout->valuedouble >= 1000 && timeout->valuedouble <= 120000 &&
            (!key || cJSON_IsNull(key) || std::strlen(key->valuestring) <= 256);
