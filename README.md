@@ -52,6 +52,35 @@ eim run 'python ../tools/flash_jtag.py build' v5.5.6
 
 Both methods verify the written image. `probe-rs` is not required; ESP-IDF's OpenOCD supports the CoreS3 USB-JTAG interface directly.
 
+## Hardware validation
+
+Use the unified runner against a configured device:
+
+```sh
+python tools/test.py stress corepilot.local
+python tools/test.py soak corepilot.local --duration-hours 8
+python tools/test.py both corepilot.local --duration-hours 8
+```
+
+`both` samples reset and Matter/Thread readiness while periodically applying bounded HTTP load.
+Use a bracketed IPv6 address when needed, for example `[fd00::1]`.
+
+## Browser security
+
+The embedded dashboard and `/api/v1` are same-origin and do not enable cross-origin browser access.
+CORS is not authentication and cannot restrict direct LAN clients to the dashboard; deployments that
+need that boundary require authentication. Browser camera APIs also require a secure context. HTTPS
+is intentionally not enabled until Core Pilot has a browser-trusted, per-device certificate and
+hostname lifecycle; a self-signed certificate would not provide a reliable camera-scanning flow.
+
+## Releases
+
+Tags matching `vX.Y.Z` build and publish a signed OTA image and a complete initial-flash bundle.
+Configure the GitHub Actions secret `ESP_FIRMWARE_SIGNING_KEY_PEM` with an RSA-3072 private key.
+Signed OTA verification authenticates updates to a correctly provisioned signed image. Hardware
+Secure Boot and flash encryption require a separate physical provisioning process and are not enabled
+by the release workflow.
+
 ## Checks
 
 ```sh

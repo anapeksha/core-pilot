@@ -1,0 +1,101 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+jobs:
+  web:
+    name: Validate dashboard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run format
+      - run: npm run lint
+      - run: npm run check
+      - run: npm run test:coverage
+      - run: npm run test:browser
+      - run: npm run build
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dashboard-dist
+          path: web/dist
+          if-no-files-found: error
+
+  firmware:
+    name: Build signed firmware
+    needs: web
+    runs-on: ubuntu-latest
+    container: espressif/idf:v5.5.6
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: dashboard-dist
+          path: dist
+      - name: Derive version from tag
+        shell: bash
+        run: |
+          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "${GITHUB_ENV}"
+      - name: Build firmware
+        working-directory: firmware
+        run: idf.py -D PROJECT_VER="${VERSION}" build
+      - name: Sign and verify application
+        shell: bash
+        working-directory: firmware
+        env:
+          SIGNING_KEY: ${{ secrets.ESP_FIRMWARE_SIGNING_KEY_PEM }}
+        run: |
+          test -n "${SIGNING_KEY}"
+          umask 077
+          printf '%s\n' "${SIGNING_KEY}" > release-signing-key.pem
+          trap 'rm -f release-signing-key.pem' EXIT
+          mv build/core_pilot.bin build/core_pilot-unsigned.bin
+          idf.py secure-sign-data --version 2 \
+            --keyfile release-signing-key.pem \
+            --output build/core_pilot.bin \
+            build/core_pilot-unsigned.bin
+          idf.py secure-verify-signature --version 2 \
+            --keyfile release-signing-key.pem \
+            build/core_pilot.bin
+          rm build/core_pilot-unsigned.bin
+      - name: Package release
+        shell: bash
+        working-directory: firmware
+        run: |
+          package="release/core-pilot-${VERSION}"
+          mkdir -p "${package}/bootloader" "${package}/partition_table"
+          cp build/bootloader/bootloader.bin "${package}/bootloader/"
+          cp build/partition_table/partition-table.bin "${package}/partition_table/"
+          cp build/ota_data_initial.bin build/core_pilot.bin \
+            build/flash_args build/flasher_args.json build/project_description.json \
+            "${package}/"
+          cp build/core_pilot.bin "release/core-pilot-${VERSION}-ota.bin"
+          tar -C release -czf "release/core-pilot-${VERSION}-initial-flash.tar.gz" \
+            "core-pilot-${VERSION}"
+          cd release
+          sha256sum "core-pilot-${VERSION}-ota.bin" \
+            "core-pilot-${VERSION}-initial-flash.tar.gz" > SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            firmware/release/core-pilot-${{ env.VERSION }}-ota.bin
+            firmware/release/core-pilot-${{ env.VERSION }}-initial-flash.tar.gz
+            firmware/release/SHA256SUMS
