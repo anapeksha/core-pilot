@@ -75,8 +75,9 @@ hostname lifecycle; a self-signed certificate would not provide a reliable camer
 
 ## Releases
 
-Tags matching `vX.Y.Z` build and publish a signed OTA image and a complete initial-flash bundle.
-Configure the GitHub Actions secret `ESP_FIRMWARE_SIGNING_KEY_PEM` with an RSA-3072 private key.
+Publishing a GitHub release whose tag matches `vX.Y.Z` builds and attaches a signed, versioned OTA
+image, initial-flash bundle, and checksum file to that existing release. Configure the GitHub Actions
+secret `ESP_FIRMWARE_SIGNING_KEY_PEM` with an RSA-3072 private key.
 Signed OTA verification authenticates updates to a correctly provisioned signed image. Hardware
 Secure Boot and flash encryption require a separate physical provisioning process and are not enabled
 by the release workflow.

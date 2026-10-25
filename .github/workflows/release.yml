@@ -1,15 +1,14 @@
 name: release
 
 on:
-  push:
-    tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ github.event.release.tag_name }}
   cancel-in-progress: false
 
 jobs:
@@ -20,15 +19,17 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: dashboard-dist
           path: dist
@@ -39,19 +40,23 @@ jobs:
     name: Sign and package firmware
     needs: web
     runs-on: ubuntu-latest
-    container: espressif/idf:v5.5.6
+    container: espressif/idf:v5.5.6@sha256:bf72fe7a15c22849a9a94147301165a545fb8905d97c176cf748e3e4614cac84
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: dashboard-dist
           path: dist
-      - name: Derive version from tag
+      - name: Derive version from release tag
         shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
-          echo "VERSION=${GITHUB_REF_NAME#v}" >> "${GITHUB_ENV}"
+          [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "VERSION=${RELEASE_TAG#v}" >> "${GITHUB_ENV}"
       - name: Build firmware
         shell: bash
         run: |
@@ -95,15 +100,16 @@ jobs:
           tar -C release -czf "release/core-pilot-${VERSION}-initial-flash.tar.gz" \
             "core-pilot-${VERSION}"
           cd release
+          checksums="core-pilot-${VERSION}-SHA256SUMS"
           sha256sum "core-pilot-${VERSION}-ota.bin" \
-            "core-pilot-${VERSION}-initial-flash.tar.gz" > SHA256SUMS
-      - uses: actions/upload-artifact@v4
+            "core-pilot-${VERSION}-initial-flash.tar.gz" > "${checksums}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: release-files
           path: |
             firmware/release/core-pilot-${{ env.VERSION }}-ota.bin
             firmware/release/core-pilot-${{ env.VERSION }}-initial-flash.tar.gz
-            firmware/release/SHA256SUMS
+            firmware/release/core-pilot-${{ env.VERSION }}-SHA256SUMS
           if-no-files-found: error
           retention-days: 1
 
@@ -114,14 +120,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: release-files
           path: release
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          generate_release_notes: true
+          tag_name: ${{ github.event.release.tag_name }}
           files: |
             release/core-pilot-*-ota.bin
             release/core-pilot-*-initial-flash.tar.gz
-            release/SHA256SUMS
+            release/core-pilot-*-SHA256SUMS
