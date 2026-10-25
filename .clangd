@@ -1,12 +1,12 @@
 CompileFlags:
-  CompilationDatabase: firmware/build-clang
+  CompilationDatabase: firmware/s3/build-clang
 Diagnostics:
   UnusedIncludes: None
 ---
 If:
-  PathMatch: firmware/components/.*/test/.*\.cpp
+  PathMatch: .*firmware/s3/components/.*/test/.*\.cpp
 CompileFlags:
-  CompilationDatabase: firmware/build-tests-clang
+  CompilationDatabase: firmware/s3/build-tests-clang
 ---
 If:
   PathMatch: .*managed_components/.*

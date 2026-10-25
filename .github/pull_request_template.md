@@ -17,7 +17,7 @@
 
 - [ ] `python tools/format.py`
 - [ ] `python tools/lint.py build-clang`
-- [ ] `idf.py build`
+- [ ] `idf.py -C firmware/s3 -B firmware/s3/build build`
 - [ ] Dashboard format, lint, type-check, tests, build, and E2E
 - [ ] Hardware validation recorded below, or not applicable
 

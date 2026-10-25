@@ -40,7 +40,7 @@ jobs:
     name: Sign and package firmware
     needs: web
     runs-on: ubuntu-latest
-    container: espressif/idf:v5.5.6@sha256:bf72fe7a15c22849a9a94147301165a545fb8905d97c176cf748e3e4614cac84
+    container: espressif/idf:v6.0.2
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -61,10 +61,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          idf.py -C firmware -B firmware/build -D PROJECT_VER="${VERSION}" build
+          idf.py -C firmware/s3 -B firmware/s3/build -D PROJECT_VER="${VERSION}" build
       - name: Sign and verify application
         shell: bash
-        working-directory: firmware
+        working-directory: firmware/s3
         env:
           SIGNING_KEY: ${{ secrets.ESP_FIRMWARE_SIGNING_KEY_PEM }}
         run: |
@@ -86,7 +86,7 @@ jobs:
           rm build/core_pilot-unsigned.bin
       - name: Package release
         shell: bash
-        working-directory: firmware
+        working-directory: firmware/s3
         run: |
           set -euo pipefail
           package="release/core-pilot-${VERSION}"
@@ -107,9 +107,9 @@ jobs:
         with:
           name: release-files
           path: |
-            firmware/release/core-pilot-${{ env.VERSION }}-ota.bin
-            firmware/release/core-pilot-${{ env.VERSION }}-initial-flash.tar.gz
-            firmware/release/core-pilot-${{ env.VERSION }}-SHA256SUMS
+            firmware/s3/release/core-pilot-${{ env.VERSION }}-ota.bin
+            firmware/s3/release/core-pilot-${{ env.VERSION }}-initial-flash.tar.gz
+            firmware/s3/release/core-pilot-${{ env.VERSION }}-SHA256SUMS
           if-no-files-found: error
           retention-days: 1
 
