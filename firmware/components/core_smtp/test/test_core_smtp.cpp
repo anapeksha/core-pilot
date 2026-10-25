@@ -51,6 +51,16 @@ TEST_CASE("SMTP plain mode permits only literal local targets", "[core_smtp]") {
   TEST_ASSERT_FALSE(plain_lan_target_allowed("8.8.8.8"));
 }
 
+TEST_CASE("SMTP subjects reject CR and LF header injection", "[core_smtp]") {
+  TEST_ASSERT_FALSE(contains_cr_or_lf("Monthly report", kMaxSubjectBytes));
+  TEST_ASSERT_TRUE(contains_cr_or_lf("Report\rBCC: attacker@example.com", kMaxSubjectBytes));
+  TEST_ASSERT_TRUE(contains_cr_or_lf("Report\nBCC: attacker@example.com", kMaxSubjectBytes));
+  TEST_ASSERT_TRUE(contains_cr_or_lf("Report\r\nBCC: attacker@example.com", kMaxSubjectBytes));
+  char oversized[kMaxSubjectBytes + 2]{};
+  std::memset(oversized, 'x', sizeof(oversized) - 1);
+  TEST_ASSERT_TRUE(contains_cr_or_lf(oversized, kMaxSubjectBytes));
+}
+
 TEST_CASE("SMTP address and injection checks are strict", "[core_smtp]") {
   TEST_ASSERT_TRUE(valid_email_address("user@example.com"));
   TEST_ASSERT_FALSE(valid_email_address("user@example.com\r\nBCC:x@y.test"));
