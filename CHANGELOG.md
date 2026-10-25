@@ -6,7 +6,8 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ### Added
 
-- ESP-IDF 5.5.6 C++20 firmware for M5Stack CoreS3 using M5Unified and M5GFX.
+- ESP-IDF 6.0.2 C++26 firmware for M5Stack CoreS3 using M5Unified and M5GFX.
+- Embedded ESP32-H2 OpenThread RCP with automatic CoreS3 UART provisioning.
 - Embedded SolidJS dashboard with local `/api/v1` status and mutation endpoints.
 - Device-bound encrypted SD storage with authenticated atomic record replacement.
 - Saved station Wi-Fi startup and explicitly labeled setup-AP fallback.

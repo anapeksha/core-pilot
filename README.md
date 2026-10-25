@@ -1,104 +1,132 @@
 # Core Pilot
 
-Core Pilot is a local-first smart-home controller for M5Stack CoreS3. It combines an ESP-IDF C++20 firmware with an embedded SolidJS dashboard and keeps mutable application data encrypted on the device's SD card.
+Core Pilot turns an M5Stack CoreS3 into a private, local-first control panel for your smart home. The device hosts its own touchscreen experience and web dashboard, so everyday control stays on your local network rather than depending on a cloud service.
 
-## Features
+## What Core Pilot can do
 
-- M5Unified board, touch, RTC, power, and display integration.
-- M5GFX canvas rendering, boot progress, screensaver, and low-power display mode.
-- Saved Wi-Fi station startup with an explicitly labeled setup-AP fallback.
-- Embedded, hash-routed SolidJS dashboard served over the trusted local network.
-- Device-bound encrypted SD records with authenticated atomic replacement.
-- Encrypted room, group, scene, automation, and discovered Matter endpoint storage.
-- Event-driven Matter controller queue for commissioning, endpoint discovery, and device commands.
-- ESP-Matter commissioner and OpenThread border-router integration for the Gateway H2 RCP.
-- Bounded HTTP connections, request bodies, queues, records, and model collections.
+- Control compatible Matter devices from the CoreS3 and a browser.
+- Organize devices into rooms and groups.
+- Save favorite controls for quick access.
+- Create scenes that operate several devices together.
+- Build local automations for routine actions.
+- Discover, commission, monitor, and remove Matter devices.
+- Use a Gateway H2 as an OpenThread radio for Matter-over-Thread devices.
+- Store mutable settings and smart-home records encrypted on the SD card.
+- Join an existing Wi-Fi network or guide initial setup through a protected setup network.
+- Install signed firmware updates from the dashboard.
+- Continue providing local controls without relying on AI or an internet connection.
 
-Matter-over-Wi-Fi and Matter-over-Thread remain marked unavailable until their complete commissioning and reboot-recovery paths have passed hardware validation. Unsupported services do not simulate readiness.
+Matter-over-Wi-Fi and Matter-over-Thread are shown as available only when their required services are genuinely ready. Some commissioning and recovery paths are still undergoing hardware validation.
 
-## Repository
+## Dashboard access
 
-- `firmware/` — ESP-IDF 5.5.6 C++20 firmware.
-- `web/` — SolidJS dashboard embedded as `dist/index.html.gz`.
-- `.github/` — firmware and dashboard CI.
+Dashboard access starts with physical possession of the CoreS3:
 
-## Build
+1. Connect your phone or computer to the same local network as Core Pilot.
+2. Open the address shown on the CoreS3 display.
+3. Enter the one-time access code displayed on the touchscreen.
+4. After authorization, that browser remains signed in for up to eight hours.
 
-Install ESP-IDF 5.5.6 with EIM and build the dashboard before the firmware:
+The one-time code disappears after it is used. Core Pilot does not provide a network command for revealing or regenerating it.
+
+### Authorizing another browser
+
+Authorizing a second browser does not sign out the first one:
+
+1. On the CoreS3, tap **Authorize another browser**.
+2. A fresh one-time code appears for five minutes.
+3. Open the dashboard in the new browser or browser profile and enter that code.
+4. Each browser receives its own independent eight-hour session.
+
+Use the same process after changing browsers, clearing browser data, using a private window, or letting a session expire. Never share dashboard access codes or session tokens.
+
+Core Pilot currently serves the dashboard over the trusted local network using HTTP. Do not expose it directly to the internet or an untrusted network.
+
+## Install a release
+
+Download the assets for the desired version from GitHub Releases:
+
+- `core-pilot-<version>-initial-flash.tar.gz` for first-time installation.
+- `core-pilot-<version>-ota.bin` for an update from the dashboard.
+- `core-pilot-<version>-SHA256SUMS` to verify downloaded files.
+
+For a first installation, extract the archive, positively identify the CoreS3 serial port, and flash the included images from the extracted directory:
+
+```sh
+eim run 'python -m esptool --chip esp32s3 --port /dev/cu.usbmodem1201 write_flash @flash_args' v6.0.2
+```
+
+Replace `/dev/cu.usbmodem1201` with the confirmed CoreS3 port. Do not assume that the first connected serial device is the correct target.
+
+For an existing installation, open **System** in the dashboard and select the signed OTA image. The CoreS3 only switches to the update after its integrity, signature, version, and boot partition have been verified.
+
+## First run
+
+1. Power on the CoreS3 with its SD card installed.
+2. If saved Wi-Fi is unavailable, join the protected setup network identified on the display and open `http://192.168.4.1`.
+3. Enter the Wi-Fi details for the local network.
+4. After the device joins, open the local dashboard address shown on the display.
+5. Authorize the browser with the one-time touchscreen code.
+
+The setup network is intentionally password protected. Do not configure it as an open access point.
+
+## Build from source
+
+### Requirements
+
+- ESP-IDF 6.0.2 managed through [EIM](https://github.com/espressif/idf-env).
+- A Node.js version supported by the dependencies in `web/package-lock.json`.
+- npm.
+- An M5Stack CoreS3 for installation and hardware testing.
+
+Build the dashboard first because its generated bundle is embedded in the firmware image. The firmware build also builds the ESP32-H2 RCP and embeds its sparse bootloader, partition-table, and application artifacts; missing or stale RCP output fails the build:
 
 ```sh
 cd web
 npm ci
 npm run build
 
-cd ../firmware
-eim run 'idf.py -B build build' v5.5.6
+cd ../firmware/s3
+eim run 'idf.py -B build build' v6.0.2
 ```
 
-## Flash
+### Flash a development build
 
-Confirm the port before writing firmware:
+Confirm the CoreS3 port before writing anything, then run:
 
 ```sh
-cd firmware
-eim run 'idf.py -B build -p /dev/cu.usbmodem1201 flash' v5.5.6
+cd firmware/s3
+eim run 'idf.py -B build -p /dev/cu.usbmodem1201 flash' v6.0.2
 ```
 
-The normal command asks esptool to reset the ESP32-S3 into its ROM downloader automatically. CoreS3 units whose USB serial control lines do not support that reset can be flashed directly through the built-in USB-JTAG interface without entering download mode:
+Replace `/dev/cu.usbmodem1201` with the positively identified CoreS3 port. If automatic reset into the ROM downloader is unavailable, use the built-in USB-JTAG path:
 
 ```sh
-eim run 'python ../tools/flash_jtag.py build' v5.5.6
+eim run 'python ../../tools/flash_jtag.py build' v6.0.2
 ```
 
-Both methods verify the written image. `probe-rs` is not required; ESP-IDF's OpenOCD supports the CoreS3 USB-JTAG interface directly.
+## Run the dashboard during development
 
-## Hardware validation
-
-Use the unified runner against a configured device:
+The dashboard can run locally with hot reload:
 
 ```sh
-python tools/test.py stress corepilot.local
-python tools/test.py soak corepilot.local --duration-hours 8
-python tools/test.py both corepilot.local --duration-hours 8
-```
-
-`both` samples reset and Matter/Thread readiness while periodically applying bounded HTTP load.
-Use a bracketed IPv6 address when needed, for example `[fd00::1]`.
-
-## Browser security
-
-The embedded dashboard and `/api/v1` are same-origin and do not enable cross-origin browser access.
-CORS is not authentication and cannot restrict direct LAN clients to the dashboard; deployments that
-need that boundary require authentication. Browser camera APIs also require a secure context. HTTPS
-is intentionally not enabled until Core Pilot has a browser-trusted, per-device certificate and
-hostname lifecycle; a self-signed certificate would not provide a reliable camera-scanning flow.
-
-## Releases
-
-Publishing a GitHub release whose tag matches `vX.Y.Z` builds and attaches a signed, versioned OTA
-image, initial-flash bundle, and checksum file to that existing release. Configure the GitHub Actions
-secret `ESP_FIRMWARE_SIGNING_KEY_PEM` with an RSA-3072 private key.
-Signed OTA verification authenticates updates to a correctly provisioned signed image. Hardware
-Secure Boot and flash encryption require a separate physical provisioning process and are not enabled
-by the release workflow.
-
-## Checks
-
-```sh
-python tools/format.py
-eim run 'idf.py -C firmware -B firmware/build-clang -D IDF_TOOLCHAIN=clang reconfigure' v5.5.6
-python tools/lint.py build-clang
-eim run 'idf.py -C firmware -B firmware/build build' v5.5.6
-
 cd web
-npm run format
-npm run lint
-npm run check
-npm run test
-npm run test:coverage
-npm run test:browser
-npm run build
-npm run test:e2e
+npm ci
+npm run dev
 ```
 
-C++ exceptions and RTTI are disabled. Security-sensitive buffers are bounded and explicitly zeroized. See `AGENTS.md` for architecture and hardware constraints and `CHANGELOG.md` for release history.
+The development server does not replace device-side authorization or hardware validation. Use an actual CoreS3 when testing pairing, touch controls, storage, networking, updates, or Matter behavior.
+
+## Repository layout
+
+- `firmware/s3/` — CoreS3 application; its build also builds and embeds the Gateway RCP.
+- `firmware/h2/` — separately buildable ESP32-H2 OpenThread UART RCP embedded into the signed CoreS3 application.
+- `web/` — browser dashboard embedded into the firmware.
+- `tools/` — formatting, validation, flashing, and hardware-test helpers.
+- `.github/` — continuous integration and signed-release workflows.
+
+## Contributing
+
+Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, coding, testing, security, and pull-request guidance.
+
+Core Pilot is licensed under the terms in [`LICENSE`](LICENSE).

@@ -2,7 +2,7 @@
 
 ## Product
 
-Core Pilot is a local-first smart-home controller for M5Stack CoreS3. `firmware/` is an ESP-IDF 5.5.6 C++20 application. `web/` is a static SolidJS dashboard embedded into the firmware image.
+Core Pilot is a local-first smart-home controller for M5Stack CoreS3. `firmware/s3/` is an ESP-IDF 6.0.2 C++26 application, and `firmware/h2/` is its embedded ESP32-H2 OpenThread RCP. `web/` is a static SolidJS dashboard embedded into the firmware image.
 
 ## Ownership
 
@@ -13,6 +13,7 @@ Core Pilot is a local-first smart-home controller for M5Stack CoreS3. `firmware/
 - `core_storage` owns encrypted SD records and atomic replacement.
 - `core_network` owns Wi-Fi and mDNS lifecycle.
 - `core_matter` owns Matter controller operations and OpenThread border routing.
+- `core_gateway` owns embedded ESP32-H2 RCP validation, UART provisioning, and reset sequencing.
 - `core_ota` owns signed image staging, digest/signature/version verification, boot-partition activation, and deferred restart. The core-0 application task owns OTA display transitions.
 
 Component names retain the `core_` prefix to avoid collisions with ESP-IDF and third-party components. C++ application types remain in the `core_pilot` namespace.
@@ -66,9 +67,9 @@ Run formatting and builds sequentially; `tools/format.py` may remove generated d
 
 ```sh
 python tools/format.py
-eim run 'idf.py -C firmware -B firmware/build-clang -D IDF_TOOLCHAIN=clang reconfigure' v5.5.6
+eim run 'idf.py -C firmware/s3 -B firmware/s3/build-clang -D IDF_TOOLCHAIN=clang reconfigure' v6.0.2
 python tools/lint.py build-clang
-eim run 'idf.py -C firmware -B firmware/build build' v5.5.6
+eim run 'idf.py -C firmware/s3 -B firmware/s3/build build' v6.0.2
 
 cd web
 npm run format
