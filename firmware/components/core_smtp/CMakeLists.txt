@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "core_smtp.cpp"
+    SRCS "src/core_smtp.cpp"
     INCLUDE_DIRS "include"
     REQUIRES core_security esp-tls mbedtls freertos lwip
 )

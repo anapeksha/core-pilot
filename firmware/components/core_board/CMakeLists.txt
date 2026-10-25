@@ -1,6 +1,6 @@
 idf_component_register(
-    SRCS "core_board.cpp"
-    INCLUDE_DIRS "."
+    SRCS "src/core_board.cpp"
+    INCLUDE_DIRS "include"
     REQUIRES driver esp_driver_sdspi esp_lcd fatfs m5unified
 )
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_20)

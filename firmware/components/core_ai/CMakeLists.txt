@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "core_ai.cpp"
+    SRCS "src/core_ai.cpp"
     INCLUDE_DIRS "include"
     REQUIRES core_security freertos mbedtls
 )

@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "core_matter.cpp" "passive_ble_scan.cpp"
+    SRCS "src/core_matter.cpp" "src/passive_ble_scan.cpp"
     INCLUDE_DIRS "include"
     REQUIRES
         bt
