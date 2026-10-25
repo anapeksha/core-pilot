@@ -1,4 +1,4 @@
-idf_component_register(SRCS "core_security.cpp" "core_auth.cpp" "esp_seed.cpp"
+idf_component_register(SRCS "src/core_security.cpp" "src/core_auth.cpp" "src/esp_seed.cpp"
                        INCLUDE_DIRS "include"
                        REQUIRES mbedtls esp_partition esp_hw_support)
 target_compile_features(${COMPONENT_LIB} PUBLIC cxx_std_17)

@@ -30,6 +30,14 @@ public:
     rebooting,
     failed
   };
+  enum class AccessState : std::uint8_t {
+    active,
+    granted,
+    expired,
+    attempts_exhausted,
+    unavailable
+  };
+  enum class Action : std::uint8_t { none, generate_access_code };
   struct Upgrade {
     UpgradePhase phase;
     std::uint32_t progress_bytes;
@@ -45,7 +53,7 @@ public:
   esp_err_t begin();
 
   /** Processes touch, power, clock, screensaver, and wake events. */
-  void poll();
+  Action poll();
 
   /** Shows the initial boot screen. */
   void bootSplash();
@@ -59,12 +67,17 @@ public:
   /** Shows the primary status page and resets the idle timer. */
   void home(const char* network, const char* web, const char* status);
 
+  /** Updates the physical-only dashboard access state. */
+  void accessCode(const char* code);
+  void accessState(AccessState state);
+
   /** Shows firmware-upgrade progress and prevents idle sleep. */
   void upgrade(const Upgrade& progress);
 
 private:
   enum class Page : std::uint8_t { boot, fatal, home, upgrade };
   void renderHome();
+  void clearAccessCode();
   void renderSaver();
   void renderUpgrade();
   void updateClock();
@@ -82,6 +95,8 @@ private:
   char network_[51]{};
   char web_[51]{};
   char status_[51]{};
+  char access_code_[17]{};
+  AccessState access_state_{AccessState::unavailable};
   char time_[6]{};
   char date_[32]{};
   std::uint8_t digits_[6]{255, 255, 255, 255, 255, 255};

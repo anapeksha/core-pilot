@@ -22,10 +22,20 @@ it("keeps a bounded bearer in RAM and expires it", async () => {
   vi.advanceTimersByTime(28800000);
   expect(accessToken()).toBeNull();
 });
-it("does not replay a rejected session mutation", async () => {
-  const fetcher = vi.fn().mockResolvedValue(new Response("", { status: 401 }));
+it.each([
+  ["incorrect", "The access code is incorrect."],
+  ["expired", "The access code has expired."],
+  ["attempts_exhausted", "Access attempts are exhausted."],
+  ["unavailable", "Access is temporarily unavailable."],
+])("reports %s without replaying the mutation", async (code, message) => {
+  const fetcher = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ error: { code, message: "ignored" } }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
   vi.stubGlobal("fetch", fetcher);
-  await expect(unlockAccess("bad")).rejects.toThrow("Access denied");
+  await expect(unlockAccess("bad")).rejects.toThrow(message);
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(authHeaders()).toEqual({});
 });

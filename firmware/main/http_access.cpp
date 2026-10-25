@@ -4,9 +4,12 @@
 #include "core_domain.hpp"
 #include "core_network.hpp"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "http_server.hpp"
 #include "mbedtls/platform_util.h"
 
+#include <cstdio>
 #include <cstring>
 
 namespace core_pilot {
@@ -14,18 +17,64 @@ namespace {
 core_security::Auth auth;
 core_security::RandomSource* random_source{};
 CoreNetwork* network_service{};
+StaticSemaphore_t auth_mutex_storage{};
+SemaphoreHandle_t auth_mutex{};
+
+class AuthLock final {
+public:
+  AuthLock() : held_(auth_mutex && xSemaphoreTake(auth_mutex, pdMS_TO_TICKS(1000)) == pdTRUE) {}
+  ~AuthLock() {
+    if (held_)
+      xSemaphoreGive(auth_mutex);
+  }
+  bool held() const {
+    return held_;
+  }
+
+private:
+  bool held_;
+};
+
 struct Route {
   httpd_uri_t original{};
 };
 Route routes[64]{};
 size_t route_count{};
+
 uint64_t now() {
   return esp_timer_get_time() / 1000000;
 }
+
 esp_err_t reject(httpd_req_t* req, const char* status, const char* message) {
   httpd_resp_set_status(req, status);
   return httpd_resp_send(req, message, HTTPD_RESP_USE_STRLEN);
 }
+
+esp_err_t rejectAuth(httpd_req_t* req, const char* status, const char* code, const char* message) {
+  httpd_resp_set_status(req, status);
+  httpd_resp_set_type(req, "application/json");
+  char body[192]{};
+  std::snprintf(body, sizeof(body), "{\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}", code,
+                message);
+  return httpd_resp_sendstr(req, body);
+}
+
+const char* stateName(core_security::BootstrapState state) {
+  switch (state) {
+  case core_security::BootstrapState::open:
+    return "open";
+  case core_security::BootstrapState::consumed:
+    return "consumed";
+  case core_security::BootstrapState::expired:
+    return "expired";
+  case core_security::BootstrapState::attempts_exhausted:
+    return "attempts_exhausted";
+  case core_security::BootstrapState::unavailable:
+    return "unavailable";
+  }
+  return "unavailable";
+}
+
 bool header(httpd_req_t* req, const char* name, char* out, size_t capacity) {
   if (!httpd_req_get_hdr_value_len(req, name)) {
     out[0] = 0;
@@ -33,18 +82,25 @@ bool header(httpd_req_t* req, const char* name, char* out, size_t capacity) {
   }
   return httpd_req_get_hdr_value_str(req, name, out, capacity) == ESP_OK;
 }
+
 esp_err_t authHandler(httpd_req_t* req) {
   httpd_resp_set_type(req, "application/json");
-  if (req->method == HTTP_GET)
-    return httpd_resp_sendstr(
-        req,
-        auth.bootstrap_open(now())
-            ? "{\"authentication_required\":true,\"bootstrap_open\":true,\"session_seconds\":28800}"
-            : "{\"authentication_required\":true,\"bootstrap_open\":false,\"session_seconds\":"
-              "28800}");
+  if (req->method == HTTP_GET) {
+    AuthLock lock;
+    if (!lock.held())
+      return rejectAuth(req, "503 Service Unavailable", "unavailable",
+                        "Access is temporarily unavailable.");
+    char response[128]{};
+    std::snprintf(response, sizeof(response),
+                  "{\"authentication_required\":true,\"bootstrap_state\":\"%s\","
+                  "\"session_seconds\":28800}",
+                  stateName(auth.bootstrap_state(now())));
+    return httpd_resp_sendstr(req, response);
+  }
+
   char body[96]{};
   if (req->content_len == 0 || req->content_len >= sizeof(body))
-    return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid session request");
+    return rejectAuth(req, "400 Bad Request", "invalid_request", "Invalid session request.");
   size_t received = 0;
   while (received < req->content_len) {
     const int count = httpd_req_recv(req, body + received, req->content_len - received);
@@ -57,17 +113,44 @@ esp_err_t authHandler(httpd_req_t* req) {
   cJSON* document = nullptr;
   const auto parsed = core_domain::parse_json(body, received, sizeof(body) - 1, document);
   const cJSON* code = document ? cJSON_GetObjectItemCaseSensitive(document, "code") : nullptr;
-  char token[65]{};
   const bool valid = parsed == core_domain::ApiError::ok && cJSON_IsObject(document) &&
                      cJSON_GetArraySize(document) == 1 && cJSON_IsString(code) &&
                      std::strlen(code->valuestring) == 16;
-  const auto result = auth.exchange(valid ? code->valuestring : "", *random_source, now(), token);
-  if (code && cJSON_IsString(code))
-    mbedtls_platform_zeroize(code->valuestring, std::strlen(code->valuestring));
+  if (!valid) {
+    if (code && cJSON_IsString(code))
+      mbedtls_platform_zeroize(code->valuestring, std::strlen(code->valuestring));
+    cJSON_Delete(document);
+    mbedtls_platform_zeroize(body, sizeof(body));
+    return rejectAuth(req, "400 Bad Request", "invalid_request", "Invalid session request.");
+  }
+
+  char token[65]{};
+  core_security::ExchangeResult result{core_security::ExchangeResult::unavailable};
+  {
+    AuthLock lock;
+    if (lock.held())
+      result = auth.exchange(code->valuestring, *random_source, now(), token);
+  }
+  mbedtls_platform_zeroize(code->valuestring, std::strlen(code->valuestring));
   cJSON_Delete(document);
   mbedtls_platform_zeroize(body, sizeof(body));
-  if (result != core_security::Status::Ok)
-    return reject(req, "401 Unauthorized", "Access denied");
+
+  if (result != core_security::ExchangeResult::ok) {
+    mbedtls_platform_zeroize(token, sizeof(token));
+    switch (result) {
+    case core_security::ExchangeResult::incorrect:
+      return rejectAuth(req, "401 Unauthorized", "incorrect", "The access code is incorrect.");
+    case core_security::ExchangeResult::expired:
+      return rejectAuth(req, "410 Gone", "expired", "The access code has expired.");
+    case core_security::ExchangeResult::attempts_exhausted:
+      return rejectAuth(req, "423 Locked", "attempts_exhausted", "Access attempts are exhausted.");
+    case core_security::ExchangeResult::unavailable:
+    case core_security::ExchangeResult::ok:
+      return rejectAuth(req, "503 Service Unavailable", "unavailable",
+                        "Access is temporarily unavailable.");
+    }
+  }
+
   char response[128]{};
   std::strcpy(response, "{\"token\":\"");
   std::strcat(response, token);
@@ -77,6 +160,7 @@ esp_err_t authHandler(httpd_req_t* req) {
   mbedtls_platform_zeroize(response, sizeof(response));
   return sent;
 }
+
 esp_err_t dispatch(httpd_req_t* req) {
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   httpd_resp_set_hdr(req, "Connection", "close");
@@ -100,8 +184,12 @@ esp_err_t dispatch(httpd_req_t* req) {
       (req->method == HTTP_POST && !std::strcmp(route.uri, "/api/v1/auth/session"));
   if (!public_route) {
     char bearer[80]{};
-    const bool allowed = header(req, "Authorization", bearer, sizeof(bearer)) &&
-                         !std::strncmp(bearer, "Bearer ", 7) && auth.authorize(bearer + 7, now());
+    bool allowed = false;
+    {
+      AuthLock lock;
+      allowed = lock.held() && header(req, "Authorization", bearer, sizeof(bearer)) &&
+                !std::strncmp(bearer, "Bearer ", 7) && auth.authorize(bearer + 7, now());
+    }
     mbedtls_platform_zeroize(bearer, sizeof(bearer));
     if (!allowed)
       return reject(req, "401 Unauthorized", "Access required");
@@ -121,12 +209,39 @@ esp_err_t dispatch(httpd_req_t* req) {
   return route.handler(req);
 }
 } // namespace
-esp_err_t initializeHttpAccess(core_security::RandomSource& random, CoreNetwork& network,
-                               core_security::Auth::BootstrapSink sink) {
+
+esp_err_t initializeHttpAccess(core_security::RandomSource& random, CoreNetwork& network) {
   random_source = &random;
   network_service = &network;
-  return auth.begin(random, now(), sink) == core_security::Status::Ok ? ESP_OK : ESP_FAIL;
+  auth_mutex = xSemaphoreCreateMutexStatic(&auth_mutex_storage);
+  if (!auth_mutex)
+    return ESP_ERR_NO_MEM;
+  AuthLock lock;
+  return lock.held() && auth.begin(random, now()) == core_security::Status::Ok ? ESP_OK : ESP_FAIL;
 }
+
+bool snapshotHttpAccess(HttpAccessSnapshot& snapshot) {
+  mbedtls_platform_zeroize(&snapshot, sizeof(snapshot));
+  AuthLock lock;
+  if (!lock.held()) {
+    snapshot.state = core_security::BootstrapState::unavailable;
+    return false;
+  }
+  snapshot.state = auth.bootstrap_state(now());
+  snapshot.expires_at = auth.bootstrap_expires();
+  auth.copy_bootstrap(snapshot.code);
+  return true;
+}
+
+esp_err_t regenerateHttpAccessFromPhysicalPresence() {
+  if (!random_source)
+    return ESP_ERR_INVALID_STATE;
+  AuthLock lock;
+  if (!lock.held())
+    return ESP_ERR_TIMEOUT;
+  return auth.regenerate(*random_source, now()) == core_security::Status::Ok ? ESP_OK : ESP_FAIL;
+}
+
 esp_err_t registerHttpAccessRoute(httpd_handle_t server, const httpd_uri_t* route) {
   if (route_count >= 64 || !random_source)
     return ESP_ERR_INVALID_STATE;
@@ -137,6 +252,7 @@ esp_err_t registerHttpAccessRoute(httpd_handle_t server, const httpd_uri_t* rout
   wrapped.user_ctx = &entry;
   return httpd_register_uri_handler(server, &wrapped);
 }
+
 esp_err_t registerHttpAuthRoutes(httpd_handle_t server) {
   route_count = 0;
   const httpd_uri_t status{

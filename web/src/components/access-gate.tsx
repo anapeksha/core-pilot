@@ -20,7 +20,13 @@ import {
   TextFieldInput,
   TextFieldLabel,
 } from "~/components/text-field";
-import { accessToken, initializeAccess, unlockAccess } from "~/lib/auth";
+import {
+  AccessError,
+  accessToken,
+  initializeAccess,
+  unlockAccess,
+  type BootstrapState,
+} from "~/lib/auth";
 import { queryClient } from "~/lib/queryClient";
 
 export default function AccessGate(props: ParentProps) {
@@ -29,10 +35,12 @@ export default function AccessGate(props: ParentProps) {
   const [busy, setBusy] = createSignal(false);
   const [checking, setChecking] = createSignal(true);
   const [error, setError] = createSignal("");
+  const [bootstrapState, setBootstrapState] =
+    createSignal<BootstrapState>("unavailable");
 
   onMount(async () => {
     try {
-      await initializeAccess();
+      setBootstrapState(await initializeAccess());
     } catch (error) {
       setError(
         error instanceof Error
@@ -55,7 +63,17 @@ export default function AccessGate(props: ParentProps) {
       queryClient.clear();
       await unlockAccess(entered);
     } catch (error) {
-      setError(error instanceof Error ? error.message : "Access failed");
+      if (error instanceof AccessError) {
+        setError(error.message);
+        if (
+          error.code === "expired" ||
+          error.code === "attempts_exhausted" ||
+          error.code === "unavailable"
+        )
+          setBootstrapState(error.code);
+      } else {
+        setError(error instanceof Error ? error.message : "Access failed");
+      }
     } finally {
       setBusy(false);
     }
@@ -119,66 +137,88 @@ export default function AccessGate(props: ParentProps) {
                     </div>
                   }
                 >
-                  <form class="space-y-5" onSubmit={submit}>
-                    <TextField
-                      value={code()}
-                      onChange={(value) => setCode(value.toLowerCase())}
-                      validationState={error() ? "invalid" : "valid"}
-                    >
-                      <TextFieldLabel>Bootstrap code</TextFieldLabel>
-                      <TextFieldInput
-                        id="access-code"
-                        type="password"
-                        autocomplete="one-time-code"
-                        autocapitalize="none"
-                        spellcheck={false}
-                        required
-                        pattern="[0-9a-f]{16}"
-                        maxLength={16}
-                        placeholder="16-character code"
-                        class="h-12 font-mono tracking-[0.18em]"
-                      />
-                      <TextFieldDescription class="mt-1.5 flex items-start gap-2 text-left leading-relaxed">
-                        <HiOutlineDevicePhoneMobile
-                          class="mt-0.5 size-4 shrink-0"
-                          aria-hidden="true"
-                        />
-                        Find the code on the CoreS3 display. It expires five
-                        minutes after startup.
-                      </TextFieldDescription>
-                    </TextField>
-
-                    <Show when={error()}>
-                      {(message) => (
-                        <div
-                          class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive-foreground"
-                          role="alert"
-                        >
-                          {message()}
-                        </div>
-                      )}
-                    </Show>
-
-                    <Button
-                      type="submit"
-                      size="lg"
-                      class="w-full"
-                      disabled={busy() || code().length !== 16}
-                    >
-                      <Show
-                        when={!busy()}
-                        fallback={
-                          <>
-                            <Spinner />
-                            Unlocking…
-                          </>
-                        }
+                  <Show
+                    when={bootstrapState() === "open"}
+                    fallback={
+                      <div class="space-y-4 rounded-lg border bg-muted/30 p-4 text-center">
+                        <p class="font-medium">
+                          {bootstrapState() === "expired"
+                            ? "Access code expired"
+                            : bootstrapState() === "attempts_exhausted"
+                              ? "Access attempts exhausted"
+                              : bootstrapState() === "consumed"
+                                ? "Access code already used"
+                                : "Access temporarily unavailable"}
+                        </p>
+                        <p class="text-sm leading-relaxed text-muted-foreground">
+                          {bootstrapState() === "consumed"
+                            ? "This physical code has already created a browser session."
+                            : "Use Generate new access code on the CoreS3 touchscreen. Remote clients cannot reopen access."}
+                        </p>
+                      </div>
+                    }
+                  >
+                    <form class="space-y-5" onSubmit={submit}>
+                      <TextField
+                        value={code()}
+                        onChange={(value) => setCode(value.toLowerCase())}
+                        validationState={error() ? "invalid" : "valid"}
                       >
-                        Unlock dashboard
-                        <HiOutlineArrowRight aria-hidden="true" />
+                        <TextFieldLabel>Bootstrap code</TextFieldLabel>
+                        <TextFieldInput
+                          id="access-code"
+                          type="password"
+                          autocomplete="one-time-code"
+                          autocapitalize="none"
+                          spellcheck={false}
+                          required
+                          pattern="[0-9a-f]{16}"
+                          maxLength={16}
+                          placeholder="16-character code"
+                          class="h-12 font-mono tracking-[0.18em]"
+                        />
+                        <TextFieldDescription class="mt-1.5 flex items-start gap-2 text-left leading-relaxed">
+                          <HiOutlineDevicePhoneMobile
+                            class="mt-0.5 size-4 shrink-0"
+                            aria-hidden="true"
+                          />
+                          Find the code on the CoreS3 display. It expires five
+                          minutes after startup.
+                        </TextFieldDescription>
+                      </TextField>
+
+                      <Show when={error()}>
+                        {(message) => (
+                          <div
+                            class="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive-foreground"
+                            role="alert"
+                          >
+                            {message()}
+                          </div>
+                        )}
                       </Show>
-                    </Button>
-                  </form>
+
+                      <Button
+                        type="submit"
+                        size="lg"
+                        class="w-full"
+                        disabled={busy() || code().length !== 16}
+                      >
+                        <Show
+                          when={!busy()}
+                          fallback={
+                            <>
+                              <Spinner />
+                              Unlocking…
+                            </>
+                          }
+                        >
+                          Unlock dashboard
+                          <HiOutlineArrowRight aria-hidden="true" />
+                        </Show>
+                      </Button>
+                    </form>
+                  </Show>
                 </Show>
               </CardContent>
             </Card>

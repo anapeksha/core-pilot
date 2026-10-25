@@ -16,6 +16,7 @@
 #include "http_access.hpp"
 #include "http_server.hpp"
 #include "lwip/ip4_addr.h"
+#include "mbedtls/platform_util.h"
 #include "mcp_service.hpp"
 #include "model_repository.hpp"
 #include "nvs_flash.h"
@@ -34,11 +35,6 @@ namespace core_pilot {
 namespace {
 
 constexpr char kTag[] = "core_pilot";
-char access_code[17]{};
-
-void receiveAccessCode(const char* code, std::uint64_t) {
-  std::snprintf(access_code, sizeof(access_code), "%s", code ? code : "");
-}
 
 bool generateHexCredential(core_security::RandomSource& random, char (&credential)[17]) {
   std::uint8_t bytes[8]{};
@@ -69,15 +65,13 @@ void showProgress(CoreDisplay& display, std::uint8_t percent, const char* messag
 
 void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setup_password) {
   const auto status = network.status();
-  char access_line[40]{};
-  std::snprintf(access_line, sizeof(access_line), "Access code: %s", access_code);
   if (status.mode == CoreNetwork::Mode::setup_ap) {
     char ap_line[48]{};
     char password_line[48]{};
     std::snprintf(ap_line, sizeof(ap_line), "Setup AP: %s", status.setup_ssid);
     std::snprintf(password_line, sizeof(password_line), "Password: %s  192.168.4.1",
                   setup_password);
-    display.home(ap_line, password_line, access_line);
+    display.home(ap_line, password_line, "");
     return;
   }
 
@@ -90,7 +84,7 @@ void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setu
   } else {
     std::snprintf(web_address, sizeof(web_address), "%s", "Waiting for station IPv4");
   }
-  display.home(network_line, web_address, access_line);
+  display.home(network_line, web_address, "");
 }
 
 } // namespace
@@ -251,7 +245,7 @@ void Application::run() {
   if (ota_result != ESP_OK)
     ESP_LOGE(kTag, "OTA service startup failed: %s", esp_err_to_name(ota_result));
 
-  ESP_ERROR_CHECK(initializeHttpAccess(random, network, receiveAccessCode));
+  ESP_ERROR_CHECK(initializeHttpAccess(random, network));
   static const HttpRuntime http_runtime{network, activity,       automations, matter,  devices,
                                         models,  wifi_provision, ai_storage,  ai_chat, ota,
                                         smtp,    storage,        random};
@@ -291,6 +285,14 @@ void Application::run() {
                matter_owner_started ? "Core Pilot ready" : "Ready; Matter requires service");
   showHome(display, network, setup_password);
   std::memset(setup_password, 0, sizeof(setup_password));
+  HttpAccessSnapshot access_snapshot{};
+  core_security::BootstrapState displayed_access_state = core_security::BootstrapState::unavailable;
+  if (snapshotHttpAccess(access_snapshot)) {
+    display.accessCode(access_snapshot.code);
+    displayed_access_state = access_snapshot.state;
+  }
+  mbedtls_platform_zeroize(&access_snapshot, sizeof(access_snapshot));
+  TickType_t last_access_check = xTaskGetTickCount();
 
   std::uint64_t discovery_nodes[core_storage::kMaxMatterDevices]{};
   std::size_t discovery_node_count = 0;
@@ -405,7 +407,41 @@ void Application::run() {
         }
       }
     }
-    display.poll();
+
+    const auto display_action = display.poll();
+    if (display_action == CoreDisplay::Action::generate_access_code) {
+      display.accessState(CoreDisplay::AccessState::unavailable);
+      if (regenerateHttpAccessFromPhysicalPresence() != ESP_OK)
+        ESP_LOGE(kTag, "physical access-code regeneration failed");
+      last_access_check = 0;
+    }
+
+    const TickType_t access_now = xTaskGetTickCount();
+    if (last_access_check == 0 || access_now - last_access_check >= pdMS_TO_TICKS(250)) {
+      last_access_check = access_now;
+      HttpAccessSnapshot next{};
+      if (snapshotHttpAccess(next) && next.state != displayed_access_state) {
+        displayed_access_state = next.state;
+        switch (next.state) {
+        case core_security::BootstrapState::open:
+          display.accessCode(next.code);
+          break;
+        case core_security::BootstrapState::consumed:
+          display.accessState(CoreDisplay::AccessState::granted);
+          break;
+        case core_security::BootstrapState::expired:
+          display.accessState(CoreDisplay::AccessState::expired);
+          break;
+        case core_security::BootstrapState::attempts_exhausted:
+          display.accessState(CoreDisplay::AccessState::attempts_exhausted);
+          break;
+        case core_security::BootstrapState::unavailable:
+          display.accessState(CoreDisplay::AccessState::unavailable);
+          break;
+        }
+      }
+      mbedtls_platform_zeroize(&next, sizeof(next));
+    }
     vTaskDelay(pdMS_TO_TICKS(20));
   }
 }

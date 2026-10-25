@@ -223,8 +223,21 @@ void CoreDisplay::renderHome() {
   drawText("Local home intelligence", 16, 52, kDimBlue);
   drawText(network_, 16, 92, kBlue);
   drawText(web_, 16, 112, kBlue);
-  drawText("Open the dashboard to manage your home", 16, 158, kMuted);
-  drawText(status_, 16, 194, kBlue);
+  if (access_state_ == AccessState::active) {
+    drawText("Dashboard access code", 16, 158, kMuted);
+    drawText(access_code_, 16, 194, kBlue);
+  } else if (access_state_ == AccessState::expired ||
+             access_state_ == AccessState::attempts_exhausted) {
+    drawText(access_state_ == AccessState::expired ? "Access code expired"
+                                                   : "Access attempts exhausted",
+             16, 158, kMuted);
+    canvas_.drawRoundRect(16, 176, 288, 44, 8, kBlue);
+    drawText("Generate new access code", 48, 204, kBlue);
+  } else {
+    const char* message = access_state_ == AccessState::granted ? "Dashboard access authorized"
+                                                                : "Dashboard access unavailable";
+    drawText(message, 16, 194, access_state_ == AccessState::granted ? kBlue : kMuted);
+  }
   int h, m, s, d, mo, y;
   if (readClock(h, m, s, d, mo, y))
     std::snprintf(time_, sizeof(time_), "%02d:%02d", h, m);
@@ -233,6 +246,31 @@ void CoreDisplay::renderHome() {
   drawText(time_, 234, 24, kBlue, true);
   drawBattery(canvas_, kBatteryX, kBatteryY);
   push();
+}
+
+void CoreDisplay::clearAccessCode() {
+  volatile char* value = access_code_;
+  for (std::size_t i = 0; i < sizeof(access_code_); ++i)
+    value[i] = 0;
+}
+
+void CoreDisplay::accessCode(const char* code) {
+  if (!initialized_ || !code)
+    return;
+  clearAccessCode();
+  std::snprintf(access_code_, sizeof(access_code_), "%s", code);
+  access_state_ = AccessState::active;
+  if (page_ == Page::home && !saver_ && !blanked_)
+    renderHome();
+}
+
+void CoreDisplay::accessState(AccessState state) {
+  if (!initialized_)
+    return;
+  clearAccessCode();
+  access_state_ = state;
+  if (page_ == Page::home && !saver_ && !blanked_)
+    renderHome();
 }
 
 void CoreDisplay::home(const char* network, const char* web, const char* status) {
@@ -381,20 +419,26 @@ void CoreDisplay::updateBattery() {
   }
 }
 
-void CoreDisplay::poll() {
+CoreDisplay::Action CoreDisplay::poll() {
   if (!initialized_)
-    return;
+    return Action::none;
   M5.update();
   const auto now = nowMs();
+  Action action = Action::none;
   if (M5.Touch.getCount() > 0) {
     last_touch_ms_ = now;
-    if (page_ == Page::home && (saver_ || blanked_)) {
+    const bool waking = page_ == Page::home && (saver_ || blanked_);
+    if (waking) {
       const bool was_blanked = blanked_;
       saver_ = blanked_ = false;
       renderHome();
-      if (was_blanked) {
+      if (was_blanked)
         M5.Display.setBrightness(160);
-      }
+    } else if (page_ == Page::home && (access_state_ == AccessState::expired ||
+                                       access_state_ == AccessState::attempts_exhausted)) {
+      const auto& touch = M5.Touch.getDetail();
+      if (touch.wasPressed() && touch.x >= 16 && touch.x < 304 && touch.y >= 176 && touch.y < 220)
+        action = Action::generate_access_code;
     }
   }
   if (static_cast<std::uint32_t>(now - last_battery_ms_) >= 2000 || last_battery_ms_ == 0) {
@@ -402,7 +446,7 @@ void CoreDisplay::poll() {
     updateBattery();
   }
   if (page_ != Page::home)
-    return;
+    return action;
   const auto idle = static_cast<std::uint32_t>(now - last_touch_ms_);
   if (!blanked_ && idle >= kOffMs) {
     M5.Display.setBrightness(0);
@@ -410,7 +454,7 @@ void CoreDisplay::poll() {
     saver_ = false;
   }
   if (blanked_)
-    return;
+    return action;
   if (!saver_ && idle >= kSaverMs) {
     saver_ = true;
     renderSaver();
@@ -419,6 +463,7 @@ void CoreDisplay::poll() {
     last_clock_ms_ = now;
     updateClock();
   }
+  return action;
 }
 
 } // namespace core_pilot
