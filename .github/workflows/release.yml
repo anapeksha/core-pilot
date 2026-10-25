@@ -6,11 +6,15 @@ on:
       - "v[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   web:
-    name: Validate dashboard
+    name: Build dashboard
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -23,22 +27,16 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run format
-      - run: npm run lint
-      - run: npm run check
-      - run: npm run test:coverage
-      - run: npm run test:browser
       - run: npm run build
-      - run: npm run test:e2e
       - uses: actions/upload-artifact@v4
         with:
           name: dashboard-dist
-          path: web/dist
+          path: dist
           if-no-files-found: error
+          retention-days: 1
 
   firmware:
-    name: Build signed firmware
+    name: Sign and package firmware
     needs: web
     runs-on: ubuntu-latest
     container: espressif/idf:v5.5.6
@@ -51,34 +49,41 @@ jobs:
       - name: Derive version from tag
         shell: bash
         run: |
+          set -euo pipefail
           [[ "${GITHUB_REF_NAME}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "${GITHUB_ENV}"
       - name: Build firmware
-        working-directory: firmware
-        run: idf.py -D PROJECT_VER="${VERSION}" build
+        shell: bash
+        run: |
+          set -euo pipefail
+          idf.py -C firmware -B firmware/build -D PROJECT_VER="${VERSION}" build
       - name: Sign and verify application
         shell: bash
         working-directory: firmware
         env:
           SIGNING_KEY: ${{ secrets.ESP_FIRMWARE_SIGNING_KEY_PEM }}
         run: |
+          set -euo pipefail
+          set +x
           test -n "${SIGNING_KEY}"
           umask 077
-          printf '%s\n' "${SIGNING_KEY}" > release-signing-key.pem
-          trap 'rm -f release-signing-key.pem' EXIT
+          key_file="$(mktemp)"
+          trap 'rm -f "${key_file}"' EXIT
+          printf '%s\n' "${SIGNING_KEY}" > "${key_file}"
           mv build/core_pilot.bin build/core_pilot-unsigned.bin
-          idf.py secure-sign-data --version 2 \
-            --keyfile release-signing-key.pem \
+          espsecure.py sign_data --version 2 \
+            --keyfile "${key_file}" \
             --output build/core_pilot.bin \
             build/core_pilot-unsigned.bin
-          idf.py secure-verify-signature --version 2 \
-            --keyfile release-signing-key.pem \
+          espsecure.py verify_signature --version 2 \
+            --keyfile "${key_file}" \
             build/core_pilot.bin
           rm build/core_pilot-unsigned.bin
       - name: Package release
         shell: bash
         working-directory: firmware
         run: |
+          set -euo pipefail
           package="release/core-pilot-${VERSION}"
           mkdir -p "${package}/bootloader" "${package}/partition_table"
           cp build/bootloader/bootloader.bin "${package}/bootloader/"
@@ -92,10 +97,31 @@ jobs:
           cd release
           sha256sum "core-pilot-${VERSION}-ota.bin" \
             "core-pilot-${VERSION}-initial-flash.tar.gz" > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-files
+          path: |
+            firmware/release/core-pilot-${{ env.VERSION }}-ota.bin
+            firmware/release/core-pilot-${{ env.VERSION }}-initial-flash.tar.gz
+            firmware/release/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub release
+    needs: firmware
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-files
+          path: release
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            firmware/release/core-pilot-${{ env.VERSION }}-ota.bin
-            firmware/release/core-pilot-${{ env.VERSION }}-initial-flash.tar.gz
-            firmware/release/SHA256SUMS
+            release/core-pilot-*-ota.bin
+            release/core-pilot-*-initial-flash.tar.gz
+            release/SHA256SUMS

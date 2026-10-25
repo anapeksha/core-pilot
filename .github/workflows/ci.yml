@@ -41,8 +41,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dashboard-dist
-          path: web/dist
+          path: dist
           if-no-files-found: error
+          retention-days: 1
 
   firmware:
     name: ESP-IDF C++ firmware
@@ -55,32 +56,16 @@ jobs:
         with:
           name: dashboard-dist
           path: dist
-      - name: Install C++ analysis tools
-        run: |
-          apt-get update
-          apt-get install --yes --no-install-recommends clang-format
-          python "$IDF_PATH/tools/idf_tools.py" install esp-clang
+      - name: Install ESP-Clang
+        run: python "$IDF_PATH/tools/idf_tools.py" install esp-clang
       - name: Check C++ formatting
         run: python tools/format.py
-      - name: Build firmware
-        working-directory: firmware
-        run: idf.py build
       - name: Configure ESP-Clang compilation database
-        working-directory: firmware
-        run: idf.py -B build-clang -D IDF_TOOLCHAIN=clang reconfigure
+        run: idf.py -C firmware -B firmware/build-clang -D IDF_TOOLCHAIN=clang reconfigure
       - name: Run clang-tidy
         run: python tools/lint.py build-clang
-      - uses: actions/upload-artifact@v4
-        with:
-          name: core-pilot-firmware
-          path: |
-            firmware/build/core_pilot.bin
-            firmware/build/bootloader/bootloader.bin
-            firmware/build/partition_table/partition-table.bin
-            firmware/build/ota_data_initial.bin
-            firmware/build/flasher_args.json
-            firmware/build/project_description.json
-          if-no-files-found: error
+      - name: Build firmware
+        run: idf.py -C firmware -B firmware/build build
 
   required:
     name: required
