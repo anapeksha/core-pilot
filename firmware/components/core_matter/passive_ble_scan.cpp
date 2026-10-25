@@ -12,7 +12,7 @@ extern "C" int __wrap_ble_gap_disc( // NOLINT(bugprone-reserved-identifier)
   if (disc_params == nullptr)
     return __real_ble_gap_disc(own_addr_type, duration_ms, nullptr, callback, callback_arg);
 
-  ble_gap_disc_params active_params = *disc_params;
-  active_params.passive = 0;
-  return __real_ble_gap_disc(own_addr_type, duration_ms, &active_params, callback, callback_arg);
+  ble_gap_disc_params passive_params = *disc_params;
+  passive_params.passive = 1;
+  return __real_ble_gap_disc(own_addr_type, duration_ms, &passive_params, callback, callback_arg);
 }
