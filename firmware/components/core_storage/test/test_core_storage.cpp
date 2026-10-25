@@ -1,10 +1,10 @@
 #include "core_storage.hpp"
 #include "matter_devices_codec.hpp"
 #include "models_codec.hpp"
-#include "unity.h"
 #include "wifi_codec.hpp"
 
 #include <cstring>
+#include <unity.h>
 
 using core_security::Status;
 using namespace core_storage;
