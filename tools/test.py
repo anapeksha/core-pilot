@@ -216,7 +216,7 @@ def main() -> int:
     parser.add_argument("--sample-attempts", type=int, default=3)
     parser.add_argument("--stress-interval", type=float, default=300.0)
     parser.add_argument("--stress-requests", type=int, default=200)
-    parser.add_argument("--stress-workers", type=int, default=8)
+    parser.add_argument("--stress-workers", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--max-failure-rate", type=float, default=0.05)
     args = parser.parse_args()
@@ -236,7 +236,9 @@ def main() -> int:
         parser.error("max-failure-rate must be between 0 and 1")
 
     if not os.environ.get("CORE_PILOT_BEARER"):
-        parser.error("set CORE_PILOT_BEARER to a RAM session token; never pass it on the command line")
+        parser.error(
+            "set CORE_PILOT_BEARER to a RAM session token; never pass it on the command line"
+        )
     base_url = f"{args.scheme}://{args.host}"
     if args.mode == "stress":
         return run_stress(args, base_url)
