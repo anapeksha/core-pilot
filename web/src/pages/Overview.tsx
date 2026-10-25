@@ -14,6 +14,7 @@ import {
   HiOutlineHome,
   HiOutlineRectangleGroup,
   HiOutlineStar,
+  HiOutlineTrash,
 } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 
@@ -254,12 +255,13 @@ function FavoriteRow(props: {
       </div>
       <Button
         type="button"
-        size="sm"
+        size="icon"
         variant="ghost"
         aria-label={`Remove ${props.title} from favorites`}
+        title={`Remove ${props.title} from favorites`}
         onClick={props.onRemove}
       >
-        Remove
+        <HiOutlineTrash aria-hidden="true" />
       </Button>
     </div>
   );

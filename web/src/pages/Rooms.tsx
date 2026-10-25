@@ -1,6 +1,6 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
-import { HiOutlineHome } from "solid-icons/hi";
+import { HiOutlineHome, HiOutlinePencil } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { z } from "zod";
 
@@ -270,13 +270,16 @@ export default function Rooms() {
                           <Button
                             type="button"
                             variant="outline"
-                            size="sm"
+                            size="icon"
+                            aria-label={`Edit ${room.name}`}
+                            title={`Edit ${room.name}`}
                             onClick={() => edit(room)}
                           >
-                            Edit
+                            <HiOutlinePencil aria-hidden="true" />
                           </Button>
                           <ConfirmDestructiveAction
                             triggerLabel="Delete"
+                            triggerAriaLabel={`Delete ${room.name}`}
                             title={`Delete ${room.name}?`}
                             description="This removes the room record. Core Pilot will not silently change devices or other saved models."
                             confirmLabel="Delete room"

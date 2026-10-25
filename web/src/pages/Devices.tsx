@@ -101,7 +101,8 @@ function availabilityTone(availability: string): StatusTone {
   return "unavailable";
 }
 
-function onOffState(state: unknown[]): boolean | undefined {
+function onOffState(state: unknown): boolean | undefined {
+  if (!Array.isArray(state)) return undefined;
   for (const entry of state) {
     if (
       typeof entry === "object" &&
@@ -125,6 +126,13 @@ function supportsMatterOnOff(device: {
       (capability) => capability.toLowerCase() === "on_off",
     )
   );
+}
+
+function powerControlDescription(device: Device, pending: boolean): string {
+  if (pending) return `A power command for ${device.name} is pending.`;
+  if (onOffState(device.state) === undefined)
+    return `Power control is unavailable until ${device.name} reports its current state.`;
+  return `Turn ${device.name} on or off.`;
 }
 
 function capabilityIcon(capability: string) {
@@ -328,6 +336,7 @@ export default function Devices() {
                                 onChange={(checked) =>
                                   void setOnOff(device, checked)
                                 }
+                                aria-describedby={`power-${deviceKey(device)}-description`}
                                 class="inline-flex items-center gap-2"
                               >
                                 <SwitchControl>
@@ -342,6 +351,16 @@ export default function Devices() {
                                   {device.name}
                                 </SwitchLabel>
                               </Switch>
+                              <span
+                                id={`power-${deviceKey(device)}-description`}
+                                class="sr-only"
+                              >
+                                {powerControlDescription(
+                                  device,
+                                  onOffMutation.isPending ||
+                                    pendingDeviceId() === deviceKey(device),
+                                )}
+                              </span>
                             </Show>
                           </TableCell>
                           <TableCell>
@@ -350,6 +369,7 @@ export default function Devices() {
                             >
                               <ConfirmDestructiveAction
                                 triggerLabel="Remove"
+                                triggerAriaLabel={`Remove ${device.name}`}
                                 title={`Remove ${device.name}?`}
                                 description="This will unpair the Matter device and remove it from Core Pilot. This action cannot be undone."
                                 confirmLabel="Remove device"

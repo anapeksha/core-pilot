@@ -490,14 +490,14 @@ function ActionCard(props: ActionCardProps) {
           </Button>
           <Button
             type="button"
-            size="sm"
+            size="icon"
             variant="ghost"
             class="text-destructive hover:text-destructive"
             onClick={props.onRemove}
             aria-label={`Remove action ${props.index + 1}`}
+            title={`Remove action ${props.index + 1}`}
           >
             <HiOutlineTrash aria-hidden="true" />
-            <span class="sr-only sm:not-sr-only">Remove</span>
           </Button>
         </div>
       </CardFooter>

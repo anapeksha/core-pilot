@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
-import { HiOutlineSquares2x2 } from "solid-icons/hi";
+import { HiOutlinePencil, HiOutlineSquares2x2 } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { z } from "zod";
 
@@ -369,13 +369,16 @@ export default function Groups() {
                         <Button
                           type="button"
                           variant="outline"
-                          size="sm"
+                          size="icon"
+                          aria-label={`Edit ${group.name}`}
+                          title={`Edit ${group.name}`}
                           onClick={() => edit(group)}
                         >
-                          Edit
+                          <HiOutlinePencil aria-hidden="true" />
                         </Button>
                         <ConfirmDestructiveAction
                           triggerLabel="Delete"
+                          triggerAriaLabel={`Delete ${group.name}`}
                           title={`Delete ${group.name}?`}
                           description="This removes the group definition, not the devices in it. Other saved models are not silently changed."
                           confirmLabel="Delete group"

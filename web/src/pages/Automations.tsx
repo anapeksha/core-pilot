@@ -3,6 +3,7 @@ import { createForm } from "solid-hook-form";
 import {
   HiOutlineBolt,
   HiOutlineCheckCircle,
+  HiOutlinePencil,
   HiOutlinePencilSquare,
   HiOutlineRectangleGroup,
 } from "solid-icons/hi";
@@ -973,14 +974,17 @@ export default function Automations() {
                         </Show>
                         <Button
                           type="button"
-                          size="sm"
+                          size="icon"
                           variant="outline"
+                          aria-label={`Edit ${automation.name}`}
+                          title={`Edit ${automation.name}`}
                           onClick={() => edit(automation)}
                         >
-                          Edit
+                          <HiOutlinePencil aria-hidden="true" />
                         </Button>
                         <ConfirmDestructiveAction
                           triggerLabel="Delete"
+                          triggerAriaLabel={`Delete ${automation.name}`}
                           title={`Delete ${automation.name}?`}
                           description="This permanently removes the trigger and action chain. Devices, scenes, and other automations are not changed."
                           confirmLabel="Delete automation"

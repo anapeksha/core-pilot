@@ -18,6 +18,7 @@ import {
   HiOutlineCheck,
   HiOutlineDocumentText,
   HiOutlineLockClosed,
+  HiOutlineTrash,
   HiOutlineWifi,
 } from "solid-icons/hi";
 
@@ -1626,11 +1627,13 @@ export default function System() {
                       >
                         <Button
                           type="button"
-                          size="sm"
+                          size="icon"
                           variant="ghost"
+                          aria-label="Remove selected firmware"
+                          title="Remove selected firmware"
                           onClick={clearFirmware}
                         >
-                          Remove
+                          <HiOutlineTrash aria-hidden="true" />
                         </Button>
                       </Show>
                     </Flex>

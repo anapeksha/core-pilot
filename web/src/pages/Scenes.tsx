@@ -403,15 +403,17 @@ export default function Scenes() {
                           <CardFooter class="justify-end gap-2">
                             <Button
                               type="button"
-                              size="sm"
+                              size="icon"
                               variant="outline"
+                              aria-label={`Edit ${scene.name}`}
+                              title={`Edit ${scene.name}`}
                               onClick={() => edit(scene)}
                             >
-                              <HiOutlinePencil data-icon="inline-start" />
-                              Edit
+                              <HiOutlinePencil aria-hidden="true" />
                             </Button>
                             <ConfirmDestructiveAction
                               triggerLabel="Delete"
+                              triggerAriaLabel={`Delete ${scene.name}`}
                               title={`Delete ${scene.name}?`}
                               description="The scene cannot be deleted while an automation references it. Remove those actions first; Core Pilot never silently rewrites automations."
                               confirmLabel="Delete scene"

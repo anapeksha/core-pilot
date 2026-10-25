@@ -1,5 +1,5 @@
 import { createSignal } from "solid-js";
-import { HiOutlineExclamationTriangle } from "solid-icons/hi";
+import { HiOutlineExclamationTriangle, HiOutlineTrash } from "solid-icons/hi";
 
 import {
   AlertDialog,
@@ -13,6 +13,7 @@ import { Flex } from "~/components/flex";
 
 type ConfirmDestructiveActionProps = {
   triggerLabel: string;
+  triggerAriaLabel?: string;
   title: string;
   description: string;
   confirmLabel?: string;
@@ -44,9 +45,12 @@ function ConfirmDestructiveAction(props: ConfirmDestructiveActionProps) {
       <AlertDialogTrigger
         as={Button}
         variant="destructive"
+        class="size-10 p-0"
         disabled={props.disabled}
+        aria-label={props.triggerAriaLabel ?? props.triggerLabel}
+        title={props.triggerAriaLabel ?? props.triggerLabel}
       >
-        {props.triggerLabel}
+        <HiOutlineTrash aria-hidden="true" />
       </AlertDialogTrigger>
       <AlertDialogContent>
         <div class="flex items-start gap-3 pr-6">

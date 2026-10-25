@@ -974,11 +974,11 @@ test("exercises local model CRUD pages for rooms, groups, scenes, and automation
     path: "/api/v1/rooms/upsert",
     body: { name: "Kitchen" },
   });
-  await page.getByRole("button", { name: "Edit" }).first().click();
+  await page.getByRole("button", { name: "Edit Lab" }).click();
   await expect(page.getByRole("button", { name: "Update room" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
   const postsBeforeDelete = state.posts.length;
-  await page.getByRole("button", { name: "Delete" }).last().click();
+  await page.getByRole("button", { name: "Delete Kitchen" }).click();
   await expect(page.getByRole("alertdialog")).toContainText(
     "Core Pilot will not silently change devices",
   );
@@ -1087,7 +1087,7 @@ test("shows reported room assignments and blocks deletion of referenced scenes",
   await expect(page.getByText("1 devices")).toBeVisible();
 
   await page.goto("/#/scenes");
-  await page.getByRole("button", { name: "Delete" }).first().click();
+  await page.getByRole("button", { name: "Delete Evening" }).click();
   await expect(page.getByText(/Used by: Morning/)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Resolve dependencies first" }),
@@ -1247,7 +1247,8 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   await expect(page.getByText("Bench Lamp")).toBeVisible();
   await expect(page.getByText("On/Off", { exact: true })).toBeVisible();
   await expect(page.getByText("Level", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Remove" }).click();
+
+  await page.getByRole("button", { name: "Remove Bench Lamp" }).click();
   await page.getByRole("button", { name: "Remove device" }).click();
   await expect(page.getByText("Matter device removal queued.")).toBeVisible();
   expect(state.posts.at(-1)).toMatchObject({
