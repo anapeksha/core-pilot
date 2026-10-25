@@ -18,8 +18,8 @@
 *.uf2
 *.hex
 /.embuild/
-/build/
-/firmware/build*/*
+/build*/
+/firmware/build*
 /firmware/managed_components/
 /firmware/sdkconfig
 /firmware/.cache/
