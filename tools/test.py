@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -22,7 +23,11 @@ class Sample:
 
 
 def opener() -> urllib.request.OpenerDirector:
-    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    client = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    token = os.environ.get("CORE_PILOT_BEARER", "")
+    if token:
+        client.addheaders = [("Authorization", f"Bearer {token}")]
+    return client
 
 
 def fetch_json(client: urllib.request.OpenerDirector, url: str, timeout: float) -> dict:
@@ -230,6 +235,8 @@ def main() -> int:
     if not 0 <= args.max_failure_rate <= 1:
         parser.error("max-failure-rate must be between 0 and 1")
 
+    if not os.environ.get("CORE_PILOT_BEARER"):
+        parser.error("set CORE_PILOT_BEARER to a RAM session token; never pass it on the command line")
     base_url = f"{args.scheme}://{args.host}"
     if args.mode == "stress":
         return run_stress(args, base_url)

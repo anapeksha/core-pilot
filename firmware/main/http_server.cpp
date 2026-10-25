@@ -17,6 +17,7 @@
 #include "esp_netif_sntp.h"
 #include "esp_system.h"
 #include "esp_timer.h"
+#include "http_access.hpp"
 #include "lwip/ip4_addr.h"
 #include "mbedtls/base64.h"
 #include "mbedtls/platform_util.h"
@@ -122,7 +123,7 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
   const auto size = static_cast<std::size_t>(dashboard_gzip_end - dashboard_gzip_start);
   ESP_RETURN_ON_ERROR(httpd_resp_set_type(request, "text/html; charset=utf-8"), kTag, "type");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Content-Encoding", "gzip"), kTag, "encoding");
-  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Cache-Control", "no-cache"), kTag, "cache");
+  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Cache-Control", "no-store"), kTag, "cache");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Connection", "close"), kTag, "connection");
   return httpd_resp_send(request, reinterpret_cast<const char*>(dashboard_gzip_start),
                          static_cast<ssize_t>(size));
@@ -130,7 +131,7 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
 
 esp_err_t healthHandler(httpd_req_t* request) {
   static constexpr char response[] =
-      R"({"product":"Core Pilot","hostname":"corepilot.local","storage_ok":true,"ai_enabled":false,"auth":"none-trusted-lan"})";
+      R"({"product":"Core Pilot","hostname":"corepilot.local","storage_ok":true,"ai_enabled":false,"auth":"physical-bootstrap-bearer"})";
   ESP_RETURN_ON_ERROR(addCommonHeaders(request), kTag, "headers");
   return httpd_resp_send(request, response, HTTPD_RESP_USE_STRLEN);
 }
@@ -2318,7 +2319,7 @@ esp_err_t initializeTimeService(const HttpRuntime& runtime) {
 httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.max_open_sockets = kMaxHttpConnections;
-  config.max_uri_handlers = 56;
+  config.max_uri_handlers = 64;
   config.uri_match_fn = httpd_uri_match_wildcard;
   config.lru_purge_enable = true;
   config.stack_size = 12288;
@@ -2328,6 +2329,10 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
     return nullptr;
   }
 
+  if (registerHttpAuthRoutes(server) != ESP_OK) {
+    httpd_stop(server);
+    return nullptr;
+  }
   const httpd_uri_t dashboard{
       .uri = "/", .method = HTTP_GET, .handler = dashboardHandler, .user_ctx = nullptr};
   const httpd_uri_t health{
@@ -2450,35 +2455,35 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                                 .method = HTTP_POST,
                                 .handler = unavailableMutationHandler,
                                 .user_ctx = nullptr};
-  if (httpd_register_uri_handler(server, &dashboard) != ESP_OK ||
-      httpd_register_uri_handler(server, &health) != ESP_OK ||
-      httpd_register_uri_handler(server, &reboot) != ESP_OK ||
-      httpd_register_uri_handler(server, &ota_prepare) != ESP_OK ||
-      httpd_register_uri_handler(server, &ota_chunk) != ESP_OK ||
-      httpd_register_uri_handler(server, &commission) != ESP_OK ||
-      httpd_register_uri_handler(server, &thread_dataset) != ESP_OK ||
-      httpd_register_uri_handler(server, &automation_run) != ESP_OK ||
-      httpd_register_uri_handler(server, &on_off) != ESP_OK ||
-      httpd_register_uri_handler(server, &device_remove) != ESP_OK ||
-      httpd_register_uri_handler(server, &registry_reset) != ESP_OK ||
-      httpd_register_uri_handler(server, &models_reset) != ESP_OK ||
-      httpd_register_uri_handler(server, &commission_cancel) != ESP_OK ||
-      httpd_register_uri_handler(server, &time_config) != ESP_OK ||
-      httpd_register_uri_handler(server, &smtp_config) != ESP_OK ||
-      httpd_register_uri_handler(server, &smtp_test) != ESP_OK ||
-      httpd_register_uri_handler(server, &activity_page) != ESP_OK ||
-      httpd_register_uri_handler(server, &wifi_provision) != ESP_OK ||
-      httpd_register_uri_handler(server, &wifi_scan_get) != ESP_OK ||
-      httpd_register_uri_handler(server, &wifi_scan_start) != ESP_OK ||
-      httpd_register_uri_handler(server, &wifi_scan_page) != ESP_OK ||
-      httpd_register_uri_handler(server, &ai_provider) != ESP_OK ||
-      httpd_register_uri_handler(server, &ai_memory) != ESP_OK ||
-      httpd_register_uri_handler(server, &ai_prompt) != ESP_OK ||
-      httpd_register_uri_handler(server, &ai_chat) != ESP_OK ||
-      httpd_register_uri_handler(server, &ai_chat_status) != ESP_OK ||
-      httpd_register_uri_handler(server, &mcp_invoke) != ESP_OK ||
-      httpd_register_uri_handler(server, &mcp_permission) != ESP_OK ||
-      httpd_register_uri_handler(server, &mcp_json_rpc) != ESP_OK) {
+  if (registerHttpAccessRoute(server, &dashboard) != ESP_OK ||
+      registerHttpAccessRoute(server, &health) != ESP_OK ||
+      registerHttpAccessRoute(server, &reboot) != ESP_OK ||
+      registerHttpAccessRoute(server, &ota_prepare) != ESP_OK ||
+      registerHttpAccessRoute(server, &ota_chunk) != ESP_OK ||
+      registerHttpAccessRoute(server, &commission) != ESP_OK ||
+      registerHttpAccessRoute(server, &thread_dataset) != ESP_OK ||
+      registerHttpAccessRoute(server, &automation_run) != ESP_OK ||
+      registerHttpAccessRoute(server, &on_off) != ESP_OK ||
+      registerHttpAccessRoute(server, &device_remove) != ESP_OK ||
+      registerHttpAccessRoute(server, &registry_reset) != ESP_OK ||
+      registerHttpAccessRoute(server, &models_reset) != ESP_OK ||
+      registerHttpAccessRoute(server, &commission_cancel) != ESP_OK ||
+      registerHttpAccessRoute(server, &time_config) != ESP_OK ||
+      registerHttpAccessRoute(server, &smtp_config) != ESP_OK ||
+      registerHttpAccessRoute(server, &smtp_test) != ESP_OK ||
+      registerHttpAccessRoute(server, &activity_page) != ESP_OK ||
+      registerHttpAccessRoute(server, &wifi_provision) != ESP_OK ||
+      registerHttpAccessRoute(server, &wifi_scan_get) != ESP_OK ||
+      registerHttpAccessRoute(server, &wifi_scan_start) != ESP_OK ||
+      registerHttpAccessRoute(server, &wifi_scan_page) != ESP_OK ||
+      registerHttpAccessRoute(server, &ai_provider) != ESP_OK ||
+      registerHttpAccessRoute(server, &ai_memory) != ESP_OK ||
+      registerHttpAccessRoute(server, &ai_prompt) != ESP_OK ||
+      registerHttpAccessRoute(server, &ai_chat) != ESP_OK ||
+      registerHttpAccessRoute(server, &ai_chat_status) != ESP_OK ||
+      registerHttpAccessRoute(server, &mcp_invoke) != ESP_OK ||
+      registerHttpAccessRoute(server, &mcp_permission) != ESP_OK ||
+      registerHttpAccessRoute(server, &mcp_json_rpc) != ESP_OK) {
     httpd_stop(server);
     return nullptr;
   }
@@ -2487,13 +2492,13 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                             .method = HTTP_POST,
                             .handler = modelMutationHandler,
                             .user_ctx = const_cast<HttpRuntime*>(&runtime)};
-    if (httpd_register_uri_handler(server, &route) != ESP_OK) {
+    if (registerHttpAccessRoute(server, &route) != ESP_OK) {
       httpd_stop(server);
       return nullptr;
     }
   }
 
-  if (httpd_register_uri_handler(server, &unavailable) != ESP_OK) {
+  if (registerHttpAccessRoute(server, &unavailable) != ESP_OK) {
     httpd_stop(server);
     return nullptr;
   }
@@ -2509,7 +2514,7 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                             .method = HTTP_GET,
                             .handler = statusHandler,
                             .user_ctx = const_cast<HttpRuntime*>(&runtime)};
-    if (httpd_register_uri_handler(server, &route) != ESP_OK) {
+    if (registerHttpAccessRoute(server, &route) != ESP_OK) {
       httpd_stop(server);
       return nullptr;
     }

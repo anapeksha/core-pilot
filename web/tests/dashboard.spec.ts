@@ -525,6 +525,9 @@ async function mockFirmwareApi(page: Page, options: MockFirmwareOptions = {}) {
     const path = new URL(request.url()).pathname;
     const method = request.method();
 
+    if (path === "/api/v1/auth")
+      return json(route, { authentication_required: false });
+
     if (method === "POST") {
       const body = request.postDataJSON() as Json;
       return handleMutation(route, state, path, body ?? {}, options);
@@ -879,7 +882,7 @@ test("keeps right sheets usable at the minimum mobile width", async ({
   await page.setViewportSize({ width: 320, height: 568 });
   await mockFirmwareApi(page);
   await page.goto("/#/rooms");
-  await page.getByRole("button", { name: "Create room" }).click();
+  await page.getByRole("button", { name: "Create room" }).first().click();
 
   const sheet = page.getByRole("dialog", { name: "Create room" });
   await expect(sheet).toBeVisible();
@@ -1296,6 +1299,9 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
 test("keeps the assistant page usable while firmware APIs are unavailable", async ({
   page,
 }) => {
+  await page.route("**/api/v1/auth", (route) =>
+    json(route, { authentication_required: false }),
+  );
   await page.goto("/#/ai");
   await expectHeading(page, "Optional Assistant");
   await expect(
@@ -1581,7 +1587,7 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
   const state = await mockFirmwareApi(page);
 
   await page.goto("/#/rooms");
-  await page.getByRole("button", { name: "Create room" }).click();
+  await page.getByRole("button", { name: "Create room" }).first().click();
   await page.getByRole("button", { name: "Create room" }).last().click();
   await expect(page.getByText("Enter a room name.")).toBeVisible();
   await page.getByPlaceholder("Kitchen").fill(`${"😀".repeat(16)}a`);

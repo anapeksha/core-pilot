@@ -13,6 +13,7 @@
 #include "device_registry.hpp"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "http_access.hpp"
 #include "http_server.hpp"
 #include "lwip/ip4_addr.h"
 #include "mcp_service.hpp"
@@ -26,12 +27,31 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <iterator>
 
 namespace core_pilot {
 namespace {
 
 constexpr char kTag[] = "core_pilot";
+char access_code[17]{};
+
+void receiveAccessCode(const char* code, std::uint64_t) {
+  std::snprintf(access_code, sizeof(access_code), "%s", code ? code : "");
+}
+
+bool generateHexCredential(core_security::RandomSource& random, char (&credential)[17]) {
+  std::uint8_t bytes[8]{};
+  if (random.fill(bytes, sizeof(bytes)) != core_security::Status::Ok)
+    return false;
+  static constexpr char hex[] = "0123456789abcdef";
+  for (std::size_t i = 0; i < sizeof(bytes); ++i) {
+    credential[i * 2] = hex[bytes[i] >> 4U];
+    credential[i * 2 + 1] = hex[bytes[i] & 0x0fU];
+  }
+  std::memset(bytes, 0, sizeof(bytes));
+  return true;
+}
 
 [[noreturn]] void stopAtFatal(CoreDisplay& display, const CoreDisplay::FatalContent& content) {
   display.fatal(content);
@@ -47,11 +67,14 @@ void showProgress(CoreDisplay& display, std::uint8_t percent, const char* messag
   vTaskDelay(pdMS_TO_TICKS(40));
 }
 
-void showHome(CoreDisplay& display, const CoreNetwork& network) {
+void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setup_password) {
   const auto status = network.status();
+  char access_line[40]{};
+  std::snprintf(access_line, sizeof(access_line), "Access code: %s", access_code);
   if (status.mode == CoreNetwork::Mode::setup_ap) {
-    display.home("Setup access point active", "http://192.168.4.1/",
-                 "Connect to CorePilot-Setup-* to configure Wi-Fi");
+    char password_line[48]{};
+    std::snprintf(password_line, sizeof(password_line), "Setup password: %s", setup_password);
+    display.home(password_line, "http://192.168.4.1/", access_line);
     return;
   }
 
@@ -64,7 +87,7 @@ void showHome(CoreDisplay& display, const CoreNetwork& network) {
   } else {
     std::snprintf(web_address, sizeof(web_address), "%s", "Waiting for station IPv4");
   }
-  display.home(network_line, web_address, "Dashboard ready");
+  display.home(network_line, web_address, access_line);
 }
 
 } // namespace
@@ -99,7 +122,13 @@ void Application::run() {
   }
 
   static core_storage::SdEncryptedStore sd_store;
-  static core_security::StorageService storage(device_seed, sd_store);
+  static core_storage::FlashEncryptedStore flash_store;
+  if (flash_store.begin() != core_security::Status::Ok) {
+    stopAtFatal(display, {"SECURE STORAGE", "Internal journal unavailable",
+                          "Rollback protection could not start.", "Service internal flash"});
+  }
+  static core_storage::ReplicatedEncryptedStore replicated_store(flash_store, &sd_store);
+  static core_security::StorageService storage(device_seed, replicated_store);
   constexpr char kSmokePath[] = "/core-pilot/diagnostics/storage-smoke.enc";
   constexpr std::uint8_t kSmokeData[] = {'S', 'D', 'C', 'H', 'E', 'C', 'K', '1'};
   const core_security::RecordSpec smoke_spec{kSmokePath,
@@ -159,10 +188,16 @@ void Application::run() {
   showProgress(display, 40, "Network profile loaded");
 
   const auto* profile = wifi_result == core_security::Status::Ok ? &loaded_wifi.profile : nullptr;
+  char setup_password[17]{};
+  if (!generateHexCredential(random, setup_password)) {
+    stopAtFatal(display,
+                {"NETWORK SECURITY", "Setup credential unavailable",
+                 "Hardware randomness could not protect setup mode.", "Restart Core Pilot"});
+  }
   esp_log_level_set("wifi", ESP_LOG_WARN);
   static CoreNetwork network;
   showProgress(display, 50, "Joining local network");
-  const esp_err_t network_result = network.begin(profile);
+  const esp_err_t network_result = network.begin(profile, setup_password);
   ESP_LOGI(kTag, "network startup result=%s", esp_err_to_name(network_result));
   if (network_result != ESP_OK) {
     stopAtFatal(display,
@@ -213,6 +248,7 @@ void Application::run() {
   if (ota_result != ESP_OK)
     ESP_LOGE(kTag, "OTA service startup failed: %s", esp_err_to_name(ota_result));
 
+  ESP_ERROR_CHECK(initializeHttpAccess(random, network, receiveAccessCode));
   static const HttpRuntime http_runtime{network, activity,       automations, matter,  devices,
                                         models,  wifi_provision, ai_storage,  ai_chat, ota,
                                         smtp,    storage,        random};
@@ -250,7 +286,8 @@ void Application::run() {
 
   showProgress(display, 100,
                matter_owner_started ? "Core Pilot ready" : "Ready; Matter requires service");
-  showHome(display, network);
+  showHome(display, network, setup_password);
+  std::memset(setup_password, 0, sizeof(setup_password));
 
   std::uint64_t discovery_nodes[core_storage::kMaxMatterDevices]{};
   std::size_t discovery_node_count = 0;

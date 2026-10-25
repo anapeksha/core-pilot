@@ -5,6 +5,7 @@ idf_component_register(
         "automation_service.cpp"
         "device_registry.cpp"
         "http_server.cpp"
+        "http_access.cpp"
         "main.cpp"
         "mcp_service.cpp"
         "model_repository.cpp"

@@ -48,7 +48,7 @@ public:
   // Supplies credentials in caller-owned memory. Never persists or logs them.
   // Invalid/missing profiles enter setup AP. Exhausted bounded join attempts
   // also enter setup AP. Returns an ESP-IDF error if even setup cannot start.
-  esp_err_t begin(const network_policy::Profile* profile);
+  esp_err_t begin(const network_policy::Profile* profile, const char* setup_password);
   void stop();
   Status status() const;
 
@@ -86,6 +86,7 @@ private:
   bool wifi_initialized_ = false;
   bool wifi_started_ = false;
   bool mdns_started_ = false;
+  char setup_password_[17]{};
 };
 
 } // namespace core_pilot

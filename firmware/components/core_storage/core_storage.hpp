@@ -45,6 +45,9 @@ struct ReplicationDiagnostic final {
 
 ReplicationDiagnostic replication_diagnostic();
 
+// A tracked missing flash record must not trigger SD legacy import.
+core_security::Status missing_flash_status(bool tracked);
+
 // Stores authenticated CPER records in the dedicated internal-flash NVS
 // partition. Device Seed material is owned by core_security and never enters
 // this partition.
@@ -101,7 +104,8 @@ private:
 };
 
 // Flash is authoritative. SD receives best-effort encrypted replicas and can
-// seed flash from legacy records when the primary has no copy.
+// seed flash only for legacy paths with neither a flash record nor a marker.
+// The journal must not be erased independently of SD during normal operation.
 class ReplicatedEncryptedStore final : public core_security::EncryptedStore {
 public:
   ReplicatedEncryptedStore(FlashEncryptedStore& primary, SdEncryptedStore* replica);

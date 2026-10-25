@@ -79,6 +79,11 @@ export function mockRouterApi(): Plugin {
           return;
         }
 
+        if (request.method === "GET" && url.pathname === "/api/v1/auth") {
+          json(response, 200, { authentication_required: false });
+          return;
+        }
+
         if (request.method === "GET" && url.pathname === "/api/v1/health") {
           json(response, 200, {
             product: "CorePilot",

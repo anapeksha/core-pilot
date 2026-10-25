@@ -185,7 +185,8 @@ esp_err_t CoreNetwork::start_setup_ap() {
   config.ap.ssid_len = static_cast<std::uint8_t>(std::strlen(name));
   config.ap.channel = 1;
   config.ap.max_connection = 4;
-  config.ap.authmode = WIFI_AUTH_OPEN;
+  config.ap.authmode = WIFI_AUTH_WPA2_PSK;
+  std::memcpy(config.ap.password, setup_password_, sizeof(setup_password_));
   // DHCP is provided by esp_netif's default AP. Keep the subnet fixed.
   err = esp_netif_dhcps_stop(ap_);
   if (err != ESP_OK && err != ESP_ERR_ESP_NETIF_DHCP_ALREADY_STOPPED) {
@@ -205,6 +206,7 @@ esp_err_t CoreNetwork::start_setup_ap() {
   if (err == ESP_OK) {
     err = esp_wifi_set_config(WIFI_IF_AP, &config);
   }
+  std::memset(&config, 0, sizeof(config));
   if (err == ESP_OK) {
     set_mode(Mode::setup_ap);
     err = esp_wifi_start();
@@ -229,10 +231,11 @@ esp_err_t CoreNetwork::start_mdns() {
   return err;
 }
 
-esp_err_t CoreNetwork::begin(const network_policy::Profile* profile) {
-  if (events_ != nullptr) {
+esp_err_t CoreNetwork::begin(const network_policy::Profile* profile, const char* setup_password) {
+  if (events_ != nullptr || setup_password == nullptr || std::strlen(setup_password) != 16) {
     return ESP_ERR_INVALID_STATE;
   }
+  std::memcpy(setup_password_, setup_password, sizeof(setup_password_));
   events_ = xEventGroupCreate();
   if (events_ == nullptr) {
     return ESP_ERR_NO_MEM;
@@ -394,8 +397,10 @@ esp_err_t CoreNetwork::commitProfile() {
   if (snapshot.mode != Mode::setup_ap)
     return ESP_ERR_INVALID_STATE;
   const esp_err_t result = esp_wifi_set_mode(WIFI_MODE_STA);
-  if (result == ESP_OK)
+  if (result == ESP_OK) {
     set_mode_preserving_station(Mode::station);
+    std::memset(setup_password_, 0, sizeof(setup_password_));
+  }
   return result;
 }
 
@@ -454,6 +459,7 @@ void CoreNetwork::stop() {
     vEventGroupDelete(events_);
     events_ = nullptr;
   }
+  std::memset(setup_password_, 0, sizeof(setup_password_));
   set_mode(Mode::stopped);
 }
 

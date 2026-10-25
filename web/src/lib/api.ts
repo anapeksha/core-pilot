@@ -1,3 +1,4 @@
+import { authHeaders, clearAccess } from "./auth";
 import { z } from "zod";
 
 import { translateFirmwareError } from "~/lib/errorCodes";
@@ -839,7 +840,16 @@ async function fetchWithTimeout<T>(
   );
 
   try {
-    const response = await fetch(path, { ...init, signal: controller.signal });
+    const headers = new Headers(init?.headers);
+    for (const [key, value] of Object.entries(authHeaders()))
+      headers.set(key, value);
+    const response = await fetch(path, {
+      ...init,
+      headers: Object.fromEntries(headers.entries()),
+      credentials: "omit",
+      signal: controller.signal,
+    });
+    if (response.status === 401) clearAccess();
     return await consume(response);
   } finally {
     window.clearTimeout(timeout);

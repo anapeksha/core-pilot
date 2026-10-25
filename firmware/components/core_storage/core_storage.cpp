@@ -73,6 +73,34 @@ bool valid_record(const uint8_t* record, size_t size, size_t maximum) {
   return record != nullptr && size >= 4 && size <= maximum && std::memcmp(record, "CPER", 4) == 0;
 }
 
+// Mark a path before changing its flash blob. Once tracked, a missing flash
+// record must never be silently resurrected from an older SD replica.
+constexpr uint8_t kTracked = 1;
+
+void anchor_key(const FatNames& names, char (&key)[16]) {
+  key[0] = 'a';
+  const size_t length = std::strlen(names.record);
+  std::memcpy(key + 1, names.record, length + 1);
+}
+
+core_security::Status tracked_path(nvs_handle_t handle, const FatNames& names, bool& tracked) {
+  char key[16];
+  anchor_key(names, key);
+  uint8_t value = 0;
+  const esp_err_t result = nvs_get_u8(handle, key, &value);
+  tracked = result != ESP_ERR_NVS_NOT_FOUND;
+  if (!tracked)
+    return core_security::Status::Ok; // one-time legacy SD import
+  return result == ESP_OK && value == kTracked ? core_security::Status::Ok
+                                               : core_security::Status::IoError;
+}
+
+esp_err_t mark_tracked(nvs_handle_t handle, const FatNames& names) {
+  char key[16];
+  anchor_key(names, key);
+  return nvs_set_u8(handle, key, kTracked);
+}
+
 void record_io_error(const char* operation, int error) {
   last_error.store(error, std::memory_order_relaxed);
   last_operation.store(operation, std::memory_order_release);
@@ -155,6 +183,10 @@ core_security::Status read_file(const char* path, uint8_t* out, size_t capacity,
 }
 } // namespace
 
+core_security::Status missing_flash_status(bool tracked) {
+  return tracked ? core_security::Status::AuthenticationFailed : core_security::Status::NotFound;
+}
+
 IoDiagnostic last_io_diagnostic() {
   const char* operation = last_operation.load(std::memory_order_acquire);
   return {operation, last_error.load(std::memory_order_relaxed)};
@@ -213,6 +245,11 @@ core_security::Status FlashEncryptedStore::read(const char* path, size_t path_le
     return core_security::Status::IoError;
   size_t stored_size = 0;
   esp_err_t result = nvs_get_blob(handle_, names->record, nullptr, &stored_size);
+  if (result == ESP_ERR_NVS_NOT_FOUND) {
+    bool tracked = false;
+    const auto status = tracked_path(handle_, *names, tracked);
+    return status == core_security::Status::Ok ? missing_flash_status(tracked) : status;
+  }
   if (result != ESP_OK)
     return nvs_status(result);
   if (stored_size < 4 || stored_size > kMaxFlashRecordBytes)
@@ -224,6 +261,15 @@ core_security::Status FlashEncryptedStore::read(const char* path, size_t path_le
     return nvs_status(result);
   if (!valid_record(record, stored_size, kMaxFlashRecordBytes))
     return core_security::Status::Invalid;
+  bool tracked = false;
+  const auto status = tracked_path(handle_, *names, tracked);
+  if (status != core_security::Status::Ok)
+    return status;
+  // Existing flash records predate markers. Adopt them before permitting reads.
+  if (!tracked) {
+    if (mark_tracked(handle_, *names) != ESP_OK || nvs_commit(handle_) != ESP_OK)
+      return core_security::Status::IoError;
+  }
   size = stored_size;
   return core_security::Status::Ok;
 }
@@ -237,7 +283,9 @@ core_security::Status FlashEncryptedStore::write_atomic(const char* path, size_t
   Lock lock(mutex_);
   if (!lock.held())
     return core_security::Status::IoError;
-  esp_err_t result = nvs_set_blob(handle_, names->record, record, size);
+  esp_err_t result = mark_tracked(handle_, *names);
+  if (result == ESP_OK)
+    result = nvs_set_blob(handle_, names->record, record, size);
   if (result == ESP_OK)
     result = nvs_commit(handle_);
   return nvs_status(result);
@@ -268,9 +316,13 @@ core_security::Status FlashEncryptedStore::archive(const char* path, size_t path
     return core_security::Status::IoError;
   result = nvs_get_blob(handle_, source->record, record, &size);
   if (result == ESP_OK && valid_record(record, size, kMaxFlashRecordBytes))
-    result = nvs_set_blob(handle_, destination->record, record, size);
+    result = mark_tracked(handle_, *source);
   else if (result == ESP_OK)
     result = ESP_ERR_INVALID_CRC;
+  if (result == ESP_OK)
+    result = mark_tracked(handle_, *destination);
+  if (result == ESP_OK)
+    result = nvs_set_blob(handle_, destination->record, record, size);
   if (result == ESP_OK)
     result = nvs_erase_key(handle_, source->record);
   if (result == ESP_OK)
@@ -308,9 +360,13 @@ core_security::Status FlashEncryptedStore::archive_and_replace(const char* path,
     return core_security::Status::IoError;
   result = nvs_get_blob(handle_, source->record, old_record, &old_size);
   if (result == ESP_OK && valid_record(old_record, old_size, kMaxFlashRecordBytes))
-    result = nvs_set_blob(handle_, destination->record, old_record, old_size);
+    result = mark_tracked(handle_, *source);
   else if (result == ESP_OK)
     result = ESP_ERR_INVALID_CRC;
+  if (result == ESP_OK)
+    result = mark_tracked(handle_, *destination);
+  if (result == ESP_OK)
+    result = nvs_set_blob(handle_, destination->record, old_record, old_size);
   if (result == ESP_OK)
     result = nvs_set_blob(handle_, source->record, record, size);
   if (result == ESP_OK)

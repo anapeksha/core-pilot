@@ -37,6 +37,24 @@ application values**; every postcard payload schema needs an independently
 verified codec or explicit type-specific encoding.
 Do not treat native C++ struct bytes or JSON as compatible postcard payloads.
 
+`core_storage` uses the internal `journal` NVS partition as the authority for
+SD replicas. A per-path marker is committed **before** changing a flash record;
+a missing tracked record cannot be re-imported from SD, including after archive.
+Existing flash records are adopted on first read. Flash remains authoritative and
+NVS blob replacement retains its prior power-loss behavior; SD `.BAK` recovery
+remains available for untracked legacy records. An interrupted first write may
+leave a marker without a record, failing closed rather than accepting stale SD.
+This does **not** protect against rollback of the internal journal, an attacker
+rewriting both NVS and SD, direct use of `SdEncryptedStore` without the replicated
+backend, or an old authentic record on initial legacy import. It also does not
+bind individual flash ciphertext versions: NVS must remain trusted. No eFuse
+counters are burned. Keep the journal partition when upgrading.
+
+Production defaults disable core dumps; this does not erase plaintext dumps
+previously written to the `crash` partition. Existing devices need an explicit
+safe migration/erase plan. A pre-existing `firmware/sdkconfig` can override
+`sdkconfig.defaults` until regenerated with the new choice.
+
 ESP-IDF's mbedTLS configuration must enable `CONFIG_MBEDTLS_CHACHA20_C`,
 `CONFIG_MBEDTLS_POLY1305_C`, `CONFIG_MBEDTLS_CHACHAPOLY_C`, and
 `CONFIG_MBEDTLS_HKDF_C` before linking this component. The checked-in

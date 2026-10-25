@@ -1,3 +1,4 @@
+import AccessGate from "~/components/access-gate";
 import { HashRouter } from "@solidjs/router";
 import { QueryClientProvider } from "@tanstack/solid-query";
 import {
@@ -22,9 +23,11 @@ export default function App() {
         storageManager={colorModeManager}
       >
         <FatalErrorBoundary>
-          <HashRouter root={Shell}>
-            <AppRoutes />
-          </HashRouter>
+          <AccessGate>
+            <HashRouter root={Shell}>
+              <AppRoutes />
+            </HashRouter>
+          </AccessGate>
         </FatalErrorBoundary>
         <Toaster
           richColors

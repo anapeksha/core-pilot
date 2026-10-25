@@ -75,6 +75,13 @@ TEST_CASE("encrypted SD backend rejects plaintext and oversize before I/O", "[co
                     static_cast<int>(store.write_atomic("/bad", 4, magic, sizeof(magic))));
 }
 
+TEST_CASE("tracked missing flash record cannot be imported from SD", "[core_storage]") {
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::NotFound),
+                    static_cast<int>(missing_flash_status(false)));
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::AuthenticationFailed),
+                    static_cast<int>(missing_flash_status(true)));
+}
+
 TEST_CASE("Matter device codec rejects malformed records", "[core_storage]") {
   MatterDevices source{};
   source.entries[0] = {0x0002000000000001ULL, 1, 0x00000001, true};
