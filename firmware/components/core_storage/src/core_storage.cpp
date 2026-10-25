@@ -73,8 +73,8 @@ bool valid_record(const uint8_t* record, size_t size, size_t maximum) {
   return record != nullptr && size >= 4 && size <= maximum && std::memcmp(record, "CPER", 4) == 0;
 }
 
-// Mark a path before changing its flash blob. Once tracked, a missing flash
-// record must never be silently resurrected from an older SD replica.
+// Once tracked, a missing flash record must never be silently resurrected
+// from an older SD replica.
 constexpr uint8_t kTracked = 1;
 
 void anchor_key(const FatNames& names, char (&key)[16]) {
@@ -283,9 +283,11 @@ core_security::Status FlashEncryptedStore::write_atomic(const char* path, size_t
   Lock lock(mutex_);
   if (!lock.held())
     return core_security::Status::IoError;
-  esp_err_t result = mark_tracked(handle_, *names);
+  // Store the recoverable record before its anti-resurrection marker. If power
+  // fails between these writes, read() safely adopts the complete record.
+  esp_err_t result = nvs_set_blob(handle_, names->record, record, size);
   if (result == ESP_OK)
-    result = nvs_set_blob(handle_, names->record, record, size);
+    result = mark_tracked(handle_, *names);
   if (result == ESP_OK)
     result = nvs_commit(handle_);
   return nvs_status(result);

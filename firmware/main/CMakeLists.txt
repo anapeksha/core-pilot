@@ -29,6 +29,7 @@ idf_component_register(
         core_smtp
         core_storage
         app_update
+        bootloader_support
         esp_event
         esp_http_client
         esp_http_server

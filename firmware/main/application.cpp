@@ -2,6 +2,7 @@
 
 #include "ai_chat_service.hpp"
 #include "automation_service.hpp"
+#include "bootloader_random.h"
 #include "core_activity.hpp"
 #include "core_ai.hpp"
 #include "core_board.hpp"
@@ -35,6 +36,18 @@ namespace core_pilot {
 namespace {
 
 constexpr char kTag[] = "core_pilot";
+
+class EarlyEntropy final {
+public:
+  EarlyEntropy() {
+    bootloader_random_enable();
+  }
+  ~EarlyEntropy() {
+    bootloader_random_disable();
+  }
+  EarlyEntropy(const EarlyEntropy&) = delete;
+  EarlyEntropy& operator=(const EarlyEntropy&) = delete;
+};
 
 bool generateHexCredential(core_security::RandomSource& random, char (&credential)[17]) {
   std::uint8_t bytes[8]{};
@@ -92,17 +105,21 @@ void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setu
 void Application::run() {
   ESP_ERROR_CHECK(nvs_flash_init());
 
-  static CoreDisplay display;
-  ESP_ERROR_CHECK(display.begin());
-  display.bootSplash();
-  showProgress(display, 5, "Starting secure services");
-
   static core_security::EspSeedPartition seed_partition;
   static core_security::EspHardwareRandom random;
   static core_security::DeviceSeed device_seed;
   core_security::SeedOrigin seed_origin{};
-  const auto seed_result =
-      core_security::load_or_generate(seed_partition, random, device_seed, seed_origin);
+  core_security::Status seed_result = core_security::Status::IoError;
+  {
+    // The display may use ADC-backed peripherals, so finish early entropy collection first.
+    EarlyEntropy entropy;
+    seed_result = core_security::load_or_generate(seed_partition, random, device_seed, seed_origin);
+  }
+
+  static CoreDisplay display;
+  ESP_ERROR_CHECK(display.begin());
+  display.bootSplash();
+  showProgress(display, 5, "Starting secure services");
   if (seed_result != core_security::Status::Ok) {
     stopAtFatal(display,
                 {"SECURE STORAGE", "Device Seed unavailable",
