@@ -58,12 +58,18 @@ TEST_CASE("bootstrap distinguishes expiry and exhausted attempts", "[core_securi
 TEST_CASE("physical regeneration preserves existing sessions", "[core_security]") {
   Random random;
   core_security::Auth auth;
-  char token[65]{};
+  char first_token[65]{};
   TEST_ASSERT_EQUAL(0, static_cast<int>(auth.begin(random, 10, capture)));
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
-                    static_cast<int>(auth.exchange(physical_code, random, 11, token)));
+                    static_cast<int>(auth.exchange(physical_code, random, 11, first_token)));
   TEST_ASSERT_EQUAL(0, static_cast<int>(auth.regenerate(random, 20, capture)));
-  TEST_ASSERT_TRUE(auth.authorize(token, 21));
+  TEST_ASSERT_TRUE(auth.authorize(first_token, 21));
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::open),
                     static_cast<int>(auth.bootstrap_state(21)));
+
+  char second_token[65]{};
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
+                    static_cast<int>(auth.exchange(physical_code, random, 22, second_token)));
+  TEST_ASSERT_TRUE(auth.authorize(first_token, 23));
+  TEST_ASSERT_TRUE(auth.authorize(second_token, 23));
 }

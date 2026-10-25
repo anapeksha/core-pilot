@@ -100,6 +100,26 @@ void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setu
   display.home(network_line, web_address, "");
 }
 
+void showAccessState(CoreDisplay& display, const HttpAccessSnapshot& snapshot) {
+  switch (snapshot.state) {
+  case core_security::BootstrapState::open:
+    display.accessCode(snapshot.code);
+    break;
+  case core_security::BootstrapState::consumed:
+    display.accessState(CoreDisplay::AccessState::granted);
+    break;
+  case core_security::BootstrapState::expired:
+    display.accessState(CoreDisplay::AccessState::expired);
+    break;
+  case core_security::BootstrapState::attempts_exhausted:
+    display.accessState(CoreDisplay::AccessState::attempts_exhausted);
+    break;
+  case core_security::BootstrapState::unavailable:
+    display.accessState(CoreDisplay::AccessState::unavailable);
+    break;
+  }
+}
+
 } // namespace
 
 void Application::run() {
@@ -305,7 +325,7 @@ void Application::run() {
   HttpAccessSnapshot access_snapshot{};
   core_security::BootstrapState displayed_access_state = core_security::BootstrapState::unavailable;
   if (snapshotHttpAccess(access_snapshot)) {
-    display.accessCode(access_snapshot.code);
+    showAccessState(display, access_snapshot);
     displayed_access_state = access_snapshot.state;
   }
   mbedtls_platform_zeroize(&access_snapshot, sizeof(access_snapshot));
@@ -439,23 +459,7 @@ void Application::run() {
       HttpAccessSnapshot next{};
       if (snapshotHttpAccess(next) && next.state != displayed_access_state) {
         displayed_access_state = next.state;
-        switch (next.state) {
-        case core_security::BootstrapState::open:
-          display.accessCode(next.code);
-          break;
-        case core_security::BootstrapState::consumed:
-          display.accessState(CoreDisplay::AccessState::granted);
-          break;
-        case core_security::BootstrapState::expired:
-          display.accessState(CoreDisplay::AccessState::expired);
-          break;
-        case core_security::BootstrapState::attempts_exhausted:
-          display.accessState(CoreDisplay::AccessState::attempts_exhausted);
-          break;
-        case core_security::BootstrapState::unavailable:
-          display.accessState(CoreDisplay::AccessState::unavailable);
-          break;
-        }
+        showAccessState(display, next);
       }
       mbedtls_platform_zeroize(&next, sizeof(next));
     }

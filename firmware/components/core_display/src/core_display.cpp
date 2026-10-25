@@ -226,17 +226,18 @@ void CoreDisplay::renderHome() {
   if (access_state_ == AccessState::active) {
     drawText("Dashboard access code", 16, 158, kMuted);
     drawText(access_code_, 16, 194, kBlue);
-  } else if (access_state_ == AccessState::expired ||
+  } else if (access_state_ == AccessState::granted || access_state_ == AccessState::expired ||
              access_state_ == AccessState::attempts_exhausted) {
-    drawText(access_state_ == AccessState::expired ? "Access code expired"
-                                                   : "Access attempts exhausted",
-             16, 158, kMuted);
+    const char* message = access_state_ == AccessState::granted   ? "Dashboard access authorized"
+                          : access_state_ == AccessState::expired ? "Access code expired"
+                                                                  : "Access attempts exhausted";
+    drawText(message, 16, 158, kMuted);
     canvas_.drawRoundRect(16, 176, 288, 44, 8, kBlue);
-    drawText("Generate new access code", 48, 204, kBlue);
+    drawText(access_state_ == AccessState::granted ? "Authorize another browser"
+                                                   : "Generate new access code",
+             access_state_ == AccessState::granted ? 43 : 48, 204, kBlue);
   } else {
-    const char* message = access_state_ == AccessState::granted ? "Dashboard access authorized"
-                                                                : "Dashboard access unavailable";
-    drawText(message, 16, 194, access_state_ == AccessState::granted ? kBlue : kMuted);
+    drawText("Dashboard access unavailable", 16, 194, kMuted);
   }
   int h, m, s, d, mo, y;
   if (readClock(h, m, s, d, mo, y))
@@ -434,8 +435,9 @@ CoreDisplay::Action CoreDisplay::poll() {
       renderHome();
       if (was_blanked)
         M5.Display.setBrightness(160);
-    } else if (page_ == Page::home && (access_state_ == AccessState::expired ||
-                                       access_state_ == AccessState::attempts_exhausted)) {
+    } else if (page_ == Page::home &&
+               (access_state_ == AccessState::granted || access_state_ == AccessState::expired ||
+                access_state_ == AccessState::attempts_exhausted)) {
       const auto& touch = M5.Touch.getDetail();
       if (touch.wasPressed() && touch.x >= 16 && touch.x < 304 && touch.y >= 176 && touch.y < 220)
         action = Action::generate_access_code;
