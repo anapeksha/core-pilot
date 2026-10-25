@@ -1,8 +1,8 @@
 import {
   HiOutlineArrowRight,
   HiOutlineDevicePhoneMobile,
+  HiOutlineHome,
   HiOutlineLockClosed,
-  HiOutlineShieldCheck,
 } from "solid-icons/hi";
 import { createSignal, onMount, Show, type ParentProps } from "solid-js";
 import { Button } from "~/components/button";
@@ -78,11 +78,8 @@ export default function AccessGate(props: ParentProps) {
 
           <div class="relative w-full max-w-md">
             <div class="mb-6 flex items-center justify-center gap-3">
-              <span class="grid size-11 place-items-center rounded-xl border bg-card shadow-sm">
-                <HiOutlineShieldCheck
-                  class="size-6 text-foreground"
-                  aria-hidden="true"
-                />
+              <span class="brand-orb size-11!" aria-hidden="true">
+                <HiOutlineHome size={24} />
               </span>
               <div>
                 <p class="text-sm font-medium leading-none">Core Pilot</p>
