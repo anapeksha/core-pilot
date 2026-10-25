@@ -103,8 +103,11 @@ void OtaService::taskEntry(void* context) {
 void OtaService::run() {
   while (true) {
     Operation operation{};
-    if (xQueueReceive(queue_, &operation, portMAX_DELAY) != pdTRUE)
+    if (xQueueReceive(queue_, &operation, pdMS_TO_TICKS(1000)) != pdTRUE) {
+      // status() owns the timeout transition and aborts stale OTA handles.
+      ota_.status();
       continue;
+    }
     if (operation == Operation::restart) {
       vTaskDelay(pdMS_TO_TICKS(500));
       esp_restart();

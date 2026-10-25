@@ -18,6 +18,8 @@ public:
   static constexpr std::uint32_t kMaxImageBytes = core_domain::max_ota_image;
   static constexpr std::size_t kSha256Bytes = 32;
   static constexpr std::size_t kMaxVersionBytes = 64;
+  static constexpr std::int64_t kUploadIdleTimeoutUs = 5LL * 60 * 1000000;
+  using SessionId = std::uint64_t; // Zero denotes the legacy, unowned API.
 
   enum class State : std::uint8_t { idle, prepared, staging, activated, failed };
 
@@ -35,6 +37,8 @@ public:
     final_mismatch,
     digest_mismatch,
     version_mismatch,
+    version_not_newer,
+    expired,
     no_memory,
     ota_begin_failed,
     ota_write_failed,
@@ -85,13 +89,22 @@ public:
   CoreOta(const CoreOta&) = delete;
   CoreOta& operator=(const CoreOta&) = delete;
 
+  // Owned sessions require the returned ID for every write/abort; legacy calls cannot modify them.
+  // Version ordering is software-only against the running image, not an eFuse rollback counter.
   Result prepare(const Prepare& request);
+  Result prepare(const Prepare& request, SessionId& session);
   Result write(const Chunk& chunk);
+  Result write(const Chunk& chunk, SessionId session);
   Result abort();
+  Result abort(SessionId session);
   Status status() const;
 
 private:
   Result fail_locked(Error error, esp_err_t esp_error = ESP_OK);
+  Result prepare_impl(const Prepare& request, SessionId* session);
+  Result write_impl(const Chunk& chunk, SessionId session);
+  Result abort_impl(SessionId session);
+  void expire_locked();
   void clear_upload_locked();
   static bool parse_digest(const char* hex, std::uint8_t (&digest)[kSha256Bytes]);
   static bool valid_version(const char* version);
@@ -103,6 +116,9 @@ private:
   esp_ota_handle_t handle_{};
   bool handle_open_{};
   bool hash_active_{};
+  SessionId session_{};
+  SessionId next_session_{};
+  std::int64_t last_activity_us_{};
   mbedtls_sha256_context hash_{};
   std::uint8_t expected_digest_[kSha256Bytes]{};
 };
