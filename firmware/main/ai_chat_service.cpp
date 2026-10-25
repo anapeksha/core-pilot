@@ -4,8 +4,6 @@
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
-#include "lwip/inet.h"
-#include "lwip/netdb.h"
 #include "mbedtls/platform_util.h"
 
 #include <cerrno>
@@ -56,96 +54,6 @@ bool ascii_equal(const char* value, std::size_t length, const char* expected) {
   return true;
 }
 
-bool ascii_suffix(const char* value, std::size_t length, const char* suffix) {
-  const std::size_t suffix_length = std::strlen(suffix);
-  return length >= suffix_length &&
-         ascii_equal(value + length - suffix_length, suffix_length, suffix);
-}
-
-// This is deliberately checked before esp_http_client can perform DNS. DNS rebinding is still
-// mitigated only by TLS hostname validation; this service does not connect to plaintext endpoints.
-bool extract_url_host(const char* url, char* output, std::size_t capacity) {
-  if (url == nullptr || output == nullptr || capacity == 0 || std::strncmp(url, "https://", 8) != 0)
-    return false;
-  const char* begin = url + 8;
-  const char* end = std::strpbrk(begin, "/?#");
-  if (end == nullptr)
-    end = begin + std::strlen(begin);
-  const char* colon = nullptr;
-  for (const char* cursor = begin; cursor < end; ++cursor)
-    if (*cursor == ':')
-      colon = cursor;
-  if (colon != nullptr)
-    end = colon;
-  const std::size_t length = static_cast<std::size_t>(end - begin);
-  if (length == 0 || length >= capacity)
-    return false;
-  std::memcpy(output, begin, length);
-  output[length] = '\0';
-  return true;
-}
-
-bool public_ipv4(const in_addr& address) {
-  const std::uint32_t value = ntohl(address.s_addr);
-  const std::uint8_t first = static_cast<std::uint8_t>(value >> 24U);
-  const std::uint8_t second = static_cast<std::uint8_t>(value >> 16U);
-  if (first == 0 || first == 10 || first == 127 || first >= 224)
-    return false;
-  if (first == 100 && second >= 64 && second <= 127)
-    return false;
-  if (first == 169 && second == 254)
-    return false;
-  if (first == 172 && second >= 16 && second <= 31)
-    return false;
-  if (first == 192 && (second == 0 || second == 168))
-    return false;
-  if (first == 198 && (second == 18 || second == 19 || second == 51))
-    return false;
-  if (first == 203 && second == 0)
-    return false;
-  return true;
-}
-
-bool public_ipv6(const in6_addr& address) {
-  const auto* bytes = reinterpret_cast<const std::uint8_t*>(&address);
-  bool unspecified = true;
-  for (std::size_t index = 0; index < 16; ++index)
-    unspecified = unspecified && bytes[index] == 0;
-  const bool loopback = std::memcmp(bytes, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\1", 16) == 0;
-  const bool unique_local = (bytes[0] & 0xfeU) == 0xfcU;
-  const bool link_local = bytes[0] == 0xfeU && (bytes[1] & 0xc0U) == 0x80U;
-  const bool multicast = bytes[0] == 0xffU;
-  return !unspecified && !loopback && !unique_local && !link_local && !multicast;
-}
-
-bool public_dns_target(const char* url) {
-  char host[254]{};
-  if (!extract_url_host(url, host, sizeof host))
-    return false;
-  addrinfo hints{};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  addrinfo* addresses = nullptr;
-  if (getaddrinfo(host, "443", &hints, &addresses) != 0 || addresses == nullptr)
-    return false;
-  bool found = false;
-  bool all_public = true;
-  for (const addrinfo* address = addresses; address != nullptr; address = address->ai_next) {
-    if (address->ai_family == AF_INET) {
-      found = true;
-      const auto* socket = reinterpret_cast<const sockaddr_in*>(address->ai_addr);
-      all_public = all_public && public_ipv4(socket->sin_addr);
-    } else if (address->ai_family == AF_INET6) {
-      found = true;
-      const auto* socket = reinterpret_cast<const sockaddr_in6*>(address->ai_addr);
-      all_public = all_public && public_ipv6(socket->sin6_addr);
-    }
-  }
-  freeaddrinfo(addresses);
-  mbedtls_platform_zeroize(host, sizeof host);
-  return found && all_public;
-}
-
 bool safe_https_base_url(const char* url) {
   if (url == nullptr || std::strncmp(url, "https://", 8) != 0)
     return false;
@@ -185,13 +93,10 @@ bool safe_https_base_url(const char* url) {
     if (!valid)
       return false;
   }
-  if (only_ip_characters || ascii_equal(host, host_length, "localhost") ||
-      ascii_suffix(host, host_length, ".localhost") || ascii_suffix(host, host_length, ".local") ||
-      ascii_suffix(host, host_length, ".lan") || ascii_suffix(host, host_length, ".internal") ||
-      ascii_suffix(host, host_length, ".home.arpa") ||
-      ascii_equal(host, host_length, "metadata.google.internal"))
-    return false;
-  return true;
+  // ESP-IDF's HTTP client cannot pin a prevalidated DNS address while preserving SNI.
+  // Never send credentials to arbitrary compatible-provider hostnames.
+  return !only_ip_characters && (ascii_equal(host, host_length, "api.openai.com") ||
+                                 ascii_equal(host, host_length, "api.anthropic.com"));
 }
 
 const char* role_name(AiChatService::Role role) {
@@ -460,9 +365,8 @@ void AiChatService::process(std::uint64_t operation_id) {
     set_failure(result, Error::not_configured, "provider configuration unavailable");
     goto publish;
   }
-  if (!safe_https_base_url(provider.base_url) || !public_dns_target(provider.base_url)) {
-    set_failure(result, Error::unsafe_url,
-                "provider URL does not resolve exclusively to public HTTPS addresses");
+  if (!safe_https_base_url(provider.base_url)) {
+    set_failure(result, Error::unsafe_url, "provider URL must use an allowed HTTPS host");
     goto publish;
   }
 

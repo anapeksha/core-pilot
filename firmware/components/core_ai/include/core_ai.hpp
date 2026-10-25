@@ -77,7 +77,8 @@ public:
   Status start();
   Status load(ProviderConfig& output);
   // Consumes config.api_key: it is wiped on every return path. With
-  // api_key_redacted=true and an empty key, the previously stored key is kept.
+  // api_key_redacted=true and an empty key, the previously stored key is kept
+  // only when HTTPS host, effective port, backend, and auth type are unchanged.
   Status save(ProviderConfig& config);
 
 private:

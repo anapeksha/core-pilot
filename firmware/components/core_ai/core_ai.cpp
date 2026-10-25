@@ -167,6 +167,42 @@ bool valid_path(const char* value) {
       return false;
   return true;
 }
+// Only the destination authority and authentication mode bind a retained credential;
+// model and URL path changes do not transfer it to a different origin.
+bool credential_scope(const ProviderConfig& config, char* host, std::size_t capacity) {
+  const char* url = config.base_url;
+  if (std::strncmp(url, "https://", 8) != 0)
+    return false;
+  const char* begin = url + 8;
+  const char* end = std::strpbrk(begin, "/?#");
+  if (!end)
+    end = begin + std::strlen(begin);
+  const char* colon = static_cast<const char*>(std::memchr(begin, ':', end - begin));
+  const char* host_end = colon ? colon : end;
+  const std::size_t length = static_cast<std::size_t>(host_end - begin);
+  if (length == 0 || length >= capacity ||
+      (colon && (end - colon != 4 || std::memcmp(colon, ":443", 4) != 0)))
+    return false;
+  for (std::size_t i = 0; i < length; ++i) {
+    const unsigned char c = static_cast<unsigned char>(begin[i]);
+    if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
+          c == '-'))
+      return false;
+    host[i] = c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+  }
+  host[length] = '\0';
+  return true;
+}
+
+bool same_credential_scope(const ProviderConfig& incoming, const ProviderConfig& stored) {
+  char incoming_host[kMaxProviderUrlBytes + 1]{};
+  char stored_host[kMaxProviderUrlBytes + 1]{};
+  return incoming.backend == stored.backend && incoming.auth_type == stored.auth_type &&
+         credential_scope(incoming, incoming_host, sizeof incoming_host) &&
+         credential_scope(stored, stored_host, sizeof stored_host) &&
+         std::strcmp(incoming_host, stored_host) == 0;
+}
+
 bool valid_provider(const ProviderConfig& config) {
   return static_cast<unsigned>(config.backend) <=
              static_cast<unsigned>(ProviderBackend::AnthropicCompatible) &&
@@ -329,6 +365,12 @@ Status ProviderConfigRepository::save(ProviderConfig& config) {
   if (!lock.held)
     return Status::StorageError;
   ProviderConfig old{};
+  struct ClearOld final {
+    ProviderConfig& value;
+    ~ClearOld() {
+      clear_provider_config(value);
+    }
+  } clear_old{old};
   if (config.api_key_redacted && config.api_key_length == 0) {
     Workspace old_workspace(kProviderPayload);
     if (!old_workspace.valid())
@@ -340,30 +382,34 @@ Status ProviderConfigRepository::save(ProviderConfig& config) {
                     core_security::RecordType::AiProvider, old_workspace, old_size, old_generation);
     if (loaded != Status::Ok)
       return loaded;
-    // Decode through a local, non-locking path by parsing the prior record's key tail.
-    std::size_t pos = sizeof(kProviderMagic) + 1 + 1 + 1 + 4 + 4 + 4;
+    // Decode the prior scope and key without taking the repository lock a second time.
+    std::size_t pos = sizeof(kProviderMagic);
+    std::uint8_t backend{}, auth{};
     std::uint16_t part{};
     const std::uint8_t* bytes{};
     if (old_size < pos ||
         std::memcmp(old_workspace.plaintext, kProviderMagic, sizeof(kProviderMagic)) != 0 ||
-        !get16(old_workspace.plaintext, old_size, pos, part) || part > kMaxProviderUrlBytes ||
+        !get8(old_workspace.plaintext, old_size, pos, backend) ||
+        !get8(old_workspace.plaintext, old_size, pos, auth) || pos + 1 + 4 + 4 + 4 > old_size)
+      return Status::CorruptData;
+    old.backend = static_cast<ProviderBackend>(backend);
+    old.auth_type = static_cast<AuthType>(auth);
+    pos += 1 + 4 + 4 + 4;
+    if (!get16(old_workspace.plaintext, old_size, pos, part) || part > kMaxProviderUrlBytes ||
         !take(old_workspace.plaintext, old_size, pos, part, bytes) ||
-        !get16(old_workspace.plaintext, old_size, pos, part) || part > kMaxProviderModelBytes ||
+        std::memchr(bytes, '\0', part) != nullptr)
+      return Status::CorruptData;
+    std::memcpy(old.base_url, bytes, part);
+    if (!get16(old_workspace.plaintext, old_size, pos, part) || part > kMaxProviderModelBytes ||
         !take(old_workspace.plaintext, old_size, pos, part, bytes) ||
         !get16(old_workspace.plaintext, old_size, pos, part) || part > kMaxApiKeyBytes ||
         !take(old_workspace.plaintext, old_size, pos, part, bytes) || pos != old_size)
       return Status::CorruptData;
-    old.api_key_length = part;
-    std::memcpy(old.api_key, bytes, part);
+    if (!same_credential_scope(config, old))
+      return Status::InvalidArgument;
     config.api_key_length = part;
-    std::memcpy(config.api_key, old.api_key, part);
+    std::memcpy(config.api_key, bytes, part);
   }
-  struct ClearOld final {
-    ProviderConfig& value;
-    ~ClearOld() {
-      clear_provider_config(value);
-    }
-  } clear_old{old};
   Workspace workspace(kProviderPayload);
   if (!workspace.valid())
     return Status::StorageError;

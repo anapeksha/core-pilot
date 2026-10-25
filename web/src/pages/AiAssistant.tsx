@@ -417,7 +417,7 @@ const AiAssistant: Component = () => {
           max_output_tokens: Number(formValues.maxOutputTokens),
           timeout_ms: Number(formValues.timeoutMs),
           api_key: apiKey || null,
-          api_key_redacted: Boolean(apiKey),
+          api_key_redacted: !apiKey && ai().provider_configured,
         },
       },
       { onSuccess: (response) => response.accepted && closeProviderSheet() },
