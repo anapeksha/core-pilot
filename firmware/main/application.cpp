@@ -72,9 +72,12 @@ void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setu
   char access_line[40]{};
   std::snprintf(access_line, sizeof(access_line), "Access code: %s", access_code);
   if (status.mode == CoreNetwork::Mode::setup_ap) {
+    char ap_line[48]{};
     char password_line[48]{};
-    std::snprintf(password_line, sizeof(password_line), "Setup password: %s", setup_password);
-    display.home(password_line, "http://192.168.4.1/", access_line);
+    std::snprintf(ap_line, sizeof(ap_line), "Setup AP: %s", status.setup_ssid);
+    std::snprintf(password_line, sizeof(password_line), "Password: %s  192.168.4.1",
+                  setup_password);
+    display.home(ap_line, password_line, access_line);
     return;
   }
 

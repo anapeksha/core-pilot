@@ -208,6 +208,9 @@ esp_err_t CoreNetwork::start_setup_ap() {
   }
   std::memset(&config, 0, sizeof(config));
   if (err == ESP_OK) {
+    portENTER_CRITICAL(&lock_);
+    std::memcpy(state_.setup_ssid, name, sizeof(name));
+    portEXIT_CRITICAL(&lock_);
     set_mode(Mode::setup_ap);
     err = esp_wifi_start();
     if (err == ESP_OK) {

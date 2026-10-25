@@ -24,6 +24,7 @@ public:
     bool has_ipv4 = false;
     esp_ip4_addr_t ipv4{};
     char station_ssid[network_policy::kMaxSsidBytes + 1]{};
+    char setup_ssid[sizeof(network_policy::kSetupPrefix) + 6]{};
     bool has_bssid = false;
     std::uint8_t station_bssid[6]{};
     bool has_ipv6 = false;
