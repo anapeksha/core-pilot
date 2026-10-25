@@ -13,6 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = ROOT / "firmware"
+S3 = FIRMWARE / "s3"
 SOURCE_SUFFIXES = {".c", ".cc", ".cpp", ".h", ".hpp"}
 
 
@@ -47,7 +48,11 @@ def find_formatter() -> str | None:
 
 def source_files() -> list[str]:
     files: list[str] = []
-    for directory in (FIRMWARE / "components", FIRMWARE / "main"):
+    for directory in (
+        S3 / "components",
+        S3 / "main",
+        FIRMWARE / "h2" / "main",
+    ):
         files.extend(
             str(path)
             for path in directory.rglob("*")

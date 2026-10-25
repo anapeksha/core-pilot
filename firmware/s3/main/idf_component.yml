@@ -1,0 +1,7 @@
+dependencies:
+  espressif/esp_matter:
+    version: "1.6.1"
+  idf:
+    version: ">=6.0.2,<6.1.0"
+  m5stack/m5unified:
+    version: "^0.2.10"

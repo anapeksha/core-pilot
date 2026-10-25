@@ -11,6 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = ROOT / "firmware"
+S3 = FIRMWARE / "s3"
 
 
 def find_tool(name: str) -> str | None:
@@ -30,7 +31,7 @@ def main() -> int:
         "build_directory",
         nargs="?",
         default="build-clang",
-        help="Compilation database directory relative to firmware/",
+        help="Compilation database directory relative to firmware/s3/",
     )
     args = parser.parse_args()
 
@@ -38,7 +39,7 @@ def main() -> int:
     if tidy is None:
         print("clang-tidy is required; install ESP-Clang with EIM", file=sys.stderr)
         return 1
-    build_directory = (FIRMWARE / args.build_directory).resolve()
+    build_directory = (S3 / args.build_directory).resolve()
     if not (build_directory / "compile_commands.json").is_file():
         print(
             f"missing {build_directory / 'compile_commands.json'}; configure the ESP-Clang build first",
@@ -47,7 +48,7 @@ def main() -> int:
         return 1
     sources = sorted(
         str(path)
-        for directory in (FIRMWARE / "components", FIRMWARE / "main")
+        for directory in (S3 / "components", S3 / "main")
         for path in directory.rglob("*.cpp")
         if "test" not in path.parts
     )
@@ -61,7 +62,7 @@ def main() -> int:
         "--extra-arg=-Wno-error=inconsistent-missing-override",
         *sources,
     ]
-    return subprocess.run(command, cwd=FIRMWARE, check=False).returncode
+    return subprocess.run(command, cwd=S3, check=False).returncode
 
 
 if __name__ == "__main__":
