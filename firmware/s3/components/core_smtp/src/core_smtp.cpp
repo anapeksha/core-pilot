@@ -147,8 +147,8 @@ bool valid_config(const Config& value) {
       return false;
   if (!value.enabled)
     return true;
-  return value.port != 0 && value.host[0] != '\0' && valid_email_address(value.from) &&
-         value.recipient_count != 0 &&
+  return transport_port_allowed(value.security, value.port) && value.host[0] != '\0' &&
+         valid_email_address(value.from) && value.recipient_count != 0 &&
          (value.security != SecurityMode::PlainLanOnly || plain_lan_target_allowed(value.host));
 }
 
@@ -230,7 +230,23 @@ Status connect_plain(const Config& config, const TransportOptions& options,
   addrinfo* addresses{};
   if (getaddrinfo(config.host, port, &hints, &addresses) != 0)
     return Status::ResolveFailed;
+  bool policy_denied = false;
   for (addrinfo* address = addresses; address; address = address->ai_next) {
+    const void* raw_address = nullptr;
+    std::size_t raw_size = 0;
+    if (address->ai_family == AF_INET) {
+      raw_address = &reinterpret_cast<const sockaddr_in*>(address->ai_addr)->sin_addr;
+      raw_size = sizeof(in_addr);
+    } else if (address->ai_family == AF_INET6) {
+      raw_address = &reinterpret_cast<const sockaddr_in6*>(address->ai_addr)->sin6_addr;
+      raw_size = sizeof(in6_addr);
+    }
+    if (raw_address == nullptr ||
+        !resolved_target_allowed(config.security, address->ai_family,
+                                 static_cast<const std::uint8_t*>(raw_address), raw_size)) {
+      policy_denied = true;
+      continue;
+    }
     const int fd = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
     if (fd < 0)
       continue;
@@ -243,7 +259,7 @@ Status connect_plain(const Config& config, const TransportOptions& options,
   }
   freeaddrinfo(addresses);
   if (connection.fd < 0)
-    return Status::ConnectFailed;
+    return policy_denied ? Status::PolicyDenied : Status::ConnectFailed;
   if (!set_socket_timeout(connection.fd, options.io_timeout_ms))
     return Status::IoError;
   return Status::Ok;
@@ -465,24 +481,61 @@ bool same_credential_endpoint(const Config& current, const Config& update) {
          std::strcmp(current.username, update.username) == 0;
 }
 
+bool transport_port_allowed(SecurityMode security, std::uint16_t port) {
+  return (security == SecurityMode::Tls && port == 465) ||
+         (security == SecurityMode::StartTls && port == 587) ||
+         (security == SecurityMode::PlainLanOnly && port == 25);
+}
+
+bool resolved_target_allowed(SecurityMode security, int address_family, const std::uint8_t* address,
+                             std::size_t address_size) {
+  if (address == nullptr)
+    return false;
+  if (address_family == AF_INET && address_size == sizeof(in_addr)) {
+    in_addr parsed{};
+    std::memcpy(&parsed, address, sizeof(parsed));
+    const std::uint32_t value = ntohl(parsed.s_addr);
+    const bool private_lan = (value & 0xff000000U) == 0x0a000000U ||
+                             (value & 0xfff00000U) == 0xac100000U ||
+                             (value & 0xffff0000U) == 0xc0a80000U;
+    if (security == SecurityMode::PlainLanOnly)
+      return private_lan;
+    const bool prohibited =
+        value == 0 || (value & 0xff000000U) == 0x00000000U || private_lan ||
+        (value & 0xffc00000U) == 0x64400000U || (value & 0xff000000U) == 0x7f000000U ||
+        (value & 0xffff0000U) == 0xa9fe0000U || (value & 0xffffff00U) == 0xc0000000U ||
+        (value & 0xffffff00U) == 0xc0000200U || (value & 0xfffe0000U) == 0xc6120000U ||
+        (value & 0xffffff00U) == 0xc6336400U || (value & 0xffffff00U) == 0xcb007100U ||
+        (value & 0xf0000000U) == 0xe0000000U;
+    return !prohibited;
+  }
+  if (address_family == AF_INET6 && address_size == sizeof(in6_addr)) {
+    in6_addr parsed{};
+    std::memcpy(&parsed, address, sizeof(parsed));
+    const auto* bytes = parsed.s6_addr;
+    const bool unique_local = (bytes[0] & 0xfeU) == 0xfcU;
+    if (security == SecurityMode::PlainLanOnly)
+      return unique_local;
+    const bool global_unicast = (bytes[0] & 0xe0U) == 0x20U;
+    const bool documentation =
+        bytes[0] == 0x20U && bytes[1] == 0x01U && bytes[2] == 0x0dU && bytes[3] == 0xb8U;
+    return global_unicast && !documentation;
+  }
+  return false;
+}
+
 bool plain_lan_target_allowed(const char* host) {
   if (!host || contains_cr_or_lf(host, kMaxHostBytes))
     return false;
   in_addr address4{};
-  if (inet_pton(AF_INET, host, &address4) == 1) {
-    const std::uint32_t value = ntohl(address4.s_addr);
-    return (value & 0xff000000U) == 0x0a000000U || (value & 0xfff00000U) == 0xac100000U ||
-           (value & 0xffff0000U) == 0xc0a80000U || (value & 0xffff0000U) == 0xa9fe0000U ||
-           (value & 0xff000000U) == 0x7f000000U;
-  }
+  if (inet_pton(AF_INET, host, &address4) == 1)
+    return resolved_target_allowed(SecurityMode::PlainLanOnly, AF_INET,
+                                   reinterpret_cast<const std::uint8_t*>(&address4),
+                                   sizeof(address4));
   in6_addr address6{};
-  if (inet_pton(AF_INET6, host, &address6) != 1)
-    return false;
-  const auto* bytes = address6.s6_addr;
-  const bool unique_local = (bytes[0] & 0xfeU) == 0xfcU;
-  const bool link_local = bytes[0] == 0xfeU && (bytes[1] & 0xc0U) == 0x80U;
-  const bool loopback = IN6_IS_ADDR_LOOPBACK(&address6);
-  return unique_local || link_local || loopback;
+  return inet_pton(AF_INET6, host, &address6) == 1 &&
+         resolved_target_allowed(SecurityMode::PlainLanOnly, AF_INET6, address6.s6_addr,
+                                 sizeof(address6));
 }
 
 ReplyParser::Result ReplyParser::consume(const std::uint8_t* bytes, std::size_t size) {
@@ -700,18 +753,19 @@ Status send(const Config& config, const Message& message, const TransportOptions
   for (std::size_t i = 0; i < message.recipient_count; ++i)
     if (!valid_email_address(message.recipients[i]))
       return Status::InvalidArgument;
-  if (config.security == SecurityMode::PlainLanOnly && !plain_lan_target_allowed(config.host))
+  if (!transport_port_allowed(config.security, config.port) ||
+      (config.security == SecurityMode::PlainLanOnly && !plain_lan_target_allowed(config.host)))
     return Status::PolicyDenied;
 
   Connection connection;
-  Status result{};
-  if (config.security == SecurityMode::Tls) {
-    result = enable_tls(config, options, connection, false);
-  } else {
-    result = connect_plain(config, options, connection);
-  }
+  Status result = connect_plain(config, options, connection);
   if (result != Status::Ok)
     return result;
+  if (config.security == SecurityMode::Tls) {
+    result = enable_tls(config, options, connection, true);
+    if (result != Status::Ok)
+      return result;
+  }
   int reply{};
   result = read_reply(connection, reply);
   if (result != Status::Ok || reply != 220)

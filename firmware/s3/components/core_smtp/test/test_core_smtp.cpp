@@ -1,4 +1,5 @@
 #include "core_smtp.hpp"
+#include "lwip/inet.h"
 #include "unity.h"
 
 #include <cstring>
@@ -43,12 +44,42 @@ TEST_CASE("SMTP DATA encoding normalizes and dot stuffs", "[core_smtp]") {
   TEST_ASSERT_EQUAL_MEMORY(expected, output, written);
 }
 
-TEST_CASE("SMTP plain mode permits only literal local targets", "[core_smtp]") {
+TEST_CASE("SMTP plain mode permits only literal private LAN targets", "[core_smtp]") {
   TEST_ASSERT_TRUE(plain_lan_target_allowed("192.168.1.2"));
   TEST_ASSERT_TRUE(plain_lan_target_allowed("10.0.0.1"));
   TEST_ASSERT_TRUE(plain_lan_target_allowed("fd00::1"));
   TEST_ASSERT_FALSE(plain_lan_target_allowed("smtp.local"));
   TEST_ASSERT_FALSE(plain_lan_target_allowed("8.8.8.8"));
+  TEST_ASSERT_FALSE(plain_lan_target_allowed("127.0.0.1"));
+  TEST_ASSERT_FALSE(plain_lan_target_allowed("169.254.1.1"));
+  TEST_ASSERT_FALSE(plain_lan_target_allowed("::1"));
+  TEST_ASSERT_FALSE(plain_lan_target_allowed("fe80::1"));
+}
+
+TEST_CASE("SMTP ports are fixed by transport security", "[core_smtp]") {
+  TEST_ASSERT_TRUE(transport_port_allowed(SecurityMode::Tls, 465));
+  TEST_ASSERT_TRUE(transport_port_allowed(SecurityMode::StartTls, 587));
+  TEST_ASSERT_TRUE(transport_port_allowed(SecurityMode::PlainLanOnly, 25));
+  TEST_ASSERT_FALSE(transport_port_allowed(SecurityMode::Tls, 25));
+  TEST_ASSERT_FALSE(transport_port_allowed(SecurityMode::StartTls, 465));
+  TEST_ASSERT_FALSE(transport_port_allowed(SecurityMode::PlainLanOnly, 2525));
+}
+
+TEST_CASE("SMTP resolved destination policy rejects special-use addresses", "[core_smtp]") {
+  const auto allowed = [](SecurityMode mode, int family, const char* text) {
+    std::uint8_t address[16]{};
+    TEST_ASSERT_EQUAL(1, inet_pton(family, text, address));
+    return resolved_target_allowed(mode, family, address,
+                                   family == AF_INET ? sizeof(in_addr) : sizeof(in6_addr));
+  };
+  TEST_ASSERT_TRUE(allowed(SecurityMode::Tls, AF_INET, "8.8.8.8"));
+  TEST_ASSERT_FALSE(allowed(SecurityMode::Tls, AF_INET, "10.0.0.1"));
+  TEST_ASSERT_FALSE(allowed(SecurityMode::Tls, AF_INET, "100.64.0.1"));
+  TEST_ASSERT_FALSE(allowed(SecurityMode::Tls, AF_INET, "192.0.2.1"));
+  TEST_ASSERT_FALSE(allowed(SecurityMode::Tls, AF_INET6, "2001:db8::1"));
+  TEST_ASSERT_TRUE(allowed(SecurityMode::Tls, AF_INET6, "2606:4700:4700::1111"));
+  TEST_ASSERT_TRUE(allowed(SecurityMode::PlainLanOnly, AF_INET, "172.16.0.1"));
+  TEST_ASSERT_FALSE(allowed(SecurityMode::PlainLanOnly, AF_INET, "169.254.0.1"));
 }
 
 TEST_CASE("SMTP retains credentials only for an unchanged endpoint", "[core_smtp]") {

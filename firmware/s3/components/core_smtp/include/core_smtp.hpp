@@ -88,6 +88,9 @@ private:
 
 bool contains_cr_or_lf(const char* value, std::size_t maximum);
 bool valid_email_address(const char* value);
+bool transport_port_allowed(SecurityMode security, std::uint16_t port);
+bool resolved_target_allowed(SecurityMode security, int address_family, const std::uint8_t* address,
+                             std::size_t address_size);
 bool plain_lan_target_allowed(const char* host);
 bool same_credential_endpoint(const Config& current, const Config& update);
 
