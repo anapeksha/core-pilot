@@ -10,23 +10,33 @@
 
 namespace core_pilot {
 
-struct LoadedWifi final {
-  std::uint8_t plaintext[core_storage::kMaxWifiPayload]{};
-  std::uint8_t encrypted[256]{};
-  network_policy::Profile profile{};
-
-  LoadedWifi() = default;
-  LoadedWifi(const LoadedWifi&) = delete;
-  LoadedWifi& operator=(const LoadedWifi&) = delete;
-  ~LoadedWifi();
-
-  void clear();
+struct SavedWifiNetwork final {
+  std::uint8_t ssid_length{};
+  std::uint8_t password_length{};
+  char ssid[network_policy::kMaxSsidBytes + 1]{};
+  char password[network_policy::kMaxPasswordBytes + 1]{};
 };
 
-core_security::Status loadWifi(core_security::StorageService& storage, LoadedWifi& loaded);
+struct SavedWifiNetworks final {
+  SavedWifiNetwork networks[core_storage::kMaxSavedWifiNetworks]{};
+  std::size_t count{};
+  std::uint64_t generation{};
+
+  SavedWifiNetworks() = default;
+  SavedWifiNetworks(const SavedWifiNetworks&) = delete;
+  SavedWifiNetworks& operator=(const SavedWifiNetworks&) = delete;
+  ~SavedWifiNetworks();
+
+  void clear();
+  network_policy::Profile profile(std::size_t index) const;
+  int find(const char* ssid, std::size_t ssid_length) const;
+  bool upsert(const network_policy::Profile& candidate);
+  bool forget(const char* ssid, std::size_t ssid_length);
+};
+
+core_security::Status loadWifi(core_security::StorageService& storage,
+                               core_security::RandomSource& random, SavedWifiNetworks& saved);
 core_security::Status saveWifi(core_security::StorageService& storage,
-                               core_security::RandomSource& random, const char* ssid,
-                               std::size_t ssid_length, const char* password,
-                               std::size_t password_length);
+                               core_security::RandomSource& random, SavedWifiNetworks& saved);
 
 } // namespace core_pilot

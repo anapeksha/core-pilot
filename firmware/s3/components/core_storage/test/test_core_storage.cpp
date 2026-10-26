@@ -160,7 +160,7 @@ TEST_CASE("Wi-Fi schema 1 postcard codec validates lengths and option", "[core_s
   const uint8_t password[] = {'1', '2', '3', '4', '5', '6', '7', '8'};
   const uint8_t hostname[] = {'c', 'o', 'r', 'e', 'p', 'i', 'l', 'o', 't'};
   WifiConfig config{ssid, sizeof(ssid), password, sizeof(password), hostname, sizeof(hostname)};
-  uint8_t encoded[kMaxWifiPayload]{};
+  uint8_t encoded[kMaxWifiSchema1Payload]{};
   size_t written = 0;
   TEST_ASSERT_EQUAL(static_cast<int>(Status::BufferTooSmall),
                     static_cast<int>(encode_wifi(config, encoded, 1, written)));
@@ -174,7 +174,7 @@ TEST_CASE("Wi-Fi schema 1 postcard codec validates lengths and option", "[core_s
   TEST_ASSERT_EQUAL_MEMORY(password, decoded.password, sizeof(password));
   TEST_ASSERT_EQUAL_MEMORY(hostname, decoded.hostname, sizeof(hostname));
   TEST_ASSERT_EQUAL(static_cast<int>(Status::UnsupportedFormat),
-                    static_cast<int>(decode_wifi(2, encoded, written, decoded)));
+                    static_cast<int>(decode_wifi(kWifiSchema, encoded, written, decoded)));
   TEST_ASSERT_EQUAL(static_cast<int>(Status::Invalid),
                     static_cast<int>(decode_wifi(1, encoded, written - 1, decoded)));
   encoded[1 + sizeof(ssid) + 1 + sizeof(password)] = 2;
@@ -183,4 +183,34 @@ TEST_CASE("Wi-Fi schema 1 postcard codec validates lengths and option", "[core_s
   config.ssid_len = 33;
   TEST_ASSERT_EQUAL(static_cast<int>(Status::Invalid),
                     static_cast<int>(encode_wifi(config, encoded, sizeof(encoded), written)));
+}
+
+TEST_CASE("Wi-Fi schema 2 codec bounds, orders, and deduplicates saved networks",
+          "[core_storage]") {
+  const uint8_t first_ssid[] = {'h', 'o', 'm', 'e'};
+  const uint8_t second_ssid[] = {'w', 'o', 'r', 'k'};
+  const uint8_t password[] = {'1', '2', '3', '4', '5', '6', '7', '8'};
+  WifiNetworks networks{};
+  networks.count = 2;
+  networks.networks[0] = {first_ssid, sizeof(first_ssid), password, sizeof(password)};
+  networks.networks[1] = {second_ssid, sizeof(second_ssid), nullptr, 0};
+  uint8_t encoded[kMaxWifiPayload]{};
+  size_t written = 0;
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Ok),
+      static_cast<int>(encode_wifi_networks(networks, encoded, sizeof(encoded), written)));
+  WifiNetworks decoded{};
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok),
+                    static_cast<int>(decode_wifi_networks(kWifiSchema, encoded, written, decoded)));
+  TEST_ASSERT_EQUAL_UINT32(2, decoded.count);
+  TEST_ASSERT_EQUAL_MEMORY(first_ssid, decoded.networks[0].ssid, sizeof(first_ssid));
+  TEST_ASSERT_EQUAL_MEMORY(second_ssid, decoded.networks[1].ssid, sizeof(second_ssid));
+  networks.networks[1] = networks.networks[0];
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Invalid),
+      static_cast<int>(encode_wifi_networks(networks, encoded, sizeof(encoded), written)));
+  networks.count = kMaxSavedWifiNetworks + 1;
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Invalid),
+      static_cast<int>(encode_wifi_networks(networks, encoded, sizeof(encoded), written)));
 }

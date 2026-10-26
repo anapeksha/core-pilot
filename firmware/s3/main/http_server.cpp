@@ -617,6 +617,8 @@ esp_err_t wifiProvisionHandler(httpd_req_t* request) {
       valid ? runtime->wifi_provision.submit(profile.ssid, profile.ssid_length, profile.password,
                                              profile.password_length)
             : ESP_ERR_INVALID_ARG;
+  if (cJSON_IsString(password))
+    mbedtls_platform_zeroize(password->valuestring, password_length);
   if (body.data() != nullptr)
     mbedtls_platform_zeroize(body.data(), body.capacity());
   cJSON_Delete(document);
@@ -632,6 +634,53 @@ esp_err_t wifiProvisionHandler(httpd_req_t* request) {
                           : result == ESP_ERR_INVALID_ARG
                               ? "The Wi-Fi profile is invalid."
                               : "Another Wi-Fi migration is already active.");
+  return sendJson(request, response);
+}
+
+esp_err_t wifiSavedHandler(httpd_req_t* request) {
+  const auto* runtime = static_cast<const HttpRuntime*>(request->user_ctx);
+  if (runtime == nullptr)
+    return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR, "Missing runtime");
+  const auto saved = runtime->wifi_provision.savedSnapshot();
+  cJSON* response = cJSON_CreateObject();
+  cJSON* networks = cJSON_AddArrayToObject(response, "networks");
+  for (std::size_t i = 0; i < saved.count; ++i) {
+    cJSON* item = cJSON_CreateObject();
+    cJSON_AddStringToObject(item, "ssid", saved.items[i].ssid);
+    cJSON_AddBoolToObject(item, "connected", saved.items[i].active);
+    cJSON_AddItemToArray(networks, item);
+  }
+  cJSON_AddStringToObject(response, "detail", "Saved Wi-Fi networks in preference order.");
+  return sendJson(request, response);
+}
+
+esp_err_t wifiForgetHandler(httpd_req_t* request) {
+  auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
+  RequestBody body(128);
+  std::size_t received = 0;
+  if (runtime == nullptr || !body ||
+      readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
+  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  const cJSON* ssid =
+      cJSON_IsObject(document) ? cJSON_GetObjectItemCaseSensitive(document, "ssid") : nullptr;
+  const std::size_t length = cJSON_IsString(ssid) ? std::strlen(ssid->valuestring) : 0;
+  const esp_err_t result = cJSON_IsString(ssid)
+                               ? runtime->wifi_provision.forget(ssid->valuestring, length)
+                               : ESP_ERR_INVALID_ARG;
+  cJSON_Delete(document);
+  cJSON* response = cJSON_CreateObject();
+  cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
+  cJSON_AddStringToObject(response, "status",
+                          result == ESP_OK                ? "queued"
+                          : result == ESP_ERR_NOT_FOUND   ? "WIFI_NETWORK_NOT_FOUND"
+                          : result == ESP_ERR_INVALID_ARG ? "WIFI_CONFIG_INVALID"
+                                                          : "WIFI_CONFIG_BUSY");
+  cJSON_AddStringToObject(response, "detail",
+                          result == ESP_OK                ? "Saved network queued for removal."
+                          : result == ESP_ERR_NOT_FOUND   ? "The saved network was not found."
+                          : result == ESP_ERR_INVALID_ARG ? "The SSID is invalid."
+                                                          : "Another Wi-Fi operation is active.");
   return sendJson(request, response);
 }
 
@@ -2409,6 +2458,14 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                                    .method = HTTP_POST,
                                    .handler = wifiProvisionHandler,
                                    .user_ctx = const_cast<HttpRuntime*>(&runtime)};
+  const httpd_uri_t wifi_saved{.uri = "/api/v1/network/wifi/saved",
+                               .method = HTTP_GET,
+                               .handler = wifiSavedHandler,
+                               .user_ctx = const_cast<HttpRuntime*>(&runtime)};
+  const httpd_uri_t wifi_forget{.uri = "/api/v1/network/wifi/forget",
+                                .method = HTTP_POST,
+                                .handler = wifiForgetHandler,
+                                .user_ctx = const_cast<HttpRuntime*>(&runtime)};
   const httpd_uri_t wifi_scan_get{.uri = "/api/v1/network/wifi/scan",
                                   .method = HTTP_GET,
                                   .handler = wifiScanHandler,
@@ -2480,6 +2537,8 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
       registerHttpAccessRoute(server, &smtp_test) != ESP_OK ||
       registerHttpAccessRoute(server, &activity_page) != ESP_OK ||
       registerHttpAccessRoute(server, &wifi_provision) != ESP_OK ||
+      registerHttpAccessRoute(server, &wifi_saved) != ESP_OK ||
+      registerHttpAccessRoute(server, &wifi_forget) != ESP_OK ||
       registerHttpAccessRoute(server, &wifi_scan_get) != ESP_OK ||
       registerHttpAccessRoute(server, &wifi_scan_start) != ESP_OK ||
       registerHttpAccessRoute(server, &wifi_scan_page) != ESP_OK ||

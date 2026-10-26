@@ -18,6 +18,7 @@ namespace core_pilot {
 class CoreNetwork {
 public:
   enum class Mode : std::uint8_t { stopped, station, setup_ap };
+  using ProgressCallback = void (*)(void* context, const char* message);
   struct Status {
     Mode mode = Mode::stopped;
     bool station_connected = false;
@@ -49,7 +50,9 @@ public:
   // Supplies credentials in caller-owned memory. Never persists or logs them.
   // Invalid/missing profiles enter setup AP. Exhausted bounded join attempts
   // also enter setup AP. Returns an ESP-IDF error if even setup cannot start.
-  esp_err_t begin(const network_policy::Profile* profile, const char* setup_password);
+  esp_err_t begin(const network_policy::Profile* profiles, std::size_t profile_count,
+                  const char* setup_password, ProgressCallback progress = nullptr,
+                  void* progress_context = nullptr);
   void stop();
   Status status() const;
 
@@ -68,6 +71,9 @@ public:
 private:
   static void on_event(void* arg, esp_event_base_t base, int32_t id, void* data);
   esp_err_t start_station(const network_policy::Profile& profile);
+  esp_err_t start_radio_for_boot_scan();
+  bool profile_visible(const network_policy::Profile& profile, const wifi_ap_record_t* records,
+                       std::size_t count) const;
   esp_err_t start_setup_ap();
   esp_err_t start_mdns();
   void set_mode(Mode mode);

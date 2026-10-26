@@ -4,13 +4,14 @@
 
 namespace core_storage {
 namespace {
-bool utf8(const uint8_t* bytes, size_t size) {
-  for (size_t i = 0; i < size;) {
-    const uint8_t lead = bytes[i++];
+bool utf8(const std::uint8_t* bytes, std::size_t size) {
+  for (std::size_t i = 0; i < size;) {
+    const std::uint8_t lead = bytes[i++];
     if (lead < 0x80)
       continue;
     unsigned more = 0;
-    uint32_t value = 0, minimum = 0;
+    std::uint32_t value = 0;
+    std::uint32_t minimum = 0;
     if (lead >= 0xc2 && lead <= 0xdf) {
       more = 1;
       value = lead & 31;
@@ -23,12 +24,13 @@ bool utf8(const uint8_t* bytes, size_t size) {
       more = 3;
       value = lead & 7;
       minimum = 0x10000;
-    } else
+    } else {
       return false;
+    }
     if (more > size - i)
       return false;
     for (unsigned j = 0; j < more; ++j) {
-      const uint8_t b = bytes[i++];
+      const std::uint8_t b = bytes[i++];
       if ((b & 0xc0) != 0x80)
         return false;
       value = (value << 6) | (b & 63);
@@ -38,84 +40,159 @@ bool utf8(const uint8_t* bytes, size_t size) {
   }
   return true;
 }
-bool valid(const WifiConfig& v) {
-  if (!v.ssid || v.ssid_len == 0 || v.ssid_len > 32 || !utf8(v.ssid, v.ssid_len) ||
-      (v.password_len && !v.password) || v.password_len > 63 ||
-      (v.password_len && v.password_len < 8) || !utf8(v.password, v.password_len))
+
+bool valid_network(const WifiNetwork& network) {
+  return network.ssid != nullptr && network.ssid_len != 0 && network.ssid_len <= 32 &&
+         utf8(network.ssid, network.ssid_len) &&
+         (network.password_len == 0 ||
+          (network.password != nullptr && network.password_len >= 8 && network.password_len <= 63 &&
+           utf8(network.password, network.password_len)));
+}
+
+bool valid_config(const WifiConfig& config) {
+  if (!valid_network({config.ssid, config.ssid_len, config.password, config.password_len}))
     return false;
-  if (!v.hostname)
-    return v.hostname_len == 0;
-  if (v.hostname_len == 0 || v.hostname_len > 63)
+  if (config.hostname == nullptr)
+    return config.hostname_len == 0;
+  if (config.hostname_len == 0 || config.hostname_len > 63)
     return false;
-  for (size_t i = 0; i < v.hostname_len; ++i) {
-    const uint8_t b = v.hostname[i];
-    if (!((b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') || b == '-'))
+  for (std::size_t i = 0; i < config.hostname_len; ++i) {
+    const std::uint8_t byte = config.hostname[i];
+    if (!((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+          (byte >= '0' && byte <= '9') || byte == '-'))
       return false;
   }
-  return v.hostname[0] != '-' && v.hostname[v.hostname_len - 1] != '-';
+  return config.hostname[0] != '-' && config.hostname[config.hostname_len - 1] != '-';
 }
-bool field(const uint8_t* input, size_t length, size_t& pos, const uint8_t*& data, size_t& size,
-           size_t limit) {
-  // All current field bounds fit a single canonical postcard varint byte.
-  if (pos >= length || input[pos] > limit)
+
+bool field(const std::uint8_t* input, std::size_t length, std::size_t& position,
+           const std::uint8_t*& data, std::size_t& size, std::size_t limit) {
+  if (position >= length || input[position] > limit)
     return false;
-  size = input[pos++];
-  if (size > length - pos)
+  size = input[position++];
+  if (size > length - position)
     return false;
-  data = input + pos;
-  pos += size;
+  data = input + position;
+  position += size;
   return true;
 }
 } // namespace
 
-core_security::Status encode_wifi(const WifiConfig& config, uint8_t* out, size_t capacity,
-                                  size_t& written) {
+core_security::Status encode_wifi(const WifiConfig& config, std::uint8_t* out, std::size_t capacity,
+                                  std::size_t& written) {
   written = 0;
-  if (!out || !valid(config))
+  if (out == nullptr || !valid_config(config))
     return core_security::Status::Invalid;
-  const size_t required = 1 + config.ssid_len + 1 + config.password_len + 1 +
-                          (config.hostname ? 1 + config.hostname_len : 0);
+  const std::size_t required = 1 + config.ssid_len + 1 + config.password_len + 1 +
+                               (config.hostname != nullptr ? 1 + config.hostname_len : 0);
   if (capacity < required)
     return core_security::Status::BufferTooSmall;
-  size_t pos = 0;
-  out[pos++] = static_cast<uint8_t>(config.ssid_len);
-  std::memcpy(out + pos, config.ssid, config.ssid_len);
-  pos += config.ssid_len;
-  out[pos++] = static_cast<uint8_t>(config.password_len);
-  if (config.password_len)
-    std::memcpy(out + pos, config.password, config.password_len);
-  pos += config.password_len;
-  out[pos++] = config.hostname ? 1 : 0;
-  if (config.hostname) {
-    out[pos++] = static_cast<uint8_t>(config.hostname_len);
-    std::memcpy(out + pos, config.hostname, config.hostname_len);
-    pos += config.hostname_len;
+  std::size_t position = 0;
+  out[position++] = static_cast<std::uint8_t>(config.ssid_len);
+  std::memcpy(out + position, config.ssid, config.ssid_len);
+  position += config.ssid_len;
+  out[position++] = static_cast<std::uint8_t>(config.password_len);
+  if (config.password_len != 0)
+    std::memcpy(out + position, config.password, config.password_len);
+  position += config.password_len;
+  out[position++] = config.hostname != nullptr ? 1 : 0;
+  if (config.hostname != nullptr) {
+    out[position++] = static_cast<std::uint8_t>(config.hostname_len);
+    std::memcpy(out + position, config.hostname, config.hostname_len);
+    position += config.hostname_len;
   }
-  written = pos;
+  written = position;
   return core_security::Status::Ok;
 }
 
-core_security::Status decode_wifi(uint16_t schema, const uint8_t* input, size_t length,
-                                  WifiConfig& config) {
+core_security::Status decode_wifi(std::uint16_t schema, const std::uint8_t* input,
+                                  std::size_t length, WifiConfig& config) {
   config = {};
-  if (schema != kWifiSchema)
+  if (schema != kWifiSchema1)
     return core_security::Status::UnsupportedFormat;
-  if (!input || length > kMaxWifiPayload)
+  if (input == nullptr || length > kMaxWifiSchema1Payload)
     return core_security::Status::Invalid;
   WifiConfig result{};
-  size_t pos = 0;
-  if (!field(input, length, pos, result.ssid, result.ssid_len, 32) ||
-      !field(input, length, pos, result.password, result.password_len, 63) || pos >= length)
+  std::size_t position = 0;
+  if (!field(input, length, position, result.ssid, result.ssid_len, 32) ||
+      !field(input, length, position, result.password, result.password_len, 63) ||
+      position >= length)
     return core_security::Status::Invalid;
-  const uint8_t option = input[pos++];
+  const std::uint8_t option = input[position++];
   if (option == 1) {
-    if (!field(input, length, pos, result.hostname, result.hostname_len, 63))
+    if (!field(input, length, position, result.hostname, result.hostname_len, 63))
       return core_security::Status::Invalid;
-  } else if (option != 0)
+  } else if (option != 0) {
     return core_security::Status::Invalid;
-  if (pos != length || !valid(result))
+  }
+  if (position != length || !valid_config(result))
     return core_security::Status::Invalid;
   config = result;
   return core_security::Status::Ok;
 }
+
+core_security::Status encode_wifi_networks(const WifiNetworks& config, std::uint8_t* out,
+                                           std::size_t capacity, std::size_t& written) {
+  written = 0;
+  if (out == nullptr || config.count > kMaxSavedWifiNetworks)
+    return core_security::Status::Invalid;
+  std::size_t required = 1;
+  for (std::size_t i = 0; i < config.count; ++i) {
+    if (!valid_network(config.networks[i]))
+      return core_security::Status::Invalid;
+    for (std::size_t previous = 0; previous < i; ++previous) {
+      if (config.networks[previous].ssid_len == config.networks[i].ssid_len &&
+          std::memcmp(config.networks[previous].ssid, config.networks[i].ssid,
+                      config.networks[i].ssid_len) == 0)
+        return core_security::Status::Invalid;
+    }
+    required += 2 + config.networks[i].ssid_len + config.networks[i].password_len;
+  }
+  if (capacity < required)
+    return core_security::Status::BufferTooSmall;
+  std::size_t position = 0;
+  out[position++] = static_cast<std::uint8_t>(config.count);
+  for (std::size_t i = 0; i < config.count; ++i) {
+    const auto& network = config.networks[i];
+    out[position++] = static_cast<std::uint8_t>(network.ssid_len);
+    std::memcpy(out + position, network.ssid, network.ssid_len);
+    position += network.ssid_len;
+    out[position++] = static_cast<std::uint8_t>(network.password_len);
+    if (network.password_len != 0)
+      std::memcpy(out + position, network.password, network.password_len);
+    position += network.password_len;
+  }
+  written = position;
+  return core_security::Status::Ok;
+}
+
+core_security::Status decode_wifi_networks(std::uint16_t schema, const std::uint8_t* input,
+                                           std::size_t length, WifiNetworks& config) {
+  config = {};
+  if (schema != kWifiSchema)
+    return core_security::Status::UnsupportedFormat;
+  if (input == nullptr || length == 0 || length > kMaxWifiPayload ||
+      input[0] > kMaxSavedWifiNetworks)
+    return core_security::Status::Invalid;
+  WifiNetworks result{};
+  result.count = input[0];
+  std::size_t position = 1;
+  for (std::size_t i = 0; i < result.count; ++i) {
+    auto& network = result.networks[i];
+    if (!field(input, length, position, network.ssid, network.ssid_len, 32) ||
+        !field(input, length, position, network.password, network.password_len, 63) ||
+        !valid_network(network))
+      return core_security::Status::Invalid;
+    for (std::size_t previous = 0; previous < i; ++previous) {
+      if (result.networks[previous].ssid_len == network.ssid_len &&
+          std::memcmp(result.networks[previous].ssid, network.ssid, network.ssid_len) == 0)
+        return core_security::Status::Invalid;
+    }
+  }
+  if (position != length)
+    return core_security::Status::Invalid;
+  config = result;
+  return core_security::Status::Ok;
+}
+
 } // namespace core_storage

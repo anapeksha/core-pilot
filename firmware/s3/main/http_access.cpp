@@ -199,9 +199,11 @@ esp_err_t dispatch(httpd_req_t* req) {
           req->method == HTTP_GET && !std::strcmp(route.uri, "/api/v1/network");
       const bool wifi_provision =
           req->method == HTTP_POST && !std::strcmp(route.uri, "/api/v1/network/wifi");
+      const bool wifi_saved = !std::strcmp(route.uri, "/api/v1/network/wifi/saved") ||
+                              !std::strcmp(route.uri, "/api/v1/network/wifi/forget");
       const bool wifi_scan = !std::strcmp(route.uri, "/api/v1/network/wifi/scan") ||
                              !std::strcmp(route.uri, "/api/v1/network/wifi/scan/page");
-      if (!network_status && !wifi_provision && !wifi_scan)
+      if (!network_status && !wifi_provision && !wifi_saved && !wifi_scan)
         return reject(req, "403 Forbidden", "Unavailable during setup");
     }
   }

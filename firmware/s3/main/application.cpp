@@ -86,6 +86,10 @@ void showProgress(CoreDisplay& display, std::uint8_t percent, const char* messag
   vTaskDelay(pdMS_TO_TICKS(40));
 }
 
+void networkBootProgress(void* context, const char* message) {
+  showProgress(*static_cast<CoreDisplay*>(context), 50, message);
+}
+
 void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setup_password) {
   const auto status = network.status();
   if (status.mode == CoreNetwork::Mode::setup_ap) {
@@ -222,8 +226,8 @@ void Application::run() {
     ESP_LOGE(kTag, "Model database unavailable: %d; existing record preserved read-only",
              static_cast<int>(models_result));
   }
-  LoadedWifi loaded_wifi;
-  const auto wifi_result = loadWifi(storage, loaded_wifi);
+  SavedWifiNetworks saved_wifi;
+  const auto wifi_result = loadWifi(storage, random, saved_wifi);
   ESP_LOGI(kTag, "encrypted Wi-Fi profile state=%d", static_cast<int>(wifi_result));
   if (wifi_result != core_security::Status::Ok && wifi_result != core_security::Status::NotFound) {
     stopAtFatal(display, {"ENCRYPTED STORAGE REQUIRED", "Wi-Fi record invalid",
@@ -232,7 +236,10 @@ void Application::run() {
   }
   showProgress(display, 40, "Network profile loaded");
 
-  const auto* profile = wifi_result == core_security::Status::Ok ? &loaded_wifi.profile : nullptr;
+  network_policy::Profile profiles[core_storage::kMaxSavedWifiNetworks]{};
+  const std::size_t profile_count = wifi_result == core_security::Status::Ok ? saved_wifi.count : 0;
+  for (std::size_t i = 0; i < profile_count; ++i)
+    profiles[i] = saved_wifi.profile(i);
   char setup_password[17]{};
   if (!generateHexCredential(random, setup_password)) {
     stopAtFatal(display,
@@ -242,7 +249,8 @@ void Application::run() {
   esp_log_level_set("wifi", ESP_LOG_WARN);
   static CoreNetwork network;
   showProgress(display, 50, "Joining local network");
-  const esp_err_t network_result = network.begin(profile, setup_password);
+  const esp_err_t network_result =
+      network.begin(profiles, profile_count, setup_password, networkBootProgress, &display);
   startup_entropy.disable();
   ESP_LOGI(kTag, "network startup result=%s", esp_err_to_name(network_result));
   if (network_result != ESP_OK) {
@@ -263,9 +271,16 @@ void Application::run() {
     ESP_LOGE(kTag, "active Thread dataset is invalid: %d", static_cast<int>(thread_dataset_result));
   }
 
+  const auto network_status = network.status();
+  const int active_index =
+      saved_wifi.find(network_status.station_ssid, std::strlen(network_status.station_ssid));
+  const auto active_profile = active_index >= 0
+                                  ? saved_wifi.profile(static_cast<std::size_t>(active_index))
+                                  : network_policy::Profile{};
+
   static CoreMatter matter;
-  static WifiProvisionService wifi_provision(network, storage, random, activity);
-  const esp_err_t wifi_provision_result = wifi_provision.start(profile);
+  static WifiProvisionService wifi_provision(network, storage, random, activity, saved_wifi);
+  const esp_err_t wifi_provision_result = wifi_provision.start();
   if (wifi_provision_result != ESP_OK)
     ESP_LOGE(kTag, "Wi-Fi provisioning startup failed: %s", esp_err_to_name(wifi_provision_result));
 
@@ -321,14 +336,15 @@ void Application::run() {
 
   showProgress(display, 97, "Starting Matter and Thread");
   const esp_err_t matter_result =
-      profile != nullptr && gateway_result == ESP_OK
+      active_index >= 0 && gateway_result == ESP_OK
           ? matter.begin(
-                profile->ssid, profile->ssid_length, profile->password, profile->password_length,
+                active_profile.ssid, active_profile.ssid_length, active_profile.password,
+                active_profile.password_length,
                 thread_dataset_result == core_security::Status::Ok ? thread_dataset.tlvs : nullptr,
                 thread_dataset_result == core_security::Status::Ok ? thread_dataset.length : 0)
           : ESP_ERR_INVALID_STATE;
   thread_dataset.clear();
-  loaded_wifi.clear();
+
   const bool matter_owner_started = matter_result == ESP_OK;
   if (!matter_owner_started)
     ESP_LOGE(kTag, "Matter owner startup failed: %s", esp_err_to_name(matter_result));

@@ -8,8 +8,9 @@ namespace core_pilot::network_policy {
 constexpr std::size_t kMaxSsidBytes = 32;
 constexpr std::size_t kMaxPasswordBytes = 63;
 constexpr std::size_t kMaxScanResults = 32;
-constexpr unsigned kMaxJoinAttempts = 3;
+constexpr std::size_t kMaxSavedNetworks = 8;
 constexpr unsigned kJoinTimeoutMs = 8000;
+constexpr unsigned kBootJoinBudgetMs = 24000;
 constexpr char kHostname[] = "corepilot";
 constexpr char kSetupPrefix[] = "CorePilot-Setup-";
 

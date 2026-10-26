@@ -34,6 +34,8 @@ constexpr RouteContract routes[] = {
     {"POST", "/api/v1/network/wifi/scan/page", "last_seen:s?",
      "networks:a scanning:b scan_state:s next_last_seen:s? detail:s"},
     {"POST", "/api/v1/network/wifi", "credentials:o hostname:s?", "accepted:b status:s detail:s"},
+    {"GET", "/api/v1/network/wifi/saved", nullptr, "networks:a detail:s"},
+    {"POST", "/api/v1/network/wifi/forget", "ssid:s", "accepted:b status:s detail:s"},
     {"GET", "/api/v1/time", nullptr,
      "ntp_server_id:s ntp_server_host:s timezone_id:s timezone_label:s "
      "timezone_offset_minutes:i timezone_offset_label:s dns:s ntp:s rtc:s "

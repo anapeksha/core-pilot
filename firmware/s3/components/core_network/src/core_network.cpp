@@ -49,6 +49,11 @@ CoreNetwork::Status CoreNetwork::status() const {
 void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* data) {
   auto& self = *static_cast<CoreNetwork*>(arg);
   if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE) {
+    portENTER_CRITICAL(&self.lock_);
+    const bool requested = self.scan_.state == ScanState::scanning;
+    portEXIT_CRITICAL(&self.lock_);
+    if (!requested)
+      return;
     wifi_ap_record_t records[kMaxScanResults]{};
     std::uint16_t count = kMaxScanResults;
     const esp_err_t result = esp_wifi_scan_get_ap_records(&count, records);
@@ -104,6 +109,31 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
   }
 }
 
+esp_err_t CoreNetwork::start_radio_for_boot_scan() {
+  esp_err_t result = esp_wifi_set_mode(WIFI_MODE_STA);
+  if (result == ESP_OK)
+    result = esp_wifi_start();
+  if (result == ESP_OK) {
+    wifi_started_ = true;
+    result = esp_wifi_set_ps(WIFI_PS_NONE);
+  }
+  if (result == ESP_OK)
+    result = esp_wifi_set_max_tx_power(kMaxTxPowerQuarterDbm);
+  return result;
+}
+
+bool CoreNetwork::profile_visible(const network_policy::Profile& profile,
+                                  const wifi_ap_record_t* records, std::size_t count) const {
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto length =
+        strnlen(reinterpret_cast<const char*>(records[i].ssid), sizeof(records[i].ssid));
+    if (length == profile.ssid_length &&
+        std::memcmp(records[i].ssid, profile.ssid, profile.ssid_length) == 0)
+      return true;
+  }
+  return false;
+}
+
 esp_err_t CoreNetwork::start_station(const network_policy::Profile& profile) {
   wifi_config_t config{};
   std::memcpy(config.sta.ssid, profile.ssid, profile.ssid_length);
@@ -114,9 +144,8 @@ esp_err_t CoreNetwork::start_station(const network_policy::Profile& profile) {
       profile.password_length == 0 ? WIFI_AUTH_OPEN : WIFI_AUTH_WPA2_PSK;
   config.sta.pmf_cfg.capable = true;
   esp_err_t err = esp_wifi_set_mode(WIFI_MODE_STA);
-  if (err == ESP_OK) {
+  if (err == ESP_OK)
     err = esp_wifi_set_config(WIFI_IF_STA, &config);
-  }
   erase(&config, sizeof config);
   if (err != ESP_OK) {
     return err;
@@ -126,32 +155,26 @@ esp_err_t CoreNetwork::start_station(const network_policy::Profile& profile) {
   std::memcpy(state_.station_ssid, profile.ssid, profile.ssid_length);
   state_.station_ssid[profile.ssid_length] = '\0';
   portEXIT_CRITICAL(&lock_);
-  err = esp_wifi_start();
-  if (err != ESP_OK) {
-    return err;
-  }
-  wifi_started_ = true;
-  err = esp_wifi_set_ps(WIFI_PS_NONE);
-  if (err != ESP_OK) {
-    return err;
-  }
-  err = esp_wifi_set_max_tx_power(kMaxTxPowerQuarterDbm);
-  if (err != ESP_OK) {
-    return err;
+  if (!wifi_started_) {
+    err = esp_wifi_start();
+    if (err != ESP_OK)
+      return err;
+    wifi_started_ = true;
+    err = esp_wifi_set_ps(WIFI_PS_NONE);
+    if (err != ESP_OK)
+      return err;
+    err = esp_wifi_set_max_tx_power(kMaxTxPowerQuarterDbm);
+    if (err != ESP_OK)
+      return err;
   }
   xEventGroupClearBits(events_, kGotIpv4 | kDisconnected);
   err = esp_wifi_connect();
   if (err != ESP_OK) {
     return err;
   }
-  for (unsigned attempt = 0; attempt < network_policy::kMaxJoinAttempts; ++attempt) {
-    const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4 | kDisconnected, pdTRUE, pdFALSE,
-                                                 pdMS_TO_TICKS(network_policy::kJoinTimeoutMs));
-    if ((bits & kGotIpv4) != 0 && status().has_ipv4) {
-      return ESP_OK;
-    }
-  }
-  return ESP_ERR_TIMEOUT;
+  const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4 | kDisconnected, pdTRUE, pdFALSE,
+                                               pdMS_TO_TICKS(network_policy::kJoinTimeoutMs));
+  return (bits & kGotIpv4) != 0 && status().has_ipv4 ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 esp_err_t CoreNetwork::start_setup_ap() {
@@ -234,8 +257,12 @@ esp_err_t CoreNetwork::start_mdns() {
   return err;
 }
 
-esp_err_t CoreNetwork::begin(const network_policy::Profile* profile, const char* setup_password) {
-  if (events_ != nullptr || setup_password == nullptr || std::strlen(setup_password) != 16) {
+esp_err_t CoreNetwork::begin(const network_policy::Profile* profiles, std::size_t profile_count,
+                             const char* setup_password, ProgressCallback progress,
+                             void* progress_context) {
+  if (events_ != nullptr || setup_password == nullptr || std::strlen(setup_password) != 16 ||
+      profile_count > network_policy::kMaxSavedNetworks ||
+      (profile_count != 0 && profiles == nullptr)) {
     return ESP_ERR_INVALID_STATE;
   }
   std::memcpy(setup_password_, setup_password, sizeof(setup_password_));
@@ -281,12 +308,43 @@ esp_err_t CoreNetwork::begin(const network_policy::Profile* profile, const char*
     err = esp_event_handler_instance_register(IP_EVENT, IP_EVENT_GOT_IP6, on_event, this,
                                               &ip6_handler_);
   }
-  if (err == ESP_OK && profile != nullptr && network_policy::valid_profile(*profile)) {
-    err = start_station(*profile);
-    if (err == ESP_ERR_TIMEOUT) {
+  if (err == ESP_OK && profile_count != 0) {
+    if (progress != nullptr)
+      progress(progress_context, "Scanning for saved networks");
+    err = start_radio_for_boot_scan();
+    wifi_ap_record_t records[kMaxScanResults]{};
+    std::uint16_t record_count = kMaxScanResults;
+    if (err == ESP_OK)
+      err = esp_wifi_scan_start(nullptr, true);
+    if (err == ESP_OK)
+      err = esp_wifi_scan_get_ap_records(&record_count, records);
+    bool connected = false;
+    const std::size_t candidate_limit =
+        network_policy::kBootJoinBudgetMs / network_policy::kJoinTimeoutMs;
+    std::size_t attempted = 0;
+    if (err == ESP_OK) {
+      for (std::size_t i = 0; i < profile_count && attempted < candidate_limit; ++i) {
+        if (!network_policy::valid_profile(profiles[i]) ||
+            !profile_visible(profiles[i], records, record_count))
+          continue;
+        if (progress != nullptr)
+          progress(progress_context, "Trying a saved network");
+        ++attempted;
+        if (start_station(profiles[i]) == ESP_OK) {
+          connected = true;
+          break;
+        }
+      }
+      err = connected ? ESP_OK : ESP_ERR_TIMEOUT;
+    }
+    if (!connected) {
+      if (progress != nullptr)
+        progress(progress_context, "Starting setup access point");
       err = start_setup_ap();
     }
   } else if (err == ESP_OK) {
+    if (progress != nullptr)
+      progress(progress_context, "Starting setup access point");
     err = start_setup_ap();
   }
   if (err == ESP_OK) {
@@ -299,8 +357,14 @@ esp_err_t CoreNetwork::begin(const network_policy::Profile* profile, const char*
 }
 
 esp_err_t CoreNetwork::requestScan() {
-  if (status().mode != Mode::station)
+  const Mode mode = status().mode;
+  if (mode != Mode::station && mode != Mode::setup_ap)
     return ESP_ERR_INVALID_STATE;
+  if (mode == Mode::setup_ap) {
+    const esp_err_t mode_result = esp_wifi_set_mode(WIFI_MODE_APSTA);
+    if (mode_result != ESP_OK)
+      return mode_result;
+  }
   portENTER_CRITICAL(&lock_);
   if (scan_.state == ScanState::scanning) {
     portEXIT_CRITICAL(&lock_);
@@ -360,17 +424,15 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
   std::memcpy(state_.station_ssid, profile.ssid, profile.ssid_length);
   state_.station_ssid[profile.ssid_length] = '\0';
   portEXIT_CRITICAL(&lock_);
-  for (unsigned attempt = 0; attempt < network_policy::kMaxJoinAttempts; ++attempt) {
-    xEventGroupClearBits(events_, kGotIpv4 | kDisconnected);
-    result = esp_wifi_connect();
-    if (result != ESP_OK)
-      return result;
-    const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4 | kDisconnected, pdTRUE, pdFALSE,
-                                                 pdMS_TO_TICKS(network_policy::kJoinTimeoutMs));
-    if ((bits & kGotIpv4) != 0 && status().has_ipv4)
-      return ESP_OK;
-    esp_wifi_disconnect();
-  }
+  xEventGroupClearBits(events_, kGotIpv4 | kDisconnected);
+  result = esp_wifi_connect();
+  if (result != ESP_OK)
+    return result;
+  const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4 | kDisconnected, pdTRUE, pdFALSE,
+                                               pdMS_TO_TICKS(network_policy::kJoinTimeoutMs));
+  if ((bits & kGotIpv4) != 0 && status().has_ipv4)
+    return ESP_OK;
+  esp_wifi_disconnect();
   if (initial_mode == Mode::setup_ap) {
     esp_wifi_disconnect();
     wifi_config_t cleared{};
