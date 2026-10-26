@@ -1420,6 +1420,49 @@ test("covers AI chat, provider setup, encrypted memory, and tool permissions", a
   await expect(page.getByLabel("Toggle ota.apply")).toHaveCount(0);
 });
 
+test("confirms destructive MCP enables while keeping disable immediate", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  Object.assign(state.mcpTools.tools[1], {
+    id: "devices.set_on_off",
+    name: "SetOnOff",
+    title: "Set device power",
+    available: true,
+  });
+  await page.goto("/#/ai/tools");
+
+  const destructiveSwitch = page.getByRole("switch", {
+    name: "Toggle devices.set_on_off",
+  });
+  await expect(destructiveSwitch).not.toBeChecked();
+  await page.locator('[data-tool-switch-control="devices.set_on_off"]').click();
+  await expect(
+    page.getByRole("alertdialog", { name: "Enable destructive tool?" }),
+  ).toBeVisible();
+  expect(
+    state.posts.some(
+      (post) =>
+        post.path === "/api/v1/ai/mcp/tool" && post.body.enabled === true,
+    ),
+  ).toBe(false);
+
+  await page.getByRole("button", { name: "Enable tool" }).click();
+  await expect(destructiveSwitch).toBeChecked();
+  expect(state.posts.at(-1)).toMatchObject({
+    path: "/api/v1/ai/mcp/tool",
+    body: { tool: "SetOnOff", enabled: true },
+  });
+
+  await page.locator('[data-tool-switch-control="devices.set_on_off"]').click();
+  await expect(destructiveSwitch).not.toBeChecked();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  expect(state.posts.at(-1)).toMatchObject({
+    path: "/api/v1/ai/mcp/tool",
+    body: { tool: "SetOnOff", enabled: false },
+  });
+});
+
 // Integration positive: edits an encrypted prompt file through the Assistant UI and
 // checks both Markdown preview and the encrypted-save mutation path.
 test("covers encrypted assistant prompt editing and preview", async ({
