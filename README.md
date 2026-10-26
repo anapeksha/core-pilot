@@ -46,14 +46,14 @@ Core Pilot currently serves the dashboard over the trusted local network using H
 
 Download the assets for the desired version from GitHub Releases:
 
-- `core-pilot-<version>-initial-flash.tar.gz` for first-time installation.
-- `core-pilot-<version>-ota.bin` for an update from the dashboard.
-- `core-pilot-<version>-SHA256SUMS` to verify downloaded files.
+- `core-pilot-<version>.bin` is the single merged image for first-time installation.
+- `core-pilot-<version>-ota.bin` is the signed application image for dashboard updates.
+- `core-pilot-<version>-SHA256SUMS` verifies both images.
 
-For a first installation, extract the archive, positively identify the CoreS3 serial port, and flash the included images from the extracted directory:
+For a first installation, positively identify the CoreS3 serial port and flash the merged image at offset `0x0`:
 
 ```sh
-eim run 'python -m esptool --chip esp32s3 --port /dev/cu.usbmodem1201 write_flash @flash_args' v6.0.2
+eim run 'python -m esptool --chip esp32s3 --port /dev/cu.usbmodem1201 write-flash 0x0 core-pilot-<version>.bin' v6.0.2
 ```
 
 Replace `/dev/cu.usbmodem1201` with the confirmed CoreS3 port. Do not assume that the first connected serial device is the correct target.

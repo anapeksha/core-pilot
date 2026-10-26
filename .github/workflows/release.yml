@@ -89,26 +89,29 @@ jobs:
         working-directory: firmware/s3
         run: |
           set -euo pipefail
-          package="release/core-pilot-${VERSION}"
-          mkdir -p "${package}/bootloader" "${package}/partition_table"
-          cp build/bootloader/bootloader.bin "${package}/bootloader/"
-          cp build/partition_table/partition-table.bin "${package}/partition_table/"
-          cp build/ota_data_initial.bin build/core_pilot.bin \
-            build/flash_args build/flasher_args.json build/project_description.json \
-            "${package}/"
-          cp build/core_pilot.bin "release/core-pilot-${VERSION}-ota.bin"
-          tar -C release -czf "release/core-pilot-${VERSION}-initial-flash.tar.gz" \
-            "core-pilot-${VERSION}"
+          mkdir -p release
+          initial="release/core-pilot-${VERSION}.bin"
+          ota="release/core-pilot-${VERSION}-ota.bin"
+          python -m esptool --chip esp32s3 merge-bin \
+            --flash-mode qio \
+            --flash-freq 80m \
+            --flash-size 16MB \
+            --output "${initial}" \
+            0x0 build/bootloader/bootloader.bin \
+            0x8000 build/partition_table/partition-table.bin \
+            0xf000 build/ota_data_initial.bin \
+            0x20000 build/core_pilot.bin
+          cp build/core_pilot.bin "${ota}"
           cd release
           checksums="core-pilot-${VERSION}-SHA256SUMS"
-          sha256sum "core-pilot-${VERSION}-ota.bin" \
-            "core-pilot-${VERSION}-initial-flash.tar.gz" > "${checksums}"
+          sha256sum "core-pilot-${VERSION}.bin" \
+            "core-pilot-${VERSION}-ota.bin" > "${checksums}"
       - uses: actions/upload-artifact@v4
         with:
           name: release-files
           path: |
+            firmware/s3/release/core-pilot-${{ env.VERSION }}.bin
             firmware/s3/release/core-pilot-${{ env.VERSION }}-ota.bin
-            firmware/s3/release/core-pilot-${{ env.VERSION }}-initial-flash.tar.gz
             firmware/s3/release/core-pilot-${{ env.VERSION }}-SHA256SUMS
           if-no-files-found: error
           retention-days: 1
@@ -128,6 +131,5 @@ jobs:
         with:
           tag_name: ${{ github.event.release.tag_name }}
           files: |
-            release/core-pilot-*-ota.bin
-            release/core-pilot-*-initial-flash.tar.gz
+            release/core-pilot-*.bin
             release/core-pilot-*-SHA256SUMS

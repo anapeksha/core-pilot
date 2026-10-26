@@ -18,7 +18,7 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - ESP-Matter controller and OpenThread border-router integration for an H2 RCP.
 - C++ formatting, Clang-Tidy, dashboard tests, browser tests, E2E tests, CI, and Zed configuration.
 - Unified hardware stress and soak validation with bounded recovery checks.
-- Signed release firmware and complete initial-flash release bundles.
+- Signed OTA firmware and a single merged initial-flash release image.
 
 ### Changed
 
