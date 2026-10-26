@@ -771,6 +771,11 @@ test("uses the keyboard command palette for bounded available actions", async ({
   const state = await mockFirmwareApi(page);
   await page.goto("/");
 
+  // Wait for Solid to hydrate and attach the global keyboard listener before
+  // sending the shortcut; page load alone does not guarantee hydration.
+  await expect(
+    page.getByRole("button", { name: "Open command palette" }),
+  ).toBeVisible();
   await page.keyboard.press("Control+K");
   const palette = page.getByRole("dialog", { name: "Command palette" });
   await expect(palette).toBeVisible();
@@ -1447,6 +1452,59 @@ test("shows saved Wi‑Fi state and confirms forgetting without exposing passwor
     path: "/api/v1/network/wifi/forget",
     body: { ssid: "Old_Network" },
   });
+});
+
+test("keeps a full saved Wi‑Fi list usable at minimum mobile width", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  const state = await mockFirmwareApi(page);
+  state.savedWifiNetworks = Array.from({ length: 8 }, (_, index) => ({
+    ssid:
+      index === 0
+        ? "Connected_Network_With_A_Long_Name"
+        : `Saved_Network_${index + 1}_With_Long_Name`,
+    connected: index === 0,
+  }));
+  await page.goto("/#/system");
+
+  await page.getByRole("button", { name: "Edit Wi‑Fi" }).click();
+  const sheet = page.getByRole("dialog", { name: "Wi‑Fi network" });
+  await expect(sheet).toBeVisible();
+  await expect(
+    sheet.getByText("Up to 8 encrypted networks are kept."),
+  ).toBeVisible();
+  await expect(
+    sheet.getByRole("button", {
+      name: "Forget Connected_Network_With_A_Long_Name",
+    }),
+  ).toBeVisible();
+  expect(
+    await sheet.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+
+  await sheet
+    .getByRole("button", {
+      name: "Forget Connected_Network_With_A_Long_Name",
+    })
+    .click();
+  const confirmation = page.getByRole("alertdialog", {
+    name: "Forget Connected_Network_With_A_Long_Name?",
+  });
+  await expect(
+    confirmation.getByText(/try another saved network/i),
+  ).toBeVisible();
+  await expect(
+    confirmation.getByText(/setup access point will start/i),
+  ).toBeVisible();
+  await expect(
+    confirmation.getByRole("button", { name: "Cancel" }),
+  ).toBeVisible();
+  await expect(
+    confirmation.getByRole("button", { name: "Forget network" }),
+  ).toBeVisible();
 });
 
 test("changes Wi‑Fi using the canonical DHCP hostname", async ({ page }) => {

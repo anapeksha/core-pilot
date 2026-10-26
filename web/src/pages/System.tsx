@@ -984,6 +984,11 @@ export default function System() {
                                 ? "Loading saved networks…"
                                 : "Saved networks are unavailable.")}
                           </p>
+                          <p class="text-xs text-muted-foreground">
+                            Up to 8 encrypted networks are kept. On startup,
+                            Core Pilot tries saved networks in this order before
+                            opening its setup access point.
+                          </p>
                         </div>
                         <Show
                           when={savedWifiNetworks().length > 0}
@@ -996,7 +1001,7 @@ export default function System() {
                           <Grid class="gap-2" aria-label="Saved Wi-Fi networks">
                             <For each={savedWifiNetworks()}>
                               {(item) => (
-                                <div class="flex items-center gap-3 rounded-md border p-3">
+                                <div class="flex min-w-0 items-start gap-2 rounded-md border p-3 sm:items-center sm:gap-3">
                                   <HiOutlineWifi
                                     class="shrink-0 text-muted-foreground"
                                     aria-hidden="true"
@@ -1015,7 +1020,11 @@ export default function System() {
                                     triggerLabel="Forget"
                                     triggerAriaLabel={`Forget ${item.ssid}`}
                                     title={`Forget ${item.ssid}?`}
-                                    description="Core Pilot will remove the saved credentials for this network. You will need to enter its password to connect again."
+                                    description={
+                                      item.connected
+                                        ? "Core Pilot will remove the credentials for the connected network and try another saved network. If none connects, this dashboard will disconnect and the setup access point will start."
+                                        : "Core Pilot will remove the saved credentials for this network. You will need to enter its password to connect again."
+                                    }
                                     confirmLabel="Forget network"
                                     disabled={wifiForget.isPending}
                                     onConfirm={() => forgetSavedWifi(item.ssid)}
