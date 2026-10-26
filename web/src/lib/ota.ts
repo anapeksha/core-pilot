@@ -1,6 +1,7 @@
 import { MAX_OTA_IMAGE_BYTES } from "./api";
 
 export const OTA_CHUNK_BYTES = 2 * 1024;
+export const MAX_OTA_VERSION_BYTES = 31;
 
 export type OtaRecoveryStatus = {
   ota_phase: string;
@@ -56,6 +57,17 @@ export function firmwareVersionFromFilename(name: string) {
   return name.replace(/\.bin$/i, "").trim();
 }
 
+export function validateOtaVersion(version: string) {
+  if (!version || !version.trim()) return "Firmware version is required.";
+  if (!/^[\x20-\x7e]+$/.test(version)) {
+    return "Firmware version must contain only printable ASCII characters.";
+  }
+  if (new TextEncoder().encode(version).length > MAX_OTA_VERSION_BYTES) {
+    return `Firmware version must be at most ${MAX_OTA_VERSION_BYTES} bytes.`;
+  }
+  return "";
+}
+
 export function validateFirmwareCandidate(file: FirmwareCandidate | null) {
   if (!file) return "";
   if (!file.name.toLowerCase().endsWith(".bin")) {
@@ -70,5 +82,5 @@ export function validateFirmwareCandidate(file: FirmwareCandidate | null) {
   if (file.size > MAX_OTA_IMAGE_BYTES) {
     return `OTA accepts app images up to ${formatOtaSize(MAX_OTA_IMAGE_BYTES)}; selected file is ${formatOtaSize(file.size)}.`;
   }
-  return "";
+  return validateOtaVersion(firmwareVersionFromFilename(file.name));
 }

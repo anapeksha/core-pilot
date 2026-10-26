@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   firmwareVersionFromFilename,
   formatOtaSize,
+  MAX_OTA_VERSION_BYTES,
   OTA_CHUNK_BYTES,
   otaChunkCanRetry,
   otaChunkWasCommitted,
   validateFirmwareCandidate,
+  validateOtaVersion,
 } from "./ota";
 import { MAX_OTA_IMAGE_BYTES } from "./api";
 
@@ -86,6 +88,22 @@ describe("ota helpers", () => {
       ),
     ).toBe(true);
     expect(otaChunkWasCommitted(staging, 8192, 2048, true)).toBe(false);
+  });
+
+  it("matches the effective esp_app_desc version bounds and character rules", () => {
+    expect(validateOtaVersion("v".repeat(MAX_OTA_VERSION_BYTES))).toBe("");
+    expect(validateOtaVersion("v".repeat(MAX_OTA_VERSION_BYTES + 1))).toContain(
+      "at most 31 bytes",
+    );
+    expect(validateOtaVersion("release\n1")).toContain("printable ASCII");
+    expect(validateOtaVersion("release-😀")).toContain("printable ASCII");
+    expect(validateOtaVersion("   ")).toContain("required");
+    expect(
+      validateFirmwareCandidate({
+        name: `${"v".repeat(MAX_OTA_VERSION_BYTES + 1)}.bin`,
+        size: 1024,
+      }),
+    ).toContain("at most 31 bytes");
   });
 
   it("rejects oversized empty and non-bin candidates", () => {

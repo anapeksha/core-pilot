@@ -422,7 +422,18 @@ const base64 = z
   );
 export const otaPrepareRequestSchema = z
   .object({
-    version: z.string().trim().min(1),
+    version: z
+      .string()
+      .min(1)
+      .max(31)
+      .regex(
+        /^[\x20-\x7e]+$/,
+        "Firmware version must contain only printable ASCII characters.",
+      )
+      .refine(
+        (value) => value.trim().length > 0,
+        "Firmware version is required.",
+      ),
     size_bytes: z.number().int().min(1).max(MAX_OTA_IMAGE_BYTES),
     sha256_hex: z
       .string()

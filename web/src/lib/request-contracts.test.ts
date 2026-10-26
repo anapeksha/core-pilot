@@ -4,6 +4,7 @@ import {
   automationUpsertRequestSchema,
   groupUpsertRequestSchema,
   matterDeviceRemoveRequestSchema,
+  otaPrepareRequestSchema,
   roomUpsertRequestSchema,
   sceneUpsertRequestSchema,
   wifiForgetRequestSchema,
@@ -60,6 +61,22 @@ describe("persisted name limits", () => {
     expect(
       wifiForgetRequestSchema.safeParse({ ssid: `${"😀".repeat(8)}a` }).success,
     ).toBe(false);
+  });
+
+  it("enforces esp_app_desc OTA version bounds and printable characters", () => {
+    const request = (version: string) => ({
+      version,
+      size_bytes: 1024,
+      sha256_hex: "a".repeat(64),
+      restart_after_update: false,
+    });
+    expect(
+      otaPrepareRequestSchema.safeParse(request("v".repeat(31))).success,
+    ).toBe(true);
+    for (const version of ["", "   ", "v".repeat(32), "release\n1", "v😀"])
+      expect(otaPrepareRequestSchema.safeParse(request(version)).success).toBe(
+        false,
+      );
   });
 
   it("accepts only nonzero 64-bit hexadecimal Matter node IDs", () => {
