@@ -459,6 +459,12 @@ bool valid_email_address(const char* value) {
   return true;
 }
 
+bool same_credential_endpoint(const Config& current, const Config& update) {
+  return current.port == update.port && current.security == update.security &&
+         std::strcmp(current.host, update.host) == 0 &&
+         std::strcmp(current.username, update.username) == 0;
+}
+
 bool plain_lan_target_allowed(const char* host) {
   if (!host || contains_cr_or_lf(host, kMaxHostBytes))
     return false;
@@ -658,6 +664,8 @@ Status ConfigRepository::save(Config& config) {
     if (loaded == Status::Ok) {
       if (metadata.schema_version != kSchema || !decode_config(workspace.plain, old_size, old))
         return Status::CorruptData;
+      if (!same_credential_endpoint(old, config))
+        return Status::InvalidArgument;
       generation = metadata.generation;
       config.password_length = old.password_length;
       std::memcpy(config.password, old.password, old.password_length);

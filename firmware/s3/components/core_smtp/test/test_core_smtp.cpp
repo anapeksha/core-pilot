@@ -51,6 +51,27 @@ TEST_CASE("SMTP plain mode permits only literal local targets", "[core_smtp]") {
   TEST_ASSERT_FALSE(plain_lan_target_allowed("8.8.8.8"));
 }
 
+TEST_CASE("SMTP retains credentials only for an unchanged endpoint", "[core_smtp]") {
+  Config current{};
+  current.port = 587;
+  current.security = SecurityMode::StartTls;
+  std::strcpy(current.host, "smtp.example.com");
+  std::strcpy(current.username, "sender");
+  Config update = current;
+  TEST_ASSERT_TRUE(same_credential_endpoint(current, update));
+  update.port = 465;
+  TEST_ASSERT_FALSE(same_credential_endpoint(current, update));
+  update = current;
+  update.security = SecurityMode::Tls;
+  TEST_ASSERT_FALSE(same_credential_endpoint(current, update));
+  update = current;
+  std::strcpy(update.host, "attacker.example.com");
+  TEST_ASSERT_FALSE(same_credential_endpoint(current, update));
+  update = current;
+  std::strcpy(update.username, "attacker");
+  TEST_ASSERT_FALSE(same_credential_endpoint(current, update));
+}
+
 TEST_CASE("SMTP subjects reject CR and LF header injection", "[core_smtp]") {
   TEST_ASSERT_FALSE(contains_cr_or_lf("Monthly report", kMaxSubjectBytes));
   TEST_ASSERT_TRUE(contains_cr_or_lf("Report\rBCC: attacker@example.com", kMaxSubjectBytes));

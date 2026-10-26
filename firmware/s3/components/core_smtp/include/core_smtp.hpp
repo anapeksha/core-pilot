@@ -89,6 +89,7 @@ private:
 bool contains_cr_or_lf(const char* value, std::size_t maximum);
 bool valid_email_address(const char* value);
 bool plain_lan_target_allowed(const char* host);
+bool same_credential_endpoint(const Config& current, const Config& update);
 
 // Writes an SMTP DATA body with CRLF normalization and dot-stuffing. The
 // returned bytes always end in CRLF but do not include the final ".\r\n".
@@ -104,8 +105,8 @@ public:
 
   Status start();
   Status load(Config& output);
-  // Consumes and wipes config.password on every return path. If password_redacted
-  // is true and password_length is zero, the existing encrypted password is retained.
+  // Consumes and wipes config.password on every return path. A redacted password is
+  // retained only when the host, port, security mode, and username are unchanged.
   Status save(Config& config);
 
 private:
