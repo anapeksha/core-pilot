@@ -93,6 +93,28 @@ RequestBody::~RequestBody() {
   }
 }
 
+class SensitiveJsonDocument final {
+public:
+  SensitiveJsonDocument(cJSON* document, const char* field_name)
+      : document_(document), field_name_(field_name) {}
+  ~SensitiveJsonDocument() {
+    const cJSON* field =
+        document_ == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document_, field_name_);
+    if (cJSON_IsString(field))
+      mbedtls_platform_zeroize(field->valuestring, std::strlen(field->valuestring));
+    cJSON_Delete(document_);
+  }
+  SensitiveJsonDocument(const SensitiveJsonDocument&) = delete;
+  SensitiveJsonDocument& operator=(const SensitiveJsonDocument&) = delete;
+  cJSON* get() const {
+    return document_;
+  }
+
+private:
+  cJSON* document_;
+  const char* field_name_;
+};
+
 void onTimeSync(struct timeval* value) {
   if (value != nullptr) {
     last_time_sync.store(value->tv_sec);
@@ -123,6 +145,24 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
   const auto size = static_cast<std::size_t>(dashboard_gzip_end - dashboard_gzip_start);
   ESP_RETURN_ON_ERROR(httpd_resp_set_type(request, "text/html; charset=utf-8"), kTag, "type");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Content-Encoding", "gzip"), kTag, "encoding");
+  ESP_RETURN_ON_ERROR(
+      httpd_resp_set_hdr(request, "Content-Security-Policy",
+                         "default-src 'none'; script-src 'self' 'unsafe-inline'; "
+                         "style-src 'self' 'unsafe-inline'; "
+                         "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
+                         "manifest-src 'self'; base-uri 'none'; form-action 'self'; "
+                         "frame-ancestors 'none'; object-src 'none'"),
+      kTag, "csp");
+  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "X-Content-Type-Options", "nosniff"), kTag,
+                      "nosniff");
+  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Referrer-Policy", "no-referrer"), kTag,
+                      "referrer");
+  ESP_RETURN_ON_ERROR(
+      httpd_resp_set_hdr(request, "Permissions-Policy",
+                         "accelerometer=(), ambient-light-sensor=(), autoplay=(), camera=(), "
+                         "display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), "
+                         "microphone=(), payment=(), publickey-credentials-get=(), usb=()"),
+      kTag, "permissions");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Cache-Control", "no-store"), kTag, "cache");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Connection", "close"), kTag, "connection");
   return httpd_resp_send(request, reinterpret_cast<const char*>(dashboard_gzip_start),
@@ -1724,10 +1764,12 @@ esp_err_t threadDatasetHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  SensitiveJsonDocument document(cJSON_ParseWithLength(body.data(), received),
+                                 "active_dataset_tlvs_hex");
   const cJSON* encoded =
-      document == nullptr ? nullptr
-                          : cJSON_GetObjectItemCaseSensitive(document, "active_dataset_tlvs_hex");
+      document.get() == nullptr
+          ? nullptr
+          : cJSON_GetObjectItemCaseSensitive(document.get(), "active_dataset_tlvs_hex");
   ThreadDataset dataset;
   bool valid = cJSON_IsString(encoded) && decodeThreadDatasetHex(encoded->valuestring, dataset);
   if (valid) {
@@ -1747,7 +1789,6 @@ esp_err_t threadDatasetHandler(httpd_req_t* request) {
           ? runtime->matter.applyThreadDataset(dataset.tlvs, dataset.length)
           : ESP_ERR_INVALID_STATE;
   dataset.clear();
-  cJSON_Delete(document);
 
   cJSON* response = cJSON_CreateObject();
   const bool accepted = save_result == core_security::Status::Ok && apply_result == ESP_OK;
@@ -1769,24 +1810,18 @@ esp_err_t threadDatasetHandler(httpd_req_t* request) {
 
 esp_err_t commissionHandler(httpd_req_t* request) {
   auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
-  if (runtime == nullptr || request->content_len <= 0 || request->content_len > 192) {
+  RequestBody body(193);
+  std::size_t received = 0;
+  if (runtime == nullptr || !body ||
+      readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
   }
-  char body[193]{};
-  std::size_t received = 0;
-  while (received < static_cast<std::size_t>(request->content_len)) {
-    const int result = httpd_req_recv(request, body + received, request->content_len - received);
-    if (result <= 0) {
-      return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Incomplete request");
-    }
-    received += static_cast<std::size_t>(result);
-  }
-  cJSON* document = cJSON_ParseWithLength(body, received);
-  if (document == nullptr) {
+  SensitiveJsonDocument document(cJSON_ParseWithLength(body.data(), received), "setup_payload");
+  if (document.get() == nullptr) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid JSON");
   }
-  const cJSON* transport = cJSON_GetObjectItemCaseSensitive(document, "transport");
-  const cJSON* payload = cJSON_GetObjectItemCaseSensitive(document, "setup_payload");
+  const cJSON* transport = cJSON_GetObjectItemCaseSensitive(document.get(), "transport");
+  const cJSON* payload = cJSON_GetObjectItemCaseSensitive(document.get(), "setup_payload");
   const bool has_transport = cJSON_IsString(transport);
   const bool requested_thread = has_transport && std::strcmp(transport->valuestring, "thread") == 0;
   const bool requested_wifi = has_transport && std::strcmp(transport->valuestring, "wifi") == 0;
@@ -1798,7 +1833,6 @@ esp_err_t commissionHandler(httpd_req_t* request) {
                                                         : CoreMatter::CommissioningTransport::wifi,
                                        payload->valuestring, operation_id)
           : ESP_ERR_INVALID_ARG;
-  cJSON_Delete(document);
 
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
