@@ -36,7 +36,7 @@ TEST_CASE("bootstrap is one-time and sessions expire", "[core_security]") {
   TEST_ASSERT_FALSE(auth.authorize(token, 11 + core_security::Auth::kSessionSeconds));
 }
 
-TEST_CASE("bootstrap distinguishes expiry and exhausted attempts", "[core_security]") {
+TEST_CASE("bootstrap expiry does not permit network denial", "[core_security]") {
   Random random;
   core_security::Auth auth;
   char token[65]{};
@@ -45,17 +45,15 @@ TEST_CASE("bootstrap distinguishes expiry and exhausted attempts", "[core_securi
                     static_cast<int>(auth.exchange(physical_code, random, 310, token)));
 
   TEST_ASSERT_EQUAL(0, static_cast<int>(auth.regenerate(random, 400, capture)));
-  for (unsigned attempt = 0; attempt < 4; ++attempt) {
+  for (unsigned attempt = 0; attempt < 8; ++attempt) {
     TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::incorrect),
                       static_cast<int>(auth.exchange("0000000000000000", random, 401, token)));
   }
-  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
-                    static_cast<int>(auth.exchange("0000000000000000", random, 401, token)));
-  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
-                    static_cast<int>(auth.exchange("0000000000000000", random, 401, token)));
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
+                    static_cast<int>(auth.exchange(physical_code, random, 402, token)));
 }
 
-TEST_CASE("physical regeneration preserves existing sessions", "[core_security]") {
+TEST_CASE("physical regeneration revokes existing sessions", "[core_security]") {
   Random random;
   core_security::Auth auth;
   char first_token[65]{};
@@ -63,13 +61,13 @@ TEST_CASE("physical regeneration preserves existing sessions", "[core_security]"
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
                     static_cast<int>(auth.exchange(physical_code, random, 11, first_token)));
   TEST_ASSERT_EQUAL(0, static_cast<int>(auth.regenerate(random, 20, capture)));
-  TEST_ASSERT_TRUE(auth.authorize(first_token, 21));
+  TEST_ASSERT_FALSE(auth.authorize(first_token, 21));
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::open),
                     static_cast<int>(auth.bootstrap_state(21)));
 
   char second_token[65]{};
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
                     static_cast<int>(auth.exchange(physical_code, random, 22, second_token)));
-  TEST_ASSERT_TRUE(auth.authorize(first_token, 23));
+  TEST_ASSERT_FALSE(auth.authorize(first_token, 23));
   TEST_ASSERT_TRUE(auth.authorize(second_token, 23));
 }

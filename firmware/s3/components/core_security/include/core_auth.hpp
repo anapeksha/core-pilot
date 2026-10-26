@@ -34,7 +34,7 @@ private:
 
   char code_[17]{};
   uint64_t bootstrap_expires_{};
-  unsigned attempts_{};
+
   BootstrapState bootstrap_state_{BootstrapState::unavailable};
   Session sessions_[4]{};
 };

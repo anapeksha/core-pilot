@@ -48,7 +48,7 @@ Status Auth::begin(RandomSource& random, uint64_t now, BootstrapSink sink) {
 
 Status Auth::regenerate(RandomSource& random, uint64_t now, BootstrapSink sink) {
   close_bootstrap(BootstrapState::unavailable);
-  attempts_ = 0;
+  mbedtls_platform_zeroize(sessions_, sizeof(sessions_));
   const auto result = randomHex(random, code_, 8);
   if (result != Status::Ok)
     return result;
@@ -97,14 +97,8 @@ ExchangeResult Auth::exchange(const char* code, RandomSource& random, uint64_t n
   if (state != BootstrapState::open)
     return ExchangeResult::unavailable;
 
-  if (!equal(code, code_, 16)) {
-    ++attempts_;
-    if (attempts_ >= 5) {
-      close_bootstrap(BootstrapState::attempts_exhausted);
-      return ExchangeResult::attempts_exhausted;
-    }
+  if (!equal(code, code_, 16))
     return ExchangeResult::incorrect;
-  }
 
   for (auto& session : sessions_) {
     if (now < session.expires)
