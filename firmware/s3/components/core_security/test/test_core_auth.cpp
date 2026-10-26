@@ -36,7 +36,8 @@ TEST_CASE("bootstrap is one-time and sessions expire", "[core_security]") {
   TEST_ASSERT_FALSE(auth.authorize(token, 11 + core_security::Auth::kSessionSeconds));
 }
 
-TEST_CASE("bootstrap expiry does not permit network denial", "[core_security]") {
+TEST_CASE("bootstrap expiry and failed-attempt cap require physical regeneration",
+          "[core_security]") {
   Random random;
   core_security::Auth auth;
   char token[65]{};
@@ -45,12 +46,22 @@ TEST_CASE("bootstrap expiry does not permit network denial", "[core_security]") 
                     static_cast<int>(auth.exchange(physical_code, random, 310, token)));
 
   TEST_ASSERT_EQUAL(0, static_cast<int>(auth.regenerate(random, 400, capture)));
-  for (unsigned attempt = 0; attempt < 8; ++attempt) {
+  for (unsigned attempt = 1; attempt < core_security::Auth::kBootstrapAttemptLimit; ++attempt) {
     TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::incorrect),
                       static_cast<int>(auth.exchange("0000000000000000", random, 401, token)));
   }
-  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
+                    static_cast<int>(auth.exchange("0000000000000000", random, 401, token)));
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::attempts_exhausted),
+                    static_cast<int>(auth.bootstrap_state(402)));
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
                     static_cast<int>(auth.exchange(physical_code, random, 402, token)));
+
+  TEST_ASSERT_EQUAL(0, static_cast<int>(auth.regenerate(random, 500, capture)));
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::open),
+                    static_cast<int>(auth.bootstrap_state(501)));
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
+                    static_cast<int>(auth.exchange(physical_code, random, 501, token)));
 }
 
 TEST_CASE("physical regeneration revokes existing sessions", "[core_security]") {
