@@ -11,6 +11,7 @@ import {
 import { createForm } from "solid-hook-form";
 import { toast } from "solid-sonner";
 
+import { bytesAtMost } from "~/lib/request-contracts";
 import { createToastGate } from "~/lib/toast";
 import { z } from "zod";
 import {
@@ -25,6 +26,7 @@ import {
 import { Alert } from "~/components/alert";
 import { Badge } from "~/components/badge";
 import { Button } from "~/components/button";
+import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import {
   Combobox,
   ComboboxContent,
@@ -93,23 +95,28 @@ import {
 } from "~/lib/ota";
 import { sha256FileHex } from "~/lib/sha256";
 import type { StatusItem } from "~/lib/status";
-import { wifiProvisionMutation } from "~/mutations/network";
+import { wifiForgetMutation, wifiProvisionMutation } from "~/mutations/network";
 import { otaChunkMutation, otaPrepareMutation } from "~/mutations/ota";
 import { timeConfigMutation } from "~/mutations/system";
 import { networkQuery } from "~/queries/network";
+import { savedWifiQuery } from "~/queries/savedWifi";
 import { systemQuery } from "~/queries/system";
 import { timeQuery } from "~/queries/time";
 
 const wifiSchema = z.object({
-  ssid: z
-    .string()
-    .trim()
-    .min(1, "Select a network or enter its SSID.")
-    .max(32, "SSID must be 32 characters or fewer."),
-  password: z.string().max(63, "Password must be 63 characters or fewer."),
-  hostname: z
-    .string()
-    .trim()
+  ssid: bytesAtMost(32, "SSID must be 32 bytes or fewer.")
+    .refine(
+      (value) => value.trim().length > 0,
+      "Select a network or enter its SSID.",
+    )
+    .transform((value) => value.trim()),
+  password: bytesAtMost(63, "Password must be 63 bytes or fewer.").refine(
+    (value) =>
+      value.length === 0 || new TextEncoder().encode(value).length >= 8,
+    "Password must be empty or at least 8 bytes.",
+  ),
+  hostname: bytesAtMost(69, "Device name is too long.")
+    .transform((value) => value.trim())
     .transform((value) =>
       value.toLowerCase().endsWith(".local") ? value.slice(0, -6) : value,
     )
@@ -241,14 +248,17 @@ export default function System() {
   const navigate = useNavigate();
   const systemResult = systemQuery();
   const networkResult = networkQuery();
+  const savedWifiResult = savedWifiQuery();
   const timeResult = timeQuery();
   const wifiMutation = wifiProvisionMutation();
+  const wifiForget = wifiForgetMutation();
   const timeMutation = timeConfigMutation();
   const otaMutation = otaPrepareMutation();
   const otaChunk = otaChunkMutation();
   const system = () => systemResult.data ?? fallbackSystem;
   const network = () => networkResult.data ?? fallbackNetwork;
   const time = () => timeResult.data ?? fallbackTime;
+  const savedWifiNetworks = () => savedWifiResult.data?.networks ?? [];
 
   const [wifiSheetOpen, setWifiSheetOpen] = createSignal(false);
   const [timeSheetOpen, setTimeSheetOpen] = createSignal(false);
@@ -502,6 +512,8 @@ export default function System() {
         item.id === selectedWifiNetworkId() ||
         (!selectedWifiNetworkId() && item.ssid === wifiForm.values().ssid),
     );
+  const isSavedWifiNetwork = (ssid: string) =>
+    savedWifiNetworks().some((item) => item.ssid === ssid);
   const wifiSignalLabel = (signalDbm: number) =>
     signalDbm >= -55 ? "Strong" : signalDbm >= -70 ? "Good" : "Weak";
   const wifiSignalTone = (signalDbm: number) =>
@@ -515,7 +527,26 @@ export default function System() {
     if (isConnectedWifiNetwork(wifiNetwork)) return;
     setSelectedWifiNetworkId(wifiNetwork.id);
     wifiForm.setValue("ssid", wifiNetwork.ssid);
-    if (!wifiNetwork.secured) wifiForm.setValue("password", "");
+    wifiForm.setValue("password", "");
+  };
+
+  const forgetSavedWifi = async (ssid: string) => {
+    try {
+      const response = await wifiForget.mutateAsync({ ssid });
+      toast.success(response.detail);
+      if (wifiForm.values().ssid === ssid) {
+        setSelectedWifiNetworkId("");
+        wifiForm.setValue("ssid", "");
+        wifiForm.setValue("password", "");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Saved network was not forgotten.",
+      );
+      throw error;
+    }
   };
 
   const refreshWifiScan = async () => {
@@ -943,162 +974,228 @@ export default function System() {
                     aria-label="Wi-Fi setup steps"
                   />
                   <Show when={wifiSetupStep() === 0}>
-                    <fieldset class="flex flex-col gap-4">
-                      <Flex alignItems="start" class="flex-wrap gap-3">
-                        <div class="min-w-0">
-                          <legend class="text-sm font-semibold">
-                            Nearby networks
-                          </legend>
+                    <div class="flex flex-col gap-5">
+                      <div class="space-y-3">
+                        <div>
+                          <h3 class="text-sm font-semibold">Saved networks</h3>
                           <p class="text-sm text-muted-foreground">
-                            {wifiScanState().detail}
+                            {savedWifiResult.data?.detail ??
+                              (savedWifiResult.isPending
+                                ? "Loading saved networks…"
+                                : "Saved networks are unavailable.")}
                           </p>
                         </div>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={
-                            wifiScanLoading() || wifiScanState().scanning
+                        <Show
+                          when={savedWifiNetworks().length > 0}
+                          fallback={
+                            <Alert>
+                              <p>No Wi‑Fi networks are saved.</p>
+                            </Alert>
                           }
-                          onClick={() => void refreshWifiScan()}
                         >
-                          <Show
-                            when={wifiScanLoading() || wifiScanState().scanning}
-                          >
-                            <Spinner />
-                          </Show>
-                          {wifiScanState().scan_state === "queued"
-                            ? "Starting…"
-                            : wifiScanLoading() || wifiScanState().scanning
-                              ? "Scanning…"
-                              : "Refresh"}
-                        </Button>
-                      </Flex>
-                      <OperationStatus
-                        title={
-                          wifiScanState().scan_state === "queued"
-                            ? "Wi-Fi scan queued"
-                            : wifiScanState().scan_state === "scanning"
-                              ? "Scanning nearby networks"
-                              : wifiScanState().scan_state === "error"
-                                ? "Wi-Fi scan needs attention"
-                                : "Wi-Fi scan ready"
-                        }
-                        description={wifiScanState().detail}
-                        active={wifiScanLoading() || wifiScanState().scanning}
-                        trailing={
-                          wifiScanState().scan_state === "error" ? (
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="outline"
-                              onClick={() => void refreshWifiScan()}
-                            >
-                              Retry
-                            </Button>
-                          ) : undefined
-                        }
-                      />
-                      <Show
-                        when={wifiScanState().networks.length > 0}
-                        fallback={
-                          <Show
-                            when={
-                              wifiScanLoading() ||
-                              ["queued", "scanning"].includes(
-                                wifiScanState().scan_state,
-                              )
-                            }
-                            fallback={
-                              <Alert>
-                                <p>
-                                  No nearby networks have been reported yet.
-                                  Refresh, or enter the SSID manually below.
-                                </p>
-                              </Alert>
-                            }
-                          >
-                            <Grid
-                              class="gap-2"
-                              aria-busy="true"
-                              aria-live="polite"
-                            >
-                              <For each={Array.from({ length: 3 })}>
-                                {(_, index) => (
-                                  <div class="flex items-center gap-2 rounded-md border p-3">
-                                    <Skeleton class="size-4 shrink-0 rounded-full" />
-                                    <Skeleton class="size-3 shrink-0 rounded-full" />
-                                    <div class="min-w-0 flex-1 space-y-2">
-                                      <Skeleton
-                                        class={
-                                          index() === 1
-                                            ? "h-4 w-2/3"
-                                            : "h-4 w-1/2"
-                                        }
-                                      />
-                                      <Skeleton class="h-3 w-full max-w-80" />
+                          <Grid class="gap-2" aria-label="Saved Wi-Fi networks">
+                            <For each={savedWifiNetworks()}>
+                              {(item) => (
+                                <div class="flex items-center gap-3 rounded-md border p-3">
+                                  <HiOutlineWifi
+                                    class="shrink-0 text-muted-foreground"
+                                    aria-hidden="true"
+                                  />
+                                  <div class="min-w-0 flex-1">
+                                    <div class="flex min-w-0 flex-wrap items-center gap-1.5">
+                                      <span class="truncate text-sm font-semibold">
+                                        {item.ssid}
+                                      </span>
+                                      <Badge>
+                                        {item.connected ? "Connected" : "Saved"}
+                                      </Badge>
                                     </div>
                                   </div>
-                                )}
-                              </For>
-                            </Grid>
-                          </Show>
-                        }
-                      >
-                        <Grid
-                          class="scroll-fade-y max-h-72 gap-2 overflow-y-auto"
-                          role="radiogroup"
-                          aria-label="Nearby Wi-Fi networks"
+                                  <ConfirmDestructiveAction
+                                    triggerLabel="Forget"
+                                    triggerAriaLabel={`Forget ${item.ssid}`}
+                                    title={`Forget ${item.ssid}?`}
+                                    description="Core Pilot will remove the saved credentials for this network. You will need to enter its password to connect again."
+                                    confirmLabel="Forget network"
+                                    disabled={wifiForget.isPending}
+                                    onConfirm={() => forgetSavedWifi(item.ssid)}
+                                  />
+                                </div>
+                              )}
+                            </For>
+                          </Grid>
+                        </Show>
+                      </div>
+                      <fieldset class="flex flex-col gap-4">
+                        <Flex alignItems="start" class="flex-wrap gap-3">
+                          <div class="min-w-0">
+                            <legend class="text-sm font-semibold">
+                              Nearby networks
+                            </legend>
+                            <p class="text-sm text-muted-foreground">
+                              {wifiScanState().detail}
+                            </p>
+                          </div>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={
+                              wifiScanLoading() || wifiScanState().scanning
+                            }
+                            onClick={() => void refreshWifiScan()}
+                          >
+                            <Show
+                              when={
+                                wifiScanLoading() || wifiScanState().scanning
+                              }
+                            >
+                              <Spinner />
+                            </Show>
+                            {wifiScanState().scan_state === "queued"
+                              ? "Starting…"
+                              : wifiScanLoading() || wifiScanState().scanning
+                                ? "Scanning…"
+                                : "Refresh"}
+                          </Button>
+                        </Flex>
+                        <OperationStatus
+                          title={
+                            wifiScanState().scan_state === "queued"
+                              ? "Wi-Fi scan queued"
+                              : wifiScanState().scan_state === "scanning"
+                                ? "Scanning nearby networks"
+                                : wifiScanState().scan_state === "error"
+                                  ? "Wi-Fi scan needs attention"
+                                  : "Wi-Fi scan ready"
+                          }
+                          description={wifiScanState().detail}
+                          active={wifiScanLoading() || wifiScanState().scanning}
+                          trailing={
+                            wifiScanState().scan_state === "error" ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => void refreshWifiScan()}
+                              >
+                                Retry
+                              </Button>
+                            ) : undefined
+                          }
+                        />
+                        <Show
+                          when={wifiScanState().networks.length > 0}
+                          fallback={
+                            <Show
+                              when={
+                                wifiScanLoading() ||
+                                ["queued", "scanning"].includes(
+                                  wifiScanState().scan_state,
+                                )
+                              }
+                              fallback={
+                                <Alert>
+                                  <p>
+                                    No nearby networks have been reported yet.
+                                    Refresh, or enter the SSID manually below.
+                                  </p>
+                                </Alert>
+                              }
+                            >
+                              <Grid
+                                class="gap-2"
+                                aria-busy="true"
+                                aria-live="polite"
+                              >
+                                <For each={Array.from({ length: 3 })}>
+                                  {(_, index) => (
+                                    <div class="flex items-center gap-2 rounded-md border p-3">
+                                      <Skeleton class="size-4 shrink-0 rounded-full" />
+                                      <Skeleton class="size-3 shrink-0 rounded-full" />
+                                      <div class="min-w-0 flex-1 space-y-2">
+                                        <Skeleton
+                                          class={
+                                            index() === 1
+                                              ? "h-4 w-2/3"
+                                              : "h-4 w-1/2"
+                                          }
+                                        />
+                                        <Skeleton class="h-3 w-full max-w-80" />
+                                      </div>
+                                    </div>
+                                  )}
+                                </For>
+                              </Grid>
+                            </Show>
+                          }
                         >
-                          <For each={wifiScanState().networks}>
-                            {(item) => (
-                              <label class="relative flex cursor-pointer items-start gap-2 rounded-md border p-3">
-                                <input
-                                  type="radio"
-                                  name="wifi-network"
-                                  value={item.id}
-                                  checked={selectedWifiNetworkId() === item.id}
-                                  disabled={isConnectedWifiNetwork(item)}
-                                  aria-label={
-                                    isConnectedWifiNetwork(item)
-                                      ? `${item.ssid} is already connected`
-                                      : `Select ${item.ssid}`
-                                  }
-                                  onChange={() => selectWifiNetwork(item)}
-                                />
-                                <span
-                                  class={wifiSignalTone(item.signal_dbm)}
-                                  aria-hidden="true"
-                                >
-                                  ●
-                                </span>
-                                <span class="min-w-0 flex-1 text-sm">
-                                  <span class="flex min-w-0 flex-wrap items-center gap-1.5">
-                                    <span class="truncate font-semibold">
-                                      {item.ssid}
-                                    </span>
-                                    <Show when={item.secured}>
-                                      <span class="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                                        <HiOutlineLockClosed aria-hidden="true" />
-                                        <span class="sr-only">Secured</span>
+                          <Grid
+                            class="scroll-fade-y max-h-72 gap-2 overflow-y-auto"
+                            role="radiogroup"
+                            aria-label="Nearby Wi-Fi networks"
+                          >
+                            <For each={wifiScanState().networks}>
+                              {(item) => (
+                                <label class="relative flex cursor-pointer items-start gap-2 rounded-md border p-3">
+                                  <input
+                                    type="radio"
+                                    name="wifi-network"
+                                    value={item.id}
+                                    checked={
+                                      selectedWifiNetworkId() === item.id
+                                    }
+                                    disabled={isConnectedWifiNetwork(item)}
+                                    aria-label={
+                                      isConnectedWifiNetwork(item)
+                                        ? `${item.ssid} is already connected`
+                                        : `Select ${item.ssid}`
+                                    }
+                                    onChange={() => selectWifiNetwork(item)}
+                                  />
+                                  <span
+                                    class={wifiSignalTone(item.signal_dbm)}
+                                    aria-hidden="true"
+                                  >
+                                    ●
+                                  </span>
+                                  <span class="min-w-0 flex-1 text-sm">
+                                    <span class="flex min-w-0 flex-wrap items-center gap-1.5">
+                                      <span class="truncate font-semibold">
+                                        {item.ssid}
                                       </span>
-                                    </Show>
-                                    <Show when={isConnectedWifiNetwork(item)}>
-                                      <Badge>Connected</Badge>
-                                    </Show>
+                                      <Show when={item.secured}>
+                                        <span class="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                                          <HiOutlineLockClosed aria-hidden="true" />
+                                          <span class="sr-only">Secured</span>
+                                        </span>
+                                      </Show>
+                                      <Show
+                                        when={isConnectedWifiNetwork(item)}
+                                        fallback={
+                                          <Show
+                                            when={isSavedWifiNetwork(item.ssid)}
+                                          >
+                                            <Badge>Saved</Badge>
+                                          </Show>
+                                        }
+                                      >
+                                        <Badge>Connected</Badge>
+                                      </Show>
+                                    </span>
+                                    <span class="block wrap-anywhere text-xs text-muted-foreground">
+                                      {wifiSignalLabel(item.signal_dbm)} ·{" "}
+                                      {item.signal_dbm} dBm · Ch {item.channel}{" "}
+                                      · {item.auth} · {item.bssid}
+                                    </span>
                                   </span>
-                                  <span class="block wrap-anywhere text-xs text-muted-foreground">
-                                    {wifiSignalLabel(item.signal_dbm)} ·{" "}
-                                    {item.signal_dbm} dBm · Ch {item.channel} ·{" "}
-                                    {item.auth} · {item.bssid}
-                                  </span>
-                                </span>
-                              </label>
-                            )}
-                          </For>
-                        </Grid>
-                      </Show>
-                    </fieldset>
+                                </label>
+                              )}
+                            </For>
+                          </Grid>
+                        </Show>
+                      </fieldset>
+                    </div>
                   </Show>
                   <Show when={wifiSetupStep() === 1}>
                     <div class="flex flex-col gap-4">

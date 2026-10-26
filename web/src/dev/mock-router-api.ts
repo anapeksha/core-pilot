@@ -41,6 +41,10 @@ const mutation = (status: string, detail: string, accepted = true) => ({
 
 export function mockRouterApi(): Plugin {
   const otaUploads = new Map<string, OtaUpload>();
+  let savedWifiNetworks = [
+    { ssid: "MockHome", connected: true },
+    { ssid: "MockGuest", connected: false },
+  ];
   const models: Record<ModelCollection, MockModel[]> & { nextId: number } = {
     rooms: [{ id: "living-room", name: "Living Room" }],
     groups: [],
@@ -124,6 +128,17 @@ export function mockRouterApi(): Plugin {
             http: "started",
             wan_enabled: false,
             cloud_relay_enabled: false,
+          });
+          return;
+        }
+
+        if (
+          request.method === "GET" &&
+          url.pathname === "/api/v1/network/wifi/saved"
+        ) {
+          json(response, 200, {
+            networks: savedWifiNetworks,
+            detail: `${savedWifiNetworks.length} saved networks.`,
           });
           return;
         }
@@ -380,7 +395,19 @@ export function mockRouterApi(): Plugin {
         }
 
         if (request.method === "POST") {
-          await readJson(request).catch(() => ({}));
+          const body = await readJson(request).catch((): JsonObject => ({}));
+          if (url.pathname === "/api/v1/network/wifi/forget") {
+            const ssid = String(body.ssid ?? "");
+            savedWifiNetworks = savedWifiNetworks.filter(
+              (network) => network.ssid !== ssid,
+            );
+            json(
+              response,
+              200,
+              mutation("forgotten", `Mock saved network ${ssid} forgotten.`),
+            );
+            return;
+          }
           const detailByPath: Record<string, string> = {
             "/api/v1/network/wifi": "Mock Wi‑Fi settings saved.",
             "/api/v1/matter/commission":

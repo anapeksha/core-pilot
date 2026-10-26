@@ -27,6 +27,7 @@ import {
   smtpTestRequestSchema,
   threadDatasetUpdateRequestSchema,
   timeConfigRequestSchema,
+  wifiForgetRequestSchema,
   wifiProvisionRequestSchema,
   wifiScanPageRequestSchema,
   wifiScanRefreshRequestSchema,
@@ -71,6 +72,16 @@ export type WifiScan = {
   networks: WifiNetwork[];
   scanning: boolean;
   scan_state: string;
+  detail: string;
+};
+
+export type SavedWifiNetwork = {
+  ssid: string;
+  connected: boolean;
+};
+
+export type SavedWifiNetworks = {
+  networks: SavedWifiNetwork[];
   detail: string;
 };
 
@@ -421,6 +432,10 @@ export type WifiProvisionRequest = {
     password: string;
   };
   hostname?: string;
+};
+
+export type WifiForgetRequest = {
+  ssid: string;
 };
 
 export type AiProviderSetupRequest = {
@@ -920,6 +935,7 @@ const requestSchemas: Readonly<Record<string, z.ZodType>> = {
   "/api/v1/network/wifi/scan/page": wifiScanPageRequestSchema,
   "/api/v1/activity/page": activityPageRequestSchema,
   "/api/v1/network/wifi": wifiProvisionRequestSchema,
+  "/api/v1/network/wifi/forget": wifiForgetRequestSchema,
   "/api/v1/time": timeConfigRequestSchema,
   "/api/v1/smtp": smtpConfigRequestSchema,
   "/api/v1/smtp/test": smtpTestRequestSchema,
@@ -999,6 +1015,12 @@ export function rebootSystem(): Promise<MutationResponse> {
 
 export function loadNetwork(signal?: AbortSignal): Promise<NetworkStatus> {
   return loadJson<NetworkStatus>("/api/v1/network", signal);
+}
+
+export function loadSavedWifiNetworks(
+  signal?: AbortSignal,
+): Promise<SavedWifiNetworks> {
+  return loadJson<SavedWifiNetworks>("/api/v1/network/wifi/saved", signal);
 }
 
 export function loadSmtp(signal?: AbortSignal): Promise<SmtpStatus> {
@@ -1351,6 +1373,15 @@ export function provisionWifi(
 ): Promise<MutationResponse> {
   return postJson<MutationResponse, WifiProvisionRequest>(
     "/api/v1/network/wifi",
+    request,
+  );
+}
+
+export function forgetWifiNetwork(
+  request: WifiForgetRequest,
+): Promise<MutationResponse> {
+  return postJson<MutationResponse, WifiForgetRequest>(
+    "/api/v1/network/wifi/forget",
     request,
   );
 }

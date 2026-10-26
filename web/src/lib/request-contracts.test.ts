@@ -6,6 +6,8 @@ import {
   matterDeviceRemoveRequestSchema,
   roomUpsertRequestSchema,
   sceneUpsertRequestSchema,
+  wifiForgetRequestSchema,
+  wifiProvisionRequestSchema,
 } from "./request-contracts";
 
 const exactName = "😀".repeat(16);
@@ -43,6 +45,22 @@ describe("persisted name limits", () => {
       expect(schema.safeParse(request("   ")).success).toBe(false);
     });
   }
+
+  it("enforces Wi-Fi SSID and password limits in UTF-8 bytes", () => {
+    expect(
+      wifiProvisionRequestSchema.safeParse({
+        credentials: { ssid: "😀".repeat(8), password: "pässword" },
+      }).success,
+    ).toBe(true);
+    expect(
+      wifiProvisionRequestSchema.safeParse({
+        credentials: { ssid: `${"😀".repeat(8)}a`, password: "password" },
+      }).success,
+    ).toBe(false);
+    expect(
+      wifiForgetRequestSchema.safeParse({ ssid: `${"😀".repeat(8)}a` }).success,
+    ).toBe(false);
+  });
 
   it("accepts only nonzero 64-bit hexadecimal Matter node IDs", () => {
     for (const device_id of ["1", "0000000000001234", "abcdefABCDEF1234"])

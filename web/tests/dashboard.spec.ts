@@ -173,6 +173,10 @@ function createFirmwareState() {
         actions: ["notify|Welcome home"],
       },
     ],
+    savedWifiNetworks: [
+      { ssid: "Lab_WiFi", connected: true },
+      { ssid: "Old_Network", connected: false },
+    ],
     wifiNetworks: [
       {
         id: "lab-wifi",
@@ -397,6 +401,13 @@ async function handleMutation(
     state.automations = state.automations.filter((item) => item.id !== body.id);
     return json(route, { accepted: true, detail: "Automation deleted." });
   }
+  if (path === "/api/v1/network/wifi/forget") {
+    const ssid = String(body.ssid ?? "");
+    state.savedWifiNetworks = state.savedWifiNetworks.filter(
+      (network) => network.ssid !== ssid,
+    );
+    return json(route, { accepted: true, detail: "Saved network forgotten." });
+  }
   if (path === "/api/v1/network/wifi") {
     state.network.station_ssid = String((body.credentials as Json).ssid);
     state.network.station_bssid = "";
@@ -538,6 +549,11 @@ async function mockFirmwareApi(page: Page, options: MockFirmwareOptions = {}) {
 
     if (path === "/api/v1/health") return json(route, state.health);
     if (path === "/api/v1/network") return json(route, state.network);
+    if (path === "/api/v1/network/wifi/saved")
+      return json(route, {
+        networks: state.savedWifiNetworks,
+        detail: `${state.savedWifiNetworks.length} saved networks.`,
+      });
     if (path === "/api/v1/system") return json(route, state.system);
     if (path === "/api/v1/time") return json(route, state.time);
     if (path === "/api/v1/storage") return json(route, state.storage);
@@ -1401,6 +1417,36 @@ test("covers encrypted assistant prompt editing and preview", async ({
   await page.getByRole("button", { name: "Save encrypted" }).click();
   await expect(page.getByText("Prompt file saved.")).toBeVisible();
   expect(state.posts.at(-1)?.path).toBe("/api/v1/ai/prompts/file");
+});
+
+test("shows saved Wi‑Fi state and confirms forgetting without exposing passwords", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.goto("/#/system");
+
+  await page.getByRole("button", { name: "Edit Wi‑Fi" }).click();
+  await expect(page.getByText("Old_Network", { exact: true })).toBeVisible();
+  await expect(page.getByText("Saved", { exact: true }).first()).toBeVisible();
+  await expect(
+    page.getByText("Connected", { exact: true }).first(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Continue" }).click();
+  await expect(page.locator("input[type='password']")).toHaveValue("");
+  await page.getByRole("button", { name: "Network" }).click();
+
+  await page.getByRole("button", { name: "Forget Old_Network" }).click();
+  await expect(
+    page.getByRole("alertdialog", { name: "Forget Old_Network?" }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Forget network" }).click();
+
+  await expect(page.getByText("Saved network forgotten.")).toBeVisible();
+  await expect(page.getByText("Old_Network", { exact: true })).toHaveCount(0);
+  expect(state.posts.at(-1)).toEqual({
+    path: "/api/v1/network/wifi/forget",
+    body: { ssid: "Old_Network" },
+  });
 });
 
 test("changes Wi‑Fi using the canonical DHCP hostname", async ({ page }) => {

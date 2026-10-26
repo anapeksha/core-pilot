@@ -53,6 +53,14 @@ const emptyRequest = z.object({}).strict();
 
 export const rebootRequestSchema = emptyRequest;
 export const wifiScanRefreshRequestSchema = emptyRequest;
+export const wifiForgetRequestSchema = z
+  .object({
+    ssid: bytesAtMost(32, "SSID is too long.").refine(
+      (value) => value.length > 0,
+      "SSID is required.",
+    ),
+  })
+  .strict();
 export const wifiScanPageRequestSchema = z
   .object({ last_seen: z.string().nullable().optional() })
   .strict();

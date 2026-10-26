@@ -315,6 +315,40 @@ describe("api client", () => {
     });
   });
 
+  it("loads and forgets saved Wi-Fi networks without credential fields", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          networks: [{ ssid: "Lab_WiFi", connected: true }],
+          detail: "1 saved network.",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          accepted: true,
+          status: "forgotten",
+          detail: "Forgotten.",
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.loadSavedWifiNetworks()).resolves.toEqual({
+      networks: [{ ssid: "Lab_WiFi", connected: true }],
+      detail: "1 saved network.",
+    });
+    await api.forgetWifiNetwork({ ssid: "Lab_WiFi" });
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/network/wifi/forget",
+      expect.objectContaining({
+        method: "POST",
+        body: '{"ssid":"Lab_WiFi"}',
+      }),
+    );
+  });
+
   it("accepts current Wi-Fi and tool permission wire payloads", async () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve(
