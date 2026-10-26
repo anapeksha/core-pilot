@@ -27,6 +27,7 @@ import { Alert } from "~/components/alert";
 import { Badge } from "~/components/badge";
 import { Button } from "~/components/button";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
+import { TooltipIconButton } from "~/components/tooltip";
 import {
   Combobox,
   ComboboxContent,
@@ -1731,16 +1732,15 @@ export default function System() {
                       <Show
                         when={!otaMutation.isPending && !otaChunk.isPending}
                       >
-                        <Button
+                        <TooltipIconButton
                           type="button"
                           size="icon"
                           variant="ghost"
                           aria-label="Remove selected firmware"
-                          title="Remove selected firmware"
                           onClick={clearFirmware}
                         >
                           <HiOutlineTrash aria-hidden="true" />
-                        </Button>
+                        </TooltipIconButton>
                       </Show>
                     </Flex>
                   </Show>

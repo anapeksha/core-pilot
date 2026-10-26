@@ -10,6 +10,7 @@ import {
 import { HiOutlineCommandLine, HiOutlineMagnifyingGlass } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { Button } from "~/components/button";
+import { TooltipIconButton } from "~/components/tooltip";
 import {
   Dialog,
   DialogContent,
@@ -145,15 +146,15 @@ export function CommandPalette() {
           ⌘K
         </kbd>
       </Button>
-      <Button
+      <TooltipIconButton
         variant="ghost"
         size="icon"
         class="ml-auto sm:hidden"
         aria-label="Open command palette"
         onClick={() => setOpen(true)}
       >
-        <HiOutlineCommandLine />
-      </Button>
+        <HiOutlineCommandLine aria-hidden="true" />
+      </TooltipIconButton>
       <Dialog open={open()} onOpenChange={setOpen}>
         <DialogContent class="max-w-xl gap-3 p-4">
           <DialogHeader class="sr-only">

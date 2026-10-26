@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { Button } from "~/components/button";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
+import { TooltipIconButton } from "~/components/tooltip";
 import {
   Card,
   CardContent,
@@ -366,16 +367,15 @@ export default function Groups() {
                         </p>
                       </CardContent>
                       <CardFooter class="justify-end gap-2">
-                        <Button
+                        <TooltipIconButton
                           type="button"
                           variant="outline"
                           size="icon"
                           aria-label={`Edit ${group.name}`}
-                          title={`Edit ${group.name}`}
                           onClick={() => edit(group)}
                         >
                           <HiOutlinePencil aria-hidden="true" />
-                        </Button>
+                        </TooltipIconButton>
                         <ConfirmDestructiveAction
                           triggerLabel="Delete"
                           triggerAriaLabel={`Delete ${group.name}`}

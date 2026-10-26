@@ -13,6 +13,7 @@ import { Badge } from "~/components/badge";
 import { AutomationBuilder } from "~/components/automation-builder";
 import { Button } from "~/components/button";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
+import { TooltipIconButton } from "~/components/tooltip";
 import { EmptyState } from "~/components/empty-state";
 import {
   Card,
@@ -972,16 +973,15 @@ export default function Automations() {
                             Run now
                           </Button>
                         </Show>
-                        <Button
+                        <TooltipIconButton
                           type="button"
                           size="icon"
                           variant="outline"
                           aria-label={`Edit ${automation.name}`}
-                          title={`Edit ${automation.name}`}
                           onClick={() => edit(automation)}
                         >
                           <HiOutlinePencil aria-hidden="true" />
-                        </Button>
+                        </TooltipIconButton>
                         <ConfirmDestructiveAction
                           triggerLabel="Delete"
                           triggerAriaLabel={`Delete ${automation.name}`}

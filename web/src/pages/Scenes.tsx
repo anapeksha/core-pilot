@@ -14,6 +14,7 @@ import { AutomationBuilder } from "~/components/automation-builder";
 import { Badge } from "~/components/badge";
 import { Button } from "~/components/button";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
+import { TooltipIconButton } from "~/components/tooltip";
 import {
   Card,
   CardContent,
@@ -401,16 +402,15 @@ export default function Scenes() {
                             </Show>
                           </CardContent>
                           <CardFooter class="justify-end gap-2">
-                            <Button
+                            <TooltipIconButton
                               type="button"
                               size="icon"
                               variant="outline"
                               aria-label={`Edit ${scene.name}`}
-                              title={`Edit ${scene.name}`}
                               onClick={() => edit(scene)}
                             >
                               <HiOutlinePencil aria-hidden="true" />
-                            </Button>
+                            </TooltipIconButton>
                             <ConfirmDestructiveAction
                               triggerLabel="Delete"
                               triggerAriaLabel={`Delete ${scene.name}`}

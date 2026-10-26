@@ -24,14 +24,18 @@ import { Polymorphic } from "@kobalte/core";
 import type { VariantProps } from "class-variance-authority";
 import { cva } from "class-variance-authority";
 
-import { cn } from "~/lib/utils";
 import type { ButtonProps } from "~/components/button";
-import { Button } from "~/components/button";
+import { cn } from "~/lib/utils";
 import { Separator } from "~/components/separator";
 import { Sheet, SheetContent } from "~/components/sheet";
 import { Skeleton } from "~/components/skeleton";
 import { TextField, TextFieldInput } from "~/components/text-field";
-import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipIconButton,
+  TooltipTrigger,
+} from "~/components/tooltip";
 
 const MOBILE_BREAKPOINT = 768;
 const SIDEBAR_COOKIE_NAME = "sidebar:state";
@@ -274,6 +278,7 @@ const Sidebar: Component<SidebarProps> = (rawProps) => {
 
 type SidebarTriggerProps<T extends ValidComponent = "button"> =
   ButtonProps<T> & {
+    "aria-label"?: string;
     onClick?: (event: MouseEvent) => void;
   };
 
@@ -281,17 +286,20 @@ const SidebarTrigger = <T extends ValidComponent = "button">(
   props: SidebarTriggerProps<T>,
 ) => {
   const [local, others] = splitProps(props as SidebarTriggerProps, [
+    "aria-label",
     "class",
     "onClick",
+    "type",
   ]);
   const { toggleSidebar } = useSidebar();
 
   return (
-    <Button
+    <TooltipIconButton
       data-sidebar="trigger"
       variant="ghost"
       size="icon"
       class={cn("size-7", local.class)}
+      aria-label={local["aria-label"] ?? "Toggle sidebar"}
       onClick={(event: MouseEvent) => {
         local.onClick?.(event);
         toggleSidebar();
@@ -311,7 +319,7 @@ const SidebarTrigger = <T extends ValidComponent = "button">(
         <path d="M9 3v18" />
       </svg>
       <span class="sr-only">Toggle Sidebar</span>
-    </Button>
+    </TooltipIconButton>
   );
 };
 

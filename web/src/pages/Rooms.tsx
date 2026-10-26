@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { Button } from "~/components/button";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
+import { TooltipIconButton } from "~/components/tooltip";
 import {
   Card,
   CardContent,
@@ -271,16 +272,15 @@ export default function Rooms() {
                           </Show>
                         </CardContent>
                         <CardFooter class="justify-end gap-2">
-                          <Button
+                          <TooltipIconButton
                             type="button"
                             variant="outline"
                             size="icon"
                             aria-label={`Edit ${room.name}`}
-                            title={`Edit ${room.name}`}
                             onClick={() => edit(room)}
                           >
                             <HiOutlinePencil aria-hidden="true" />
-                          </Button>
+                          </TooltipIconButton>
                           <ConfirmDestructiveAction
                             triggerLabel="Delete"
                             triggerAriaLabel={`Delete ${room.name}`}

@@ -47,25 +47,24 @@ export const Stepper: Component<StepperProps> = (props) => (
                 />
               </Show>
               <Tooltip openDelay={0}>
-                <TooltipTrigger as="span" class="relative z-10 inline-flex">
-                  <button
-                    type="button"
-                    class={cn(
-                      buttonVariants({ variant: "outline", size: "icon" }),
-                      "shrink-0 rounded-full bg-background",
-                      (isActive() || isComplete()) &&
-                        "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
-                      isActive() &&
-                        "ring-2 ring-ring ring-offset-2 ring-offset-background",
-                    )}
-                    disabled={!isReachable()}
-                    aria-label={item.label}
-                    aria-current={isActive() ? "step" : undefined}
-                    onClick={() => props.onStepChange(index())}
-                  >
-                    <Icon class="size-4" aria-hidden="true" />
-                    <span class="sr-only">{item.label}</span>
-                  </button>
+                <TooltipTrigger
+                  as="button"
+                  type="button"
+                  class={cn(
+                    buttonVariants({ variant: "outline", size: "icon" }),
+                    "relative z-10 shrink-0 rounded-full bg-background",
+                    (isActive() || isComplete()) &&
+                      "border-primary bg-primary text-primary-foreground hover:bg-primary/90 hover:text-primary-foreground",
+                    isActive() &&
+                      "ring-2 ring-ring ring-offset-2 ring-offset-background",
+                  )}
+                  disabled={!isReachable()}
+                  aria-label={item.label}
+                  aria-current={isActive() ? "step" : undefined}
+                  onClick={() => props.onStepChange(index())}
+                >
+                  <Icon class="size-4" aria-hidden="true" />
+                  <span class="sr-only">{item.label}</span>
                 </TooltipTrigger>
                 <TooltipContent>{item.label}</TooltipContent>
               </Tooltip>

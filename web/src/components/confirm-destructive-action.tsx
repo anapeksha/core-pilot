@@ -8,8 +8,9 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "~/components/alert-dialog";
-import { Button } from "~/components/button";
+import { Button, buttonVariants } from "~/components/button";
 import { Flex } from "~/components/flex";
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/tooltip";
 
 type ConfirmDestructiveActionProps = {
   triggerLabel: string;
@@ -42,16 +43,19 @@ function ConfirmDestructiveAction(props: ConfirmDestructiveActionProps) {
 
   return (
     <AlertDialog open={open()} onOpenChange={setOpen}>
-      <AlertDialogTrigger
-        as={Button}
-        variant="destructive"
-        class="size-10 p-0"
-        disabled={props.disabled}
-        aria-label={props.triggerAriaLabel ?? props.triggerLabel}
-        title={props.triggerAriaLabel ?? props.triggerLabel}
-      >
-        <HiOutlineTrash aria-hidden="true" />
-      </AlertDialogTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          as={AlertDialogTrigger}
+          class={buttonVariants({ variant: "destructive", size: "icon" })}
+          disabled={props.disabled}
+          aria-label={props.triggerAriaLabel ?? props.triggerLabel}
+        >
+          <HiOutlineTrash aria-hidden="true" />
+        </TooltipTrigger>
+        <TooltipContent>
+          {props.triggerAriaLabel ?? props.triggerLabel}
+        </TooltipContent>
+      </Tooltip>
       <AlertDialogContent>
         <div class="flex items-start gap-3 pr-6">
           <div class="grid size-10 shrink-0 place-items-center rounded-full bg-destructive/10 text-error">

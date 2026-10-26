@@ -4,6 +4,7 @@ import { Show, splitProps } from "solid-js";
 import * as ComboboxPrimitive from "@kobalte/core/combobox";
 import type { PolymorphicProps } from "@kobalte/core/polymorphic";
 
+import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/tooltip";
 import { cn } from "~/lib/utils";
 
 const Combobox = ComboboxPrimitive.Root;
@@ -135,35 +136,41 @@ const ComboboxTrigger = <T extends ValidComponent = "button">(
   const [local, others] = splitProps(props as ComboboxTriggerProps, [
     "class",
     "children",
+    "type",
   ]);
   return (
-    <ComboboxPrimitive.Trigger
-      class={cn("size-4 opacity-50", local.class)}
-      {...others}
-    >
-      <ComboboxPrimitive.Icon>
-        <Show
-          when={local.children}
-          fallback={
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              class="size-4"
-            >
-              <path d="M8 9l4 -4l4 4" />
-              <path d="M16 15l-4 4l-4 -4" />
-            </svg>
-          }
-        >
-          {(children) => children()}
-        </Show>
-      </ComboboxPrimitive.Icon>
-    </ComboboxPrimitive.Trigger>
+    <Tooltip>
+      <TooltipTrigger
+        as={ComboboxPrimitive.Trigger}
+        aria-label="Open options"
+        class={cn("size-4 opacity-50", local.class)}
+        {...others}
+      >
+        <ComboboxPrimitive.Icon>
+          <Show
+            when={local.children}
+            fallback={
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                class="size-4"
+              >
+                <path d="M8 9l4 -4l4 4" />
+                <path d="M16 15l-4 4l-4 -4" />
+              </svg>
+            }
+          >
+            {(children) => children()}
+          </Show>
+        </ComboboxPrimitive.Icon>
+      </TooltipTrigger>
+      <TooltipContent>Open options</TooltipContent>
+    </Tooltip>
   );
 };
 

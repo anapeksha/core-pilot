@@ -10,7 +10,7 @@ import {
   HiOutlineSquares2x2,
   HiOutlineXMark,
 } from "solid-icons/hi";
-import { Button } from "~/components/button";
+
 import { CommandPalette } from "~/components/command-palette";
 import { Flex } from "~/components/flex";
 import {
@@ -28,6 +28,7 @@ import {
   SidebarTrigger,
   useSidebar,
 } from "~/components/sidebar";
+import { TooltipIconButton } from "~/components/tooltip";
 import { pageByPath, pages, type Page } from "~/lib/pages";
 import { routePaths } from "~/lib/routePaths";
 
@@ -71,15 +72,15 @@ function CoreSidebar() {
             </p>
           </div>
           <Show when={isMobile()}>
-            <Button
+            <TooltipIconButton
               class="ml-auto shrink-0"
               variant="ghost"
               size="icon"
               aria-label="Close navigation"
               onClick={() => setOpenMobile(false)}
             >
-              <HiOutlineXMark />
-            </Button>
+              <HiOutlineXMark aria-hidden="true" />
+            </TooltipIconButton>
           </Show>
         </Flex>
       </SidebarHeader>

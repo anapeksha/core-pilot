@@ -19,6 +19,7 @@ import {
 import { toast } from "solid-sonner";
 
 import { Button } from "~/components/button";
+import { TooltipIconButton } from "~/components/tooltip";
 import {
   Card,
   CardContent,
@@ -253,16 +254,15 @@ function FavoriteRow(props: {
         <p class="truncate text-sm font-medium">{props.title}</p>
         <p class="truncate text-xs text-muted-foreground">{props.detail}</p>
       </div>
-      <Button
+      <TooltipIconButton
         type="button"
         size="icon"
         variant="ghost"
         aria-label={`Remove ${props.title} from favorites`}
-        title={`Remove ${props.title} from favorites`}
         onClick={props.onRemove}
       >
         <HiOutlineTrash aria-hidden="true" />
-      </Button>
+      </TooltipIconButton>
     </div>
   );
 }

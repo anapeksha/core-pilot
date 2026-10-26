@@ -42,7 +42,12 @@ import {
   TextFieldInput,
   TextFieldLabel,
 } from "~/components/text-field";
-import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipIconButton,
+  TooltipTrigger,
+} from "~/components/tooltip";
 import {
   actionSummary,
   MAX_AUTOMATION_ACTIONS,
@@ -488,17 +493,16 @@ function ActionCard(props: ActionCardProps) {
           >
             ↓ <span class="sr-only sm:not-sr-only">Down</span>
           </Button>
-          <Button
+          <TooltipIconButton
             type="button"
             size="icon"
             variant="ghost"
             class="text-destructive hover:text-destructive"
             onClick={props.onRemove}
             aria-label={`Remove action ${props.index + 1}`}
-            title={`Remove action ${props.index + 1}`}
           >
             <HiOutlineTrash aria-hidden="true" />
-          </Button>
+          </TooltipIconButton>
         </div>
       </CardFooter>
     </Card>
