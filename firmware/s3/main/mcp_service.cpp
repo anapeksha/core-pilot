@@ -73,6 +73,14 @@ portMUX_TYPE permissions_lock = portMUX_INITIALIZER_UNLOCKED;
 std::uint32_t enabled_tools = 0;
 std::uint64_t permissions_generation = 0;
 
+constexpr std::uint32_t availablePermissions() {
+  std::uint32_t mask = 0;
+  for (std::size_t index = 0; index < std::size(kTools); ++index)
+    if (kTools[index].available)
+      mask |= 1U << index;
+  return mask;
+}
+
 constexpr std::uint32_t defaultPermissions() {
   std::uint32_t mask = 0;
   for (std::size_t index = 0; index < std::size(kTools); ++index)
@@ -234,7 +242,7 @@ esp_err_t McpService::initialize(const HttpRuntime& runtime) {
     mbedtls_platform_zeroize(plaintext, sizeof(plaintext));
     return ESP_ERR_INVALID_RESPONSE;
   }
-  mask &= defaultPermissions();
+  mask &= availablePermissions();
   taskENTER_CRITICAL(&permissions_lock);
   enabled_tools = mask;
   permissions_generation = generation;
@@ -246,8 +254,7 @@ esp_err_t McpService::initialize(const HttpRuntime& runtime) {
 esp_err_t McpService::setPermission(const HttpRuntime& runtime, const char* tool, bool enabled) {
   const Tool* selected_tool = findTool(tool);
   const std::size_t index = toolIndex(selected_tool);
-  if (selected_tool == nullptr || index >= 32 || !selected_tool->available ||
-      selected_tool->destructive)
+  if (selected_tool == nullptr || index >= 32 || !selected_tool->available)
     return ESP_ERR_NOT_SUPPORTED;
   taskENTER_CRITICAL(&permissions_lock);
   std::uint32_t mask = enabled_tools;
@@ -327,8 +334,7 @@ esp_err_t McpService::invoke(const HttpRuntime& runtime, const char* tool_name,
   const Tool* tool = findTool(tool_name);
   if (tool == nullptr || !tool->available || arguments == nullptr || !cJSON_IsObject(arguments))
     return ESP_ERR_NOT_SUPPORTED;
-  const bool remove_device = std::strcmp(tool->name, "RemoveMatterDevice") == 0;
-  if ((tool->destructive && !remove_device) || (!tool->destructive && !toolEnabled(*tool)))
+  if (!toolEnabled(*tool))
     return ESP_ERR_NOT_SUPPORTED;
 
   if (std::strcmp(tool->name, "GetHubStatus") == 0) {
@@ -521,8 +527,7 @@ cJSON* McpService::jsonRpc(const HttpRuntime& runtime, const cJSON* request, boo
     result = cJSON_CreateObject();
     cJSON* items = cJSON_AddArrayToObject(result, "tools");
     for (const auto& tool : kTools) {
-      const bool confirmed_remove = std::strcmp(tool.name, "RemoveMatterDevice") == 0;
-      if (tool.available && ((!tool.destructive && toolEnabled(tool)) || confirmed_remove))
+      if (tool.available && toolEnabled(tool))
         cJSON_AddItemToArray(items, descriptor(tool));
     }
   } else if (std::strcmp(method->valuestring, "tools/call") == 0) {
