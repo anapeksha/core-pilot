@@ -118,6 +118,11 @@ public:
 
   static constexpr std::size_t kMaxThreadDatasetBytes = 254;
 
+  ~CoreMatter();
+  CoreMatter() = default;
+  CoreMatter(const CoreMatter&) = delete;
+  CoreMatter& operator=(const CoreMatter&) = delete;
+
   esp_err_t begin(const char* wifi_ssid, std::size_t wifi_ssid_length, const char* wifi_password,
                   std::size_t wifi_password_length, const std::uint8_t* thread_dataset = nullptr,
                   std::size_t thread_dataset_length = 0);
@@ -172,6 +177,10 @@ private:
     std::uint8_t dataset[kMaxThreadDatasetBytes];
   };
   static_assert(std::is_trivially_copyable_v<Command>);
+  struct QueueMessage final {
+    std::uint8_t slot;
+  };
+  static_assert(std::is_trivially_copyable_v<QueueMessage>);
 
   static void taskEntry(void* context);
   static void onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error);
@@ -179,6 +188,9 @@ private:
   esp_err_t startController();
   esp_err_t applyThreadDatasetOnOwner(const std::uint8_t* dataset, std::size_t length);
   void refreshThreadStatus();
+  esp_err_t enqueueCommand(const Command& command);
+  bool receiveCommand(Command& command, TickType_t timeout);
+  void clearSecrets();
   esp_err_t enqueueDeviceCommand(Command command, std::uint32_t& operation_id);
   bool finishCommand(std::uint32_t operation_id, CommandState state, esp_err_t error);
 
@@ -191,8 +203,10 @@ private:
   static constexpr UBaseType_t kQueueDepth = 8;
   static constexpr std::size_t kTerminalCommandDepth = 8;
   StaticQueue_t queue_storage_{};
-  std::uint8_t queue_buffer_[kQueueDepth * sizeof(Command)]{};
+  std::uint8_t queue_buffer_[kQueueDepth * sizeof(QueueMessage)]{};
   QueueHandle_t queue_{nullptr};
+  Command command_slots_[kQueueDepth]{};
+  bool command_slot_used_[kQueueDepth]{};
   TaskHandle_t task_{nullptr};
   portMUX_TYPE status_lock_ = portMUX_INITIALIZER_UNLOCKED;
   Status status_{

@@ -441,6 +441,64 @@ void matterEvent(const ChipDeviceEvent* event, intptr_t) {
 
 } // namespace
 
+CoreMatter::~CoreMatter() {
+  clearSecrets();
+  mbedtls_platform_zeroize(command_slots_, sizeof(command_slots_));
+  mbedtls_platform_zeroize(command_slot_used_, sizeof(command_slot_used_));
+  mbedtls_platform_zeroize(queue_buffer_, sizeof(queue_buffer_));
+}
+
+void CoreMatter::clearSecrets() {
+  mbedtls_platform_zeroize(wifi_ssid_, sizeof(wifi_ssid_));
+  mbedtls_platform_zeroize(wifi_password_, sizeof(wifi_password_));
+  mbedtls_platform_zeroize(thread_dataset_, sizeof(thread_dataset_));
+  wifi_ssid_length_ = 0;
+  wifi_password_length_ = 0;
+  thread_dataset_length_ = 0;
+}
+
+esp_err_t CoreMatter::enqueueCommand(const Command& command) {
+  if (queue_ == nullptr)
+    return ESP_ERR_INVALID_STATE;
+  std::size_t slot = kQueueDepth;
+  taskENTER_CRITICAL(&status_lock_);
+  for (std::size_t index = 0; index < kQueueDepth; ++index) {
+    if (!command_slot_used_[index]) {
+      command_slots_[index] = command;
+      command_slot_used_[index] = true;
+      slot = index;
+      break;
+    }
+  }
+  taskEXIT_CRITICAL(&status_lock_);
+  if (slot == kQueueDepth)
+    return ESP_ERR_TIMEOUT;
+  const QueueMessage message{static_cast<std::uint8_t>(slot)};
+  if (xQueueSend(queue_, &message, 0) == pdTRUE)
+    return ESP_OK;
+  taskENTER_CRITICAL(&status_lock_);
+  mbedtls_platform_zeroize(&command_slots_[slot], sizeof(command_slots_[slot]));
+  command_slot_used_[slot] = false;
+  taskEXIT_CRITICAL(&status_lock_);
+  return ESP_ERR_TIMEOUT;
+}
+
+bool CoreMatter::receiveCommand(Command& command, TickType_t timeout) {
+  QueueMessage message{};
+  if (xQueueReceive(queue_, &message, timeout) != pdTRUE || message.slot >= kQueueDepth)
+    return false;
+  taskENTER_CRITICAL(&status_lock_);
+  if (!command_slot_used_[message.slot]) {
+    taskEXIT_CRITICAL(&status_lock_);
+    return false;
+  }
+  command = command_slots_[message.slot];
+  mbedtls_platform_zeroize(&command_slots_[message.slot], sizeof(command_slots_[message.slot]));
+  command_slot_used_[message.slot] = false;
+  taskEXIT_CRITICAL(&status_lock_);
+  return true;
+}
+
 esp_err_t CoreMatter::begin(const char* wifi_ssid, std::size_t wifi_ssid_length,
                             const char* wifi_password, std::size_t wifi_password_length,
                             const std::uint8_t* thread_dataset, std::size_t thread_dataset_length) {
@@ -470,8 +528,9 @@ esp_err_t CoreMatter::begin(const char* wifi_ssid, std::size_t wifi_ssid_length,
 
   terminal_signal_ =
       xSemaphoreCreateCountingStatic(kTerminalCommandDepth, 0, &terminal_signal_storage_);
-  queue_ = xQueueCreateStatic(kQueueDepth, sizeof(Command), queue_buffer_, &queue_storage_);
+  queue_ = xQueueCreateStatic(kQueueDepth, sizeof(QueueMessage), queue_buffer_, &queue_storage_);
   if (terminal_signal_ == nullptr || queue_ == nullptr) {
+    clearSecrets();
     return ESP_ERR_NO_MEM;
   }
   taskENTER_CRITICAL(&status_lock_);
@@ -482,6 +541,7 @@ esp_err_t CoreMatter::begin(const char* wifi_ssid, std::size_t wifi_ssid_length,
     status_.state = State::failed;
     status_.last_error = ESP_ERR_NO_MEM;
     taskEXIT_CRITICAL(&status_lock_);
+    clearSecrets();
     return ESP_ERR_NO_MEM;
   }
   return ESP_OK;
@@ -535,7 +595,7 @@ esp_err_t CoreMatter::commission(CommissioningTransport transport, const char* s
   taskEXIT_CRITICAL(&status_lock_);
 
   std::memcpy(command.setup_payload, setup_payload, length + 1);
-  if (xQueueSend(queue_, &command, 0) != pdTRUE) {
+  if (enqueueCommand(command) != ESP_OK) {
     taskENTER_CRITICAL(&status_lock_);
     status_.commissioning_state = CommissioningState::failed;
     status_.last_error = ESP_ERR_TIMEOUT;
@@ -553,9 +613,9 @@ esp_err_t CoreMatter::applyThreadDataset(const std::uint8_t* dataset, std::size_
   Command command{.type = CommandType::apply_thread_dataset,
                   .dataset_length = static_cast<std::uint8_t>(length)};
   std::memcpy(command.dataset, dataset, length);
-  const bool queued = xQueueSend(queue_, &command, 0) == pdTRUE;
+  const esp_err_t result = enqueueCommand(command);
   mbedtls_platform_zeroize(&command, sizeof(command));
-  return queued ? ESP_OK : ESP_ERR_TIMEOUT;
+  return result;
 }
 
 esp_err_t CoreMatter::cancelCommissioning(std::uint32_t operation_id) {
@@ -572,7 +632,7 @@ esp_err_t CoreMatter::cancelCommissioning(std::uint32_t operation_id) {
     return ESP_ERR_INVALID_STATE;
   }
   const Command command{.type = CommandType::cancel_commissioning, .operation_id = operation_id};
-  return xQueueSend(queue_, &command, 0) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+  return enqueueCommand(command);
 }
 
 esp_err_t CoreMatter::enqueueDeviceCommand(Command command, std::uint32_t& operation_id) {
@@ -612,7 +672,7 @@ esp_err_t CoreMatter::enqueueDeviceCommand(Command command, std::uint32_t& opera
       ESP_OK};
   taskEXIT_CRITICAL(&status_lock_);
 
-  if (xQueueSend(queue_, &command, 0) != pdTRUE) {
+  if (enqueueCommand(command) != ESP_OK) {
     finishCommand(operation_id, CommandState::failed, ESP_ERR_TIMEOUT);
     operation_id = 0;
     return ESP_ERR_TIMEOUT;
@@ -695,7 +755,7 @@ esp_err_t CoreMatter::discoverEndpoints(std::uint64_t node_id) {
   taskEXIT_CRITICAL(&status_lock_);
   const Command command{
       .type = CommandType::discover_endpoints, .operation_id = operation_id, .node_id = node_id};
-  if (xQueueSend(queue_, &command, 0) != pdTRUE) {
+  if (enqueueCommand(command) != ESP_OK) {
     taskENTER_CRITICAL(&status_lock_);
     discovery_status_.active = false;
     discovery_status_.last_error = ESP_ERR_TIMEOUT;
@@ -710,7 +770,7 @@ esp_err_t CoreMatter::subscribeOnOff(std::uint64_t node_id) {
     return ESP_ERR_INVALID_ARG;
   }
   const Command command{.type = CommandType::subscribe_on_off, .node_id = node_id};
-  return xQueueSend(queue_, &command, 0) == pdTRUE ? ESP_OK : ESP_ERR_TIMEOUT;
+  return enqueueCommand(command);
 }
 
 CoreMatter::DiscoveryStatus CoreMatter::discoveryStatus() const {
@@ -904,6 +964,9 @@ void CoreMatter::run() {
   taskEXIT_CRITICAL(&status_lock_);
   if (startup_result != ESP_OK) {
     ESP_LOGE(kTag, "Matter owner startup failed: %s", esp_err_to_name(startup_result));
+    clearSecrets();
+    mbedtls_platform_zeroize(command_slots_, sizeof(command_slots_));
+    mbedtls_platform_zeroize(command_slot_used_, sizeof(command_slot_used_));
     task_ = nullptr;
     vTaskDelete(nullptr);
     return;
@@ -911,7 +974,8 @@ void CoreMatter::run() {
 
   Command command{};
   while (true) {
-    if (xQueueReceive(queue_, &command, pdMS_TO_TICKS(250)) != pdTRUE) {
+    mbedtls_platform_zeroize(&command, sizeof(command));
+    if (!receiveCommand(command, pdMS_TO_TICKS(250))) {
       refreshThreadStatus();
       if (commissioning_state.load() == CommissioningState::pase && active_node_id_ != 0 &&
           esp_timer_get_time() - commissioning_started_us.load() > kCommissioningTimeoutUs) {
@@ -1213,6 +1277,9 @@ void CoreMatter::run() {
       mbedtls_platform_zeroize(&command, sizeof(command));
     }
   }
+  mbedtls_platform_zeroize(&command, sizeof(command));
+  clearSecrets();
+  task_ = nullptr;
   vTaskDelete(nullptr);
 }
 
