@@ -485,7 +485,8 @@ esp_err_t systemHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   cJSON_AddStringToObject(response, "firmware_version", esp_app_get_description()->version);
   cJSON_AddNumberToObject(response, "reset_reason", esp_reset_reason());
   cJSON_AddStringToObject(response, "setup_ap",
-                          network.mode == CoreNetwork::Mode::setup_ap ? "enabled" : "disabled");
+                          network.mode == CoreNetwork::Mode::setup_ap ? network.setup_ssid
+                                                                      : "disabled");
   cJSON_AddStringToObject(response, "display", "ready");
   cJSON_AddStringToObject(response, "storage", "sd-card-encrypted");
   cJSON_AddStringToObject(response, "matter",
@@ -690,10 +691,14 @@ esp_err_t wifiScanPageHandler(httpd_req_t* request) {
 esp_err_t networkHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   const auto status = runtime.network.status();
   char address[IP4ADDR_STRLEN_MAX]{};
-  cJSON* response = cJSON_CreateObject();
   const bool station = status.mode == CoreNetwork::Mode::station;
-  cJSON_AddStringToObject(response, "mode", station ? "station" : "setup-ap");
-  cJSON_AddStringToObject(response, "setup_ssid", station ? "" : "CorePilot-Setup");
+  const bool setup = status.mode == CoreNetwork::Mode::setup_ap;
+  const bool has_station_address =
+      station && status.has_ipv4 &&
+      esp_ip4addr_ntoa(&status.ipv4, address, sizeof(address)) != nullptr;
+  cJSON* response = cJSON_CreateObject();
+  cJSON_AddStringToObject(response, "mode", station ? "station" : setup ? "setup-ap" : "stopped");
+  cJSON_AddStringToObject(response, "setup_ssid", setup ? status.setup_ssid : "");
   if (station && status.station_ssid[0] != '\0') {
     cJSON_AddStringToObject(response, "station_ssid", status.station_ssid);
   } else {
@@ -708,14 +713,16 @@ esp_err_t networkHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   } else {
     cJSON_AddNullToObject(response, "station_bssid");
   }
-  cJSON_AddStringToObject(response, "ipv4", status.has_ipv4 ? "ready" : "not-ready");
-  if (status.has_ipv4 && esp_ip4addr_ntoa(&status.ipv4, address, sizeof(address)) != nullptr) {
+  cJSON_AddStringToObject(response, "ipv4",
+                          setup                 ? "192.168.4.1"
+                          : has_station_address ? address
+                                                : "");
+  if (has_station_address)
     cJSON_AddStringToObject(response, "station_ipv4", address);
-  } else {
+  else
     cJSON_AddNullToObject(response, "station_ipv4");
-  }
   cJSON_AddStringToObject(response, "hostname", "corepilot.local");
-  cJSON_AddStringToObject(response, "dhcp", status.has_ipv4 ? "ready" : "not-ready");
+  cJSON_AddStringToObject(response, "dhcp", setup || has_station_address ? "ready" : "not-ready");
   cJSON_AddStringToObject(response, "http", "ready");
   cJSON_AddBoolToObject(response, "wan_enabled", false);
   cJSON_AddBoolToObject(response, "cloud_relay_enabled", false);
