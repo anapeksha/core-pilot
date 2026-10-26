@@ -138,7 +138,10 @@ core_security::Status loadWifi(core_security::StorageService& storage,
       saved.generation = metadata.generation;
       copyNetwork(saved.networks[0],
                   {legacy.ssid, legacy.ssid_len, legacy.password, legacy.password_len});
-      result = saveWifi(storage, random, saved);
+      // Migration is best-effort. A transient write failure must not discard a
+      // valid authenticated legacy profile or prevent the device from booting.
+      (void)saveWifi(storage, random, saved);
+      result = core_security::Status::Ok;
     }
   } else if (result == core_security::Status::Ok) {
     core_storage::WifiNetworks decoded{};

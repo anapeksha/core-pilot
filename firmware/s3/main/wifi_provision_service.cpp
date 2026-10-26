@@ -93,7 +93,7 @@ WifiProvisionService::SavedSnapshot WifiProvisionService::savedSnapshot() const 
   snapshot.count = saved_.count;
   for (std::size_t i = 0; i < saved_.count; ++i) {
     std::memcpy(snapshot.items[i].ssid, saved_.networks[i].ssid, saved_.networks[i].ssid_length);
-    snapshot.items[i].active = network.station_ssid[0] != '\0' &&
+    snapshot.items[i].active = network.has_ipv4 && network.station_ssid[0] != '\0' &&
                                std::strcmp(network.station_ssid, saved_.networks[i].ssid) == 0;
   }
   portEXIT_CRITICAL(&lock_);

@@ -56,7 +56,10 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
       return;
     wifi_ap_record_t records[kMaxScanResults]{};
     std::uint16_t count = kMaxScanResults;
-    const esp_err_t result = esp_wifi_scan_get_ap_records(&count, records);
+    esp_err_t result = esp_wifi_scan_get_ap_records(&count, records);
+    const Mode mode = self.status().mode;
+    if (result == ESP_OK && mode == Mode::setup_ap)
+      result = esp_wifi_set_mode(WIFI_MODE_AP);
     portENTER_CRITICAL(&self.lock_);
     self.scan_.last_error = result;
     self.scan_.count = result == ESP_OK ? count : 0;
@@ -375,8 +378,13 @@ esp_err_t CoreNetwork::requestScan() {
   scan_.count = 0;
   portEXIT_CRITICAL(&lock_);
 
-  const esp_err_t result = esp_wifi_scan_start(nullptr, false);
+  esp_err_t result = esp_wifi_scan_start(nullptr, false);
   if (result != ESP_OK) {
+    if (mode == Mode::setup_ap) {
+      const esp_err_t restore_result = esp_wifi_set_mode(WIFI_MODE_AP);
+      if (restore_result != ESP_OK)
+        result = restore_result;
+    }
     portENTER_CRITICAL(&lock_);
     scan_.state = ScanState::failed;
     scan_.last_error = result;
@@ -478,8 +486,19 @@ esp_err_t CoreNetwork::restoreSetupAp() {
   esp_err_t result = esp_wifi_set_config(WIFI_IF_STA, &cleared);
   if (result == ESP_OK)
     result = esp_wifi_set_mode(WIFI_MODE_AP);
-  if (result == ESP_OK)
-    set_mode_preserving_station(Mode::setup_ap);
+  if (result == ESP_OK) {
+    portENTER_CRITICAL(&lock_);
+    state_.mode = Mode::setup_ap;
+    state_.station_connected = false;
+    state_.has_ipv4 = false;
+    state_.ipv4 = {};
+    state_.station_ssid[0] = '\0';
+    state_.has_bssid = false;
+    std::memset(state_.station_bssid, 0, sizeof(state_.station_bssid));
+    state_.has_ipv6 = false;
+    state_.ipv6 = {};
+    portEXIT_CRITICAL(&lock_);
+  }
   return result;
 }
 
