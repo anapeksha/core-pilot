@@ -1,4 +1,5 @@
 import { authHeaders, clearAccess } from "./auth";
+import { MAX_OTA_IMAGE_BYTES } from "./ota-limits";
 import { z } from "zod";
 
 import { translateFirmwareError } from "~/lib/errorCodes";
@@ -481,7 +482,7 @@ export type McpInvokeRequest = {
   arguments_json: string;
 };
 
-export const MAX_OTA_IMAGE_BYTES = 3 * 1024 * 1024;
+export { MAX_OTA_IMAGE_BYTES };
 
 export type OtaPrepareRequest = {
   version: string;

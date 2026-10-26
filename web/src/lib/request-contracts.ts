@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-const MAX_OTA_IMAGE_BYTES = 3 * 1024 * 1024;
+import { MAX_OTA_IMAGE_BYTES } from "./ota-limits";
 
 export const entityLimits = {
   id: 48,
