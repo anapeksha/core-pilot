@@ -507,6 +507,7 @@ esp_err_t CoreMatter::commission(CommissioningTransport transport, const char* s
   if (transport == CommissioningTransport::thread) {
     if (thread_dataset_length_ == 0) {
       taskEXIT_CRITICAL(&status_lock_);
+      mbedtls_platform_zeroize(&command, sizeof(command));
       return ESP_ERR_INVALID_ARG;
     }
     command.dataset_length = thread_dataset_length_;
@@ -519,6 +520,7 @@ esp_err_t CoreMatter::commission(CommissioningTransport transport, const char* s
                     current_commissioning_state == CommissioningState::cancelling;
   if (!ready || busy) {
     taskEXIT_CRITICAL(&status_lock_);
+    mbedtls_platform_zeroize(&command, sizeof(command));
     return ESP_ERR_INVALID_STATE;
   }
   operation_id = next_operation_id_++;
@@ -538,6 +540,7 @@ esp_err_t CoreMatter::commission(CommissioningTransport transport, const char* s
     status_.commissioning_state = CommissioningState::failed;
     status_.last_error = ESP_ERR_TIMEOUT;
     taskEXIT_CRITICAL(&status_lock_);
+    mbedtls_platform_zeroize(&command, sizeof(command));
     return ESP_ERR_TIMEOUT;
   }
   mbedtls_platform_zeroize(&command, sizeof(command));

@@ -68,7 +68,7 @@ bool generateHexCredential(core_security::RandomSource& random, char (&credentia
     credential[i * 2] = hex[bytes[i] >> 4U];
     credential[i * 2 + 1] = hex[bytes[i] & 0x0fU];
   }
-  std::memset(bytes, 0, sizeof(bytes));
+  mbedtls_platform_zeroize(bytes, sizeof(bytes));
   return true;
 }
 
@@ -355,7 +355,7 @@ void Application::run() {
   showProgress(display, 100,
                matter_owner_started ? "Core Pilot ready" : "Ready; Matter requires service");
   showHome(display, network, setup_password);
-  std::memset(setup_password, 0, sizeof(setup_password));
+  mbedtls_platform_zeroize(setup_password, sizeof(setup_password));
   HttpAccessSnapshot access_snapshot{};
   core_security::BootstrapState displayed_access_state = core_security::BootstrapState::unavailable;
   if (snapshotHttpAccess(access_snapshot)) {

@@ -3,6 +3,7 @@
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "lwip/ip4_addr.h"
+#include "mbedtls/platform_util.h"
 #include "mdns.h"
 
 #include <cstring>
@@ -472,7 +473,7 @@ esp_err_t CoreNetwork::commitProfile() {
   const esp_err_t result = esp_wifi_set_mode(WIFI_MODE_STA);
   if (result == ESP_OK) {
     set_mode_preserving_station(Mode::station);
-    std::memset(setup_password_, 0, sizeof(setup_password_));
+    mbedtls_platform_zeroize(setup_password_, sizeof(setup_password_));
   }
   return result;
 }
@@ -543,7 +544,7 @@ void CoreNetwork::stop() {
     vEventGroupDelete(events_);
     events_ = nullptr;
   }
-  std::memset(setup_password_, 0, sizeof(setup_password_));
+  mbedtls_platform_zeroize(setup_password_, sizeof(setup_password_));
   set_mode(Mode::stopped);
 }
 
