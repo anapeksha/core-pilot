@@ -960,6 +960,28 @@ test("keeps every page within mobile and tablet viewports", async ({
   }
 });
 
+test("contains maximum-length room names within room cards", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  state.rooms = [{ id: `room-${"0".repeat(43)}`, name: "B".repeat(64) }];
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/#/rooms");
+
+  const title = page.getByRole("heading", { name: "B".repeat(64) });
+  const card = title.locator(
+    "xpath=ancestor::div[contains(@class, 'rounded-lg')][1]",
+  );
+  await expect(title).toBeVisible();
+  await expect(card.getByText("0 devices")).toBeVisible();
+  expect(
+    await card.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+});
+
 test("keeps confirmation actions visible on a short viewport", async ({
   page,
 }) => {

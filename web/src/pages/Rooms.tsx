@@ -219,8 +219,12 @@ export default function Rooms() {
                         <CardHeader>
                           <Flex class="flex-col items-start gap-2 sm:flex-row">
                             <div class="min-w-0 flex-1">
-                              <CardTitle>{room.name}</CardTitle>
-                              <CardDescription>{room.id}</CardDescription>
+                              <CardTitle class="[overflow-wrap:anywhere]">
+                                {room.name}
+                              </CardTitle>
+                              <CardDescription class="[overflow-wrap:anywhere]">
+                                {room.id}
+                              </CardDescription>
                             </div>
                             <StatusBadge
                               tone={
