@@ -44,10 +44,19 @@ public:
     bootloader_random_enable();
   }
   ~EarlyEntropy() {
-    bootloader_random_disable();
+    disable();
+  }
+  void disable() {
+    if (active_) {
+      bootloader_random_disable();
+      active_ = false;
+    }
   }
   EarlyEntropy(const EarlyEntropy&) = delete;
   EarlyEntropy& operator=(const EarlyEntropy&) = delete;
+
+private:
+  bool active_{true};
 };
 
 bool generateHexCredential(core_security::RandomSource& random, char (&credential)[17]) {
@@ -139,6 +148,7 @@ void Application::run() {
 
   static CoreDisplay display;
   ESP_ERROR_CHECK(display.begin());
+  EarlyEntropy startup_entropy;
   display.bootSplash();
   showProgress(display, 5, "Starting secure services");
   if (seed_result != core_security::Status::Ok) {
@@ -233,6 +243,7 @@ void Application::run() {
   static CoreNetwork network;
   showProgress(display, 50, "Joining local network");
   const esp_err_t network_result = network.begin(profile, setup_password);
+  startup_entropy.disable();
   ESP_LOGI(kTag, "network startup result=%s", esp_err_to_name(network_result));
   if (network_result != ESP_OK) {
     stopAtFatal(display,
