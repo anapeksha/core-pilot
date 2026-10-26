@@ -45,6 +45,44 @@ export function mockRouterApi(): Plugin {
     { ssid: "MockHome", connected: true },
     { ssid: "MockGuest", connected: false },
   ];
+  const nearbyWifiNetworks = [
+    {
+      id: "mock-home-aa-bb-cc-dd-ee-01",
+      ssid: "MockHome",
+      bssid: "aa:bb:cc:dd:ee:01",
+      connected: true,
+      signal_dbm: -42,
+      channel: 6,
+      secured: true,
+      auth: "wpa2",
+    },
+    {
+      id: "mock-guest-aa-bb-cc-dd-ee-02",
+      ssid: "MockGuest",
+      bssid: "aa:bb:cc:dd:ee:02",
+      connected: false,
+      signal_dbm: -61,
+      channel: 11,
+      secured: true,
+      auth: "wpa2",
+    },
+    {
+      id: "workshop-aa-bb-cc-dd-ee-03",
+      ssid: "Workshop-IoT",
+      bssid: "aa:bb:cc:dd:ee:03",
+      connected: false,
+      signal_dbm: -73,
+      channel: 1,
+      secured: false,
+      auth: "open",
+    },
+  ];
+  const wifiScanResponse = () => ({
+    networks: nearbyWifiNetworks,
+    scanning: false,
+    scan_state: "complete",
+    detail: `${nearbyWifiNetworks.length} nearby networks.`,
+  });
   const models: Record<ModelCollection, MockModel[]> & { nextId: number } = {
     rooms: [{ id: "living-room", name: "Living Room" }],
     groups: [],
@@ -140,6 +178,14 @@ export function mockRouterApi(): Plugin {
             networks: savedWifiNetworks,
             detail: `${savedWifiNetworks.length} saved networks.`,
           });
+          return;
+        }
+
+        if (
+          request.method === "GET" &&
+          url.pathname === "/api/v1/network/wifi/scan"
+        ) {
+          json(response, 200, wifiScanResponse());
           return;
         }
 
@@ -406,6 +452,17 @@ export function mockRouterApi(): Plugin {
               200,
               mutation("forgotten", `Mock saved network ${ssid} forgotten.`),
             );
+            return;
+          }
+          if (url.pathname === "/api/v1/network/wifi/scan") {
+            json(response, 200, wifiScanResponse());
+            return;
+          }
+          if (url.pathname === "/api/v1/network/wifi/scan/page") {
+            json(response, 200, {
+              ...wifiScanResponse(),
+              next_last_seen: null,
+            });
             return;
           }
           const detailByPath: Record<string, string> = {
