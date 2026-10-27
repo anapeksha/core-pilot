@@ -176,8 +176,17 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
       kTag, "permissions");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Cache-Control", "no-store"), kTag, "cache");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Connection", "close"), kTag, "connection");
-  return httpd_resp_send(request, reinterpret_cast<const char*>(dashboard_gzip_start),
-                         static_cast<ssize_t>(size));
+  constexpr std::size_t kDashboardChunkBytes = 4096;
+  std::size_t offset = 0;
+  while (offset < size) {
+    const std::size_t chunk = std::min(kDashboardChunkBytes, size - offset);
+    ESP_RETURN_ON_ERROR(
+        httpd_resp_send_chunk(request, reinterpret_cast<const char*>(dashboard_gzip_start + offset),
+                              chunk),
+        kTag, "dashboard chunk");
+    offset += chunk;
+  }
+  return httpd_resp_send_chunk(request, nullptr, 0);
 }
 
 esp_err_t healthHandler(httpd_req_t* request) {
@@ -852,7 +861,8 @@ esp_err_t startTimeService(const char* host, int offset_minutes) {
   esp_netif_sntp_deinit();
   last_time_sync.store(0);
   pending_time_sync.store(0);
-  esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(host);
+  esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG_MULTIPLE(
+      3, ESP_SNTP_SERVER_LIST(host, "time.google.com", "pool.ntp.org"));
   config.sync_cb = onTimeSync;
   return esp_netif_sntp_init(&config);
 }
@@ -2502,6 +2512,7 @@ void publishRtcReady(bool ready) {
 httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.max_open_sockets = kMaxHttpConnections;
+  config.max_resp_headers = 12;
   config.max_uri_handlers = 64;
   config.uri_match_fn = httpd_uri_match_wildcard;
   config.lru_purge_enable = true;
