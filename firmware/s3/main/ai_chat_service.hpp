@@ -12,6 +12,8 @@
 
 namespace core_pilot {
 
+struct HttpRuntime;
+
 class AiChatService final {
 public:
   static constexpr std::size_t kMaxMessageBytes = 4096;
@@ -62,10 +64,9 @@ public:
     bool allow_actions{};
   };
 
-  // Reserved transport-neutral shape. Tool execution is intentionally not implemented yet.
   struct Action final {
-    char name[65]{};
-    char arguments[513]{};
+    char tool[65]{};
+    char result_json[2049]{};
   };
 
   struct Snapshot final {
@@ -87,6 +88,10 @@ public:
   // task stack are allocated lazily by the first valid submit.
   esp_err_t start();
 
+  // Binds the service to the application runtime without taking ownership. The runtime must
+  // outlive this service and must be bound before action-enabled requests are submitted.
+  void bindRuntime(const HttpRuntime& runtime);
+
   // Never waits for the network or for a lock. The request is copied before this returns.
   SubmitResult submit(const Request& input, std::uint64_t& operation_id);
 
@@ -107,6 +112,7 @@ private:
   void process(std::uint64_t operation_id);
 
   ai::AiStorageService& storage_;
+  const HttpRuntime* http_runtime_{};
   mutable StaticSemaphore_t mutex_storage_{};
   mutable SemaphoreHandle_t mutex_{};
   StaticQueue_t queue_storage_{};

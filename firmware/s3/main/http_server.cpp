@@ -2157,8 +2157,11 @@ const char* aiChatState(AiChatService::State state) {
 
 esp_err_t sendAiChatStatus(httpd_req_t* request, HttpRuntime& runtime) {
   RequestBody reply(AiChatService::kMaxResponseBytes + 1);
-  AiChatService::Snapshot snapshot{};
-  if (!reply || !runtime.ai_chat.status(snapshot, reply.data(), reply.capacity())) {
+  auto* snapshot = static_cast<AiChatService::Snapshot*>(
+      heap_caps_calloc(1, sizeof(AiChatService::Snapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (!reply || snapshot == nullptr ||
+      !runtime.ai_chat.status(*snapshot, reply.data(), reply.capacity())) {
+    heap_caps_free(snapshot);
     httpd_resp_set_status(request, "503 Service Unavailable");
     cJSON* response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "accepted", false);
@@ -2168,13 +2171,21 @@ esp_err_t sendAiChatStatus(httpd_req_t* request, HttpRuntime& runtime) {
     return sendJson(request, response);
   }
   cJSON* response = cJSON_CreateObject();
-  cJSON_AddBoolToObject(response, "accepted", snapshot.state != AiChatService::State::failed);
-  cJSON_AddStringToObject(response, "status", aiChatState(snapshot.state));
+  cJSON_AddBoolToObject(response, "accepted", snapshot->state != AiChatService::State::failed);
+  cJSON_AddStringToObject(response, "status", aiChatState(snapshot->state));
   cJSON_AddStringToObject(response, "reply",
-                          snapshot.state == AiChatService::State::complete ? reply.data()
-                          : snapshot.state == AiChatService::State::failed ? snapshot.error_detail
-                                                                           : "");
-  cJSON_AddArrayToObject(response, "actions");
+                          snapshot->state == AiChatService::State::complete ? reply.data()
+                          : snapshot->state == AiChatService::State::failed ? snapshot->error_detail
+                                                                            : "");
+  cJSON* actions = cJSON_AddArrayToObject(response, "actions");
+  for (std::size_t index = 0; index < snapshot->action_count; ++index) {
+    cJSON* action = cJSON_CreateObject();
+    cJSON_AddStringToObject(action, "tool", snapshot->actions[index].tool);
+    cJSON_AddStringToObject(action, "result_json", snapshot->actions[index].result_json);
+    cJSON_AddItemToArray(actions, action);
+  }
+  mbedtls_platform_zeroize(snapshot, sizeof(*snapshot));
+  heap_caps_free(snapshot);
   return sendJson(request, response);
 }
 

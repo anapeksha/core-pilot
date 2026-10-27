@@ -1,10 +1,13 @@
 #include "ai_chat_service.hpp"
 
 #include "cJSON.h"
+#include "core_domain.hpp"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
+#include "http_server.hpp"
 #include "mbedtls/platform_util.h"
+#include "mcp_service.hpp"
 
 #include <cerrno>
 #include <cstdio>
@@ -17,6 +20,10 @@ constexpr std::size_t kRequestJsonBytes = std::size_t{256} * 1024;
 constexpr std::size_t kResponseJsonBytes = std::size_t{64} * 1024;
 constexpr std::size_t kEndpointBytes = ai::kMaxProviderUrlBytes + 32;
 constexpr int kHttpBufferBytes = 2048;
+constexpr std::size_t kMaxToolNameBytes = 64;
+constexpr std::size_t kMaxToolArgumentsBytes = 4096;
+
+constexpr std::uint8_t kMaxIdenticalCalls = 3;
 
 class Lock final {
 public:
@@ -170,6 +177,62 @@ bool add_message(cJSON* messages, const char* role, const char* content,
   return true;
 }
 
+bool print_bounded(const cJSON* value, char* output, std::size_t capacity) {
+  return value != nullptr && output != nullptr && capacity > 1 &&
+         cJSON_PrintPreallocated(const_cast<cJSON*>(value), output, static_cast<int>(capacity),
+                                 false);
+}
+
+cJSON* provider_tools(ai::ProviderBackend backend) {
+  cJSON* registry = McpService::tools();
+  const cJSON* tools =
+      registry == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(registry, "tools");
+  cJSON* result = cJSON_CreateArray();
+  const int count = cJSON_IsArray(tools) ? cJSON_GetArraySize(tools) : 0;
+  for (int index = 0; result != nullptr && index < count; ++index) {
+    const cJSON* descriptor = cJSON_GetArrayItem(tools, index);
+    const cJSON* enabled = cJSON_GetObjectItemCaseSensitive(descriptor, "enabled");
+    const cJSON* available = cJSON_GetObjectItemCaseSensitive(descriptor, "available");
+    const cJSON* name = cJSON_GetObjectItemCaseSensitive(descriptor, "name");
+    const cJSON* description = cJSON_GetObjectItemCaseSensitive(descriptor, "description");
+    const cJSON* schema = cJSON_GetObjectItemCaseSensitive(descriptor, "inputSchema");
+    if (!cJSON_IsTrue(enabled) || !cJSON_IsTrue(available) || !cJSON_IsString(name) ||
+        std::strlen(name->valuestring) > kMaxToolNameBytes || !cJSON_IsObject(schema))
+      continue;
+    cJSON* item = cJSON_CreateObject();
+    cJSON* schema_copy = cJSON_Duplicate(schema, true);
+    if (item == nullptr || schema_copy == nullptr) {
+      cJSON_Delete(item);
+      cJSON_Delete(schema_copy);
+      cJSON_Delete(result);
+      result = nullptr;
+      break;
+    }
+    if (backend == ai::ProviderBackend::OpenAiCompatible) {
+      cJSON_AddStringToObject(item, "type", "function");
+      cJSON* function = cJSON_AddObjectToObject(item, "function");
+      cJSON_AddStringToObject(function, "name", name->valuestring);
+      if (cJSON_IsString(description))
+        cJSON_AddStringToObject(function, "description", description->valuestring);
+      cJSON_AddItemToObject(function, "parameters", schema_copy);
+    } else {
+      cJSON_AddStringToObject(item, "name", name->valuestring);
+      if (cJSON_IsString(description))
+        cJSON_AddStringToObject(item, "description", description->valuestring);
+      cJSON_AddItemToObject(item, "input_schema", schema_copy);
+    }
+    cJSON_AddItemToArray(result, item);
+  }
+  cJSON_Delete(registry);
+  return result;
+}
+
+bool same_call(const char* left_tool, const char* left_arguments, const char* right_tool,
+               const char* right_arguments) {
+  return std::strcmp(left_tool, right_tool) == 0 &&
+         std::strcmp(left_arguments, right_arguments) == 0;
+}
+
 } // namespace
 
 struct AiChatService::RequestSlot final {
@@ -188,6 +251,9 @@ struct AiChatService::RequestSlot final {
 
 struct AiChatService::Runtime final {
   Snapshot snapshot{};
+  Snapshot work{};
+  char prior_tools[kMaxActions][kMaxToolNameBytes + 1]{};
+  char prior_arguments[kMaxActions][kMaxToolArgumentsBytes + 1]{};
   char result[kMaxResponseBytes + 1]{};
   char endpoint[kEndpointBytes]{};
   char request_json[kRequestJsonBytes]{};
@@ -215,6 +281,10 @@ AiChatService::~AiChatService() {
     vQueueDelete(queue_);
   if (mutex_ != nullptr)
     vSemaphoreDelete(mutex_);
+}
+
+void AiChatService::bindRuntime(const HttpRuntime& runtime) {
+  http_runtime_ = &runtime;
 }
 
 esp_err_t AiChatService::start() {
@@ -347,12 +417,14 @@ void AiChatService::taskLoop() {
 }
 
 void AiChatService::process(std::uint64_t operation_id) {
-  Snapshot result{};
+  mbedtls_platform_zeroize(&runtime_->work, sizeof runtime_->work);
+  mbedtls_platform_zeroize(runtime_->prior_tools, sizeof runtime_->prior_tools);
+  mbedtls_platform_zeroize(runtime_->prior_arguments, sizeof runtime_->prior_arguments);
+  Snapshot& result = runtime_->work;
   result.state = State::failed;
   result.operation_id = operation_id;
-  // The answer lives in the PSRAM result slot; the processing snapshot always reports length zero,
-  // so status() will not expose it until publication.
   char* const answer = runtime_->result;
+  answer[0] = '\0';
 
   ai::ProviderConfig provider{};
   struct ProviderWipe final {
@@ -361,192 +433,395 @@ void AiChatService::process(std::uint64_t operation_id) {
       ai::clear_provider_config(value);
     }
   } provider_wipe{provider};
-  if (storage_.provider.load(provider) != ai::Status::Ok) {
-    set_failure(result, Error::not_configured, "provider configuration unavailable");
-    goto publish;
-  }
-  if (!safe_https_base_url(provider.base_url)) {
-    set_failure(result, Error::unsafe_url, "provider URL must use an allowed HTTPS host");
-    goto publish;
-  }
 
-  {
+  cJSON* request_root = nullptr;
+  const char* failure_detail = nullptr;
+  Error failure_error = Error::internal;
+  std::size_t prior_count = 0;
+
+  do {
+    if (storage_.provider.load(provider) != ai::Status::Ok) {
+      failure_error = Error::not_configured;
+      failure_detail = "provider configuration unavailable";
+      break;
+    }
+    if (!safe_https_base_url(provider.base_url)) {
+      failure_error = Error::unsafe_url;
+      failure_detail = "provider URL must use an allowed HTTPS host";
+      break;
+    }
+    if (request_->allow_actions && http_runtime_ == nullptr) {
+      failure_error = Error::actions_unsupported;
+      failure_detail = "AI actions require a bound HTTP runtime";
+      break;
+    }
+
     const char* suffix = provider.backend == ai::ProviderBackend::OpenAiCompatible
                              ? "/chat/completions"
                              : "/messages";
     const std::size_t base_length = std::strlen(provider.base_url);
     const bool trailing_slash = base_length != 0 && provider.base_url[base_length - 1] == '/';
-    const int written = std::snprintf(runtime_->endpoint, sizeof runtime_->endpoint, "%s%s",
-                                      provider.base_url, trailing_slash ? suffix + 1 : suffix);
-    if (written <= 0 || static_cast<std::size_t>(written) >= sizeof runtime_->endpoint) {
-      set_failure(result, Error::invalid_provider, "provider endpoint is too long");
-      goto publish;
+    const int endpoint_length =
+        std::snprintf(runtime_->endpoint, sizeof runtime_->endpoint, "%s%s", provider.base_url,
+                      trailing_slash ? suffix + 1 : suffix);
+    if (endpoint_length <= 0 ||
+        static_cast<std::size_t>(endpoint_length) >= sizeof runtime_->endpoint) {
+      failure_error = Error::invalid_provider;
+      failure_detail = "provider endpoint is too long";
+      break;
     }
-  }
 
-  {
-    cJSON* root = cJSON_CreateObject();
+    request_root = cJSON_CreateObject();
     cJSON* messages = cJSON_CreateArray();
-    bool valid = root != nullptr && messages != nullptr;
-    if (valid) {
-      cJSON_AddStringToObject(root, "model", provider.model);
-      cJSON_AddNumberToObject(root, "max_tokens", provider.max_output_tokens);
-      if (provider.has_temperature)
-        cJSON_AddNumberToObject(root, "temperature", provider.temperature);
-      cJSON_AddItemToObject(root, "messages", messages);
-      for (std::size_t index = 0; valid && index < request_->history_count; ++index) {
-        const char* role = role_name(request_->history[index].role);
-        // Anthropic has no plain "tool" message role without a tool_use id. Treat caller-supplied
-        // tool context as user context; no action is advertised or considered executed.
-        if (provider.backend == ai::ProviderBackend::AnthropicCompatible &&
-            request_->history[index].role == Role::tool)
-          role = "user";
-        valid = add_message(messages, role, request_->history[index].content,
-                            request_->history[index].length);
+    bool valid =
+        request_root != nullptr && messages != nullptr &&
+        cJSON_AddStringToObject(request_root, "model", provider.model) != nullptr &&
+        cJSON_AddNumberToObject(request_root, "max_tokens", provider.max_output_tokens) != nullptr;
+    if (valid && provider.has_temperature)
+      valid = cJSON_AddNumberToObject(request_root, "temperature", provider.temperature) != nullptr;
+    if (valid)
+      cJSON_AddItemToObject(request_root, "messages", messages);
+    else
+      cJSON_Delete(messages);
+    if (valid && request_->allow_actions) {
+      cJSON* context = McpService::context(*http_runtime_);
+      const cJSON* system_prompt =
+          context == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(context, "system_prompt");
+      const cJSON* context_json =
+          context == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(context, "context_json");
+      char system[512]{};
+      const int system_length =
+          cJSON_IsString(system_prompt) && cJSON_IsString(context_json)
+              ? std::snprintf(system, sizeof system, "%s Current local context: %s",
+                              system_prompt->valuestring, context_json->valuestring)
+              : -1;
+      valid = system_length > 0 && static_cast<std::size_t>(system_length) < sizeof system;
+      if (valid && provider.backend == ai::ProviderBackend::OpenAiCompatible)
+        valid = add_message(messages, "system", system, static_cast<std::size_t>(system_length));
+      else if (valid)
+        valid = cJSON_AddStringToObject(request_root, "system", system) != nullptr;
+      mbedtls_platform_zeroize(system, sizeof system);
+      cJSON_Delete(context);
+    }
+    for (std::size_t index = 0; valid && index < request_->history_count; ++index) {
+      const char* role = role_name(request_->history[index].role);
+      if (provider.backend == ai::ProviderBackend::AnthropicCompatible &&
+          request_->history[index].role == Role::tool)
+        role = "user";
+      valid = add_message(messages, role, request_->history[index].content,
+                          request_->history[index].length);
+    }
+    valid = valid && add_message(messages, "user", request_->message, request_->message_length);
+    if (valid && request_->allow_actions) {
+      cJSON* tools = provider_tools(provider.backend);
+      valid = tools != nullptr;
+      if (valid && cJSON_GetArraySize(tools) != 0)
+        cJSON_AddItemToObject(request_root, "tools", tools);
+      else
+        cJSON_Delete(tools);
+    }
+    if (!valid) {
+      failure_error = Error::json_encode;
+      failure_detail = "provider request allocation failed";
+      break;
+    }
+
+    bool complete = false;
+    for (std::uint8_t round = 0; round <= core_domain::max_ai_tool_rounds && !complete; ++round) {
+      mbedtls_platform_zeroize(runtime_->request_json, sizeof runtime_->request_json);
+      mbedtls_platform_zeroize(runtime_->response_json, sizeof runtime_->response_json);
+      if (!print_bounded(request_root, runtime_->request_json, sizeof runtime_->request_json)) {
+        failure_error = Error::json_encode;
+        failure_detail = "request JSON exceeds the bounded workspace";
+        break;
       }
-      valid = valid && add_message(messages, "user", request_->message, request_->message_length);
-    }
-    const bool encoded =
-        valid && cJSON_PrintPreallocated(root, runtime_->request_json,
-                                         static_cast<int>(sizeof runtime_->request_json), false);
-    cJSON_Delete(root);
-    if (!encoded) {
-      set_failure(result, Error::json_encode, "request JSON exceeds the bounded workspace");
-      goto publish;
-    }
-  }
 
-  {
-    char auth_header[sizeof("Bearer ") + ai::kMaxApiKeyBytes]{};
-    struct AuthWipe final {
-      char* value;
-      std::size_t size;
-      ~AuthWipe() {
-        mbedtls_platform_zeroize(value, size);
+      char auth_header[sizeof("Bearer ") + ai::kMaxApiKeyBytes]{};
+      bool key_valid = provider.api_key_length <= ai::kMaxApiKeyBytes;
+      for (std::size_t index = 0; key_valid && index < provider.api_key_length; ++index)
+        key_valid = provider.api_key[index] > 0x20 && provider.api_key[index] != 0x7f;
+      if (!key_valid ||
+          (provider.auth_type != ai::AuthType::None && provider.api_key_length == 0)) {
+        mbedtls_platform_zeroize(auth_header, sizeof auth_header);
+        failure_error = Error::invalid_provider;
+        failure_detail = "provider authentication is invalid";
+        break;
       }
-    } auth_wipe{auth_header, sizeof auth_header};
-    bool key_valid = provider.api_key_length <= ai::kMaxApiKeyBytes;
-    for (std::size_t index = 0; key_valid && index < provider.api_key_length; ++index)
-      key_valid = provider.api_key[index] > 0x20 && provider.api_key[index] != 0x7f;
-    if (!key_valid || (provider.auth_type != ai::AuthType::None && provider.api_key_length == 0)) {
-      set_failure(result, Error::invalid_provider, "provider authentication is invalid");
-      goto publish;
-    }
+      HttpAccumulator accumulator{runtime_->response_json, sizeof runtime_->response_json, 0,
+                                  false};
+      esp_http_client_config_t config{};
+      config.url = runtime_->endpoint;
+      config.event_handler = http_event;
+      config.user_data = &accumulator;
+      config.timeout_ms = static_cast<int>(provider.timeout_ms);
+      config.buffer_size = kHttpBufferBytes;
+      config.buffer_size_tx = kHttpBufferBytes;
+      config.disable_auto_redirect = true;
+      config.transport_type = HTTP_TRANSPORT_OVER_SSL;
+      config.skip_cert_common_name_check = false;
+      config.crt_bundle_attach = esp_crt_bundle_attach;
+      esp_http_client_handle_t client = esp_http_client_init(&config);
+      if (client == nullptr) {
+        mbedtls_platform_zeroize(auth_header, sizeof auth_header);
+        failure_error = Error::internal;
+        failure_detail = "HTTP client allocation failed";
+        break;
+      }
+      esp_http_client_set_method(client, HTTP_METHOD_POST);
+      esp_http_client_set_header(client, "Content-Type", "application/json");
+      if (provider.auth_type == ai::AuthType::Bearer) {
+        std::memcpy(auth_header, "Bearer ", 7);
+        std::memcpy(auth_header + 7, provider.api_key, provider.api_key_length);
+        esp_http_client_set_header(client, "Authorization", auth_header);
+      } else if (provider.auth_type == ai::AuthType::ApiKey) {
+        std::memcpy(auth_header, provider.api_key, provider.api_key_length);
+        esp_http_client_set_header(client, "x-api-key", auth_header);
+      }
+      if (provider.backend == ai::ProviderBackend::AnthropicCompatible)
+        esp_http_client_set_header(client, "anthropic-version", "2023-06-01");
+      esp_http_client_set_post_field(client, runtime_->request_json,
+                                     static_cast<int>(std::strlen(runtime_->request_json)));
+      const esp_err_t performed = esp_http_client_perform(client);
+      const int status_code = esp_http_client_get_status_code(client);
+      const int socket_errno = esp_http_client_get_errno(client);
+      esp_http_client_cleanup(client);
+      mbedtls_platform_zeroize(auth_header, sizeof auth_header);
+      if (accumulator.overflow) {
+        failure_error = Error::response_too_large;
+        failure_detail = "provider response exceeds the transport limit";
+        break;
+      }
+      if (performed != ESP_OK) {
+        failure_error = socket_errno == ETIMEDOUT ? Error::timeout : Error::network;
+        failure_detail =
+            socket_errno == ETIMEDOUT ? "provider request timed out" : "provider connection failed";
+        break;
+      }
+      if (status_code < 200 || status_code >= 300) {
+        failure_error = Error::http_status;
+        failure_detail = "provider returned a non-success HTTP status";
+        break;
+      }
 
-    HttpAccumulator accumulator{runtime_->response_json, sizeof runtime_->response_json, 0, false};
-    esp_http_client_config_t config{};
-    config.url = runtime_->endpoint;
-    config.event_handler = http_event;
-    config.user_data = &accumulator;
-    config.timeout_ms = static_cast<int>(provider.timeout_ms);
-    config.buffer_size = kHttpBufferBytes;
-    config.buffer_size_tx = kHttpBufferBytes;
-    config.disable_auto_redirect = true;
-    config.transport_type = HTTP_TRANSPORT_OVER_SSL;
-    config.skip_cert_common_name_check = false;
-    config.crt_bundle_attach = esp_crt_bundle_attach;
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (client == nullptr) {
-      set_failure(result, Error::internal, "HTTP client allocation failed");
-      goto publish;
-    }
-    esp_http_client_set_method(client, HTTP_METHOD_POST);
-    esp_http_client_set_header(client, "Content-Type", "application/json");
-    if (provider.auth_type == ai::AuthType::Bearer) {
-      std::memcpy(auth_header, "Bearer ", 7);
-      std::memcpy(auth_header + 7, provider.api_key, provider.api_key_length);
-      auth_header[7 + provider.api_key_length] = '\0';
-      esp_http_client_set_header(client, "Authorization", auth_header);
-    } else if (provider.auth_type == ai::AuthType::ApiKey) {
-      std::memcpy(auth_header, provider.api_key, provider.api_key_length);
-      auth_header[provider.api_key_length] = '\0';
-      esp_http_client_set_header(client, "x-api-key", auth_header);
-    }
-    if (provider.backend == ai::ProviderBackend::AnthropicCompatible)
-      esp_http_client_set_header(client, "anthropic-version", "2023-06-01");
-    esp_http_client_set_post_field(client, runtime_->request_json,
-                                   static_cast<int>(std::strlen(runtime_->request_json)));
-    const esp_err_t performed = esp_http_client_perform(client);
-    const int status_code = esp_http_client_get_status_code(client);
-    const int socket_errno = esp_http_client_get_errno(client);
-    esp_http_client_cleanup(client);
-    mbedtls_platform_zeroize(auth_header, sizeof auth_header);
-    if (accumulator.overflow) {
-      set_failure(result, Error::response_too_large,
-                  "provider response exceeds the transport limit");
-      goto publish;
-    }
-    if (performed != ESP_OK) {
-      set_failure(result, socket_errno == ETIMEDOUT ? Error::timeout : Error::network,
-                  socket_errno == ETIMEDOUT ? "provider request timed out"
-                                            : "provider connection failed");
-      goto publish;
-    }
-    if (status_code < 200 || status_code >= 300) {
-      set_failure(result, Error::http_status, "provider returned a non-success HTTP status");
-      goto publish;
-    }
-  }
+      cJSON* response = cJSON_ParseWithLength(runtime_->response_json, accumulator.length);
+      if (response == nullptr) {
+        failure_error = Error::invalid_response;
+        failure_detail = "provider returned invalid JSON";
+        break;
+      }
+      const cJSON* assistant_message = nullptr;
+      const cJSON* content = nullptr;
+      const cJSON* calls = nullptr;
+      if (provider.backend == ai::ProviderBackend::OpenAiCompatible) {
+        const cJSON* choices = cJSON_GetObjectItemCaseSensitive(response, "choices");
+        const cJSON* choice = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : nullptr;
+        assistant_message = cJSON_GetObjectItemCaseSensitive(choice, "message");
+        content = cJSON_GetObjectItemCaseSensitive(assistant_message, "content");
+        calls = cJSON_GetObjectItemCaseSensitive(assistant_message, "tool_calls");
+      } else {
+        content = cJSON_GetObjectItemCaseSensitive(response, "content");
+        calls = content;
+      }
 
-  {
-    cJSON* root =
-        cJSON_ParseWithLength(runtime_->response_json, std::strlen(runtime_->response_json));
-    std::size_t answer_length = 0;
-    if (root != nullptr && provider.backend == ai::ProviderBackend::OpenAiCompatible) {
-      const cJSON* choices = cJSON_GetObjectItemCaseSensitive(root, "choices");
-      const cJSON* choice = cJSON_IsArray(choices) ? cJSON_GetArrayItem(choices, 0) : nullptr;
-      const cJSON* message = cJSON_GetObjectItemCaseSensitive(choice, "message");
-      const cJSON* content = cJSON_GetObjectItemCaseSensitive(message, "content");
-      if (cJSON_IsString(content) && content->valuestring != nullptr)
-        answer_length = std::strlen(content->valuestring);
-      if (answer_length <= kMaxResponseBytes && answer_length != 0)
-        std::memcpy(answer, content->valuestring, answer_length);
-    } else if (root != nullptr) {
-      const cJSON* content = cJSON_GetObjectItemCaseSensitive(root, "content");
-      const int count = cJSON_IsArray(content) ? cJSON_GetArraySize(content) : 0;
-      for (int index = 0; index < count; ++index) {
-        const cJSON* block = cJSON_GetArrayItem(content, index);
-        const cJSON* type = cJSON_GetObjectItemCaseSensitive(block, "type");
-        const cJSON* text = cJSON_GetObjectItemCaseSensitive(block, "text");
-        if (!cJSON_IsString(type) || std::strcmp(type->valuestring, "text") != 0 ||
-            !cJSON_IsString(text) || text->valuestring == nullptr)
-          continue;
-        const std::size_t length = std::strlen(text->valuestring);
-        if (length > kMaxResponseBytes - answer_length) {
-          answer_length = kMaxResponseBytes + 1;
+      int call_count = 0;
+      if (request_->allow_actions && cJSON_IsArray(calls)) {
+        const int candidate_count = cJSON_GetArraySize(calls);
+        for (int index = 0; index < candidate_count; ++index) {
+          const cJSON* call = cJSON_GetArrayItem(calls, index);
+          const cJSON* type = cJSON_GetObjectItemCaseSensitive(call, "type");
+          if (provider.backend == ai::ProviderBackend::OpenAiCompatible ||
+              (cJSON_IsString(type) && std::strcmp(type->valuestring, "tool_use") == 0))
+            ++call_count;
+        }
+      }
+      if (call_count == 0) {
+        std::size_t answer_length = 0;
+        if (provider.backend == ai::ProviderBackend::OpenAiCompatible && cJSON_IsString(content)) {
+          answer_length = std::strlen(content->valuestring);
+          if (answer_length <= kMaxResponseBytes)
+            std::memcpy(answer, content->valuestring, answer_length);
+        } else if (provider.backend == ai::ProviderBackend::AnthropicCompatible &&
+                   cJSON_IsArray(content)) {
+          const int blocks = cJSON_GetArraySize(content);
+          for (int index = 0; index < blocks; ++index) {
+            const cJSON* block = cJSON_GetArrayItem(content, index);
+            const cJSON* type = cJSON_GetObjectItemCaseSensitive(block, "type");
+            const cJSON* text = cJSON_GetObjectItemCaseSensitive(block, "text");
+            if (!cJSON_IsString(type) || std::strcmp(type->valuestring, "text") != 0 ||
+                !cJSON_IsString(text))
+              continue;
+            const std::size_t length = std::strlen(text->valuestring);
+            if (length > kMaxResponseBytes - answer_length) {
+              answer_length = kMaxResponseBytes + 1;
+              break;
+            }
+            std::memcpy(answer + answer_length, text->valuestring, length);
+            answer_length += length;
+          }
+        }
+        cJSON_Delete(response);
+        if (answer_length > kMaxResponseBytes) {
+          failure_error = Error::response_too_large;
+          failure_detail = "assistant response exceeds 16 KiB";
           break;
         }
-        std::memcpy(answer + answer_length, text->valuestring, length);
-        answer_length += length;
+        if (answer_length == 0) {
+          failure_error = Error::invalid_response;
+          failure_detail = "provider response contains no assistant text";
+          break;
+        }
+        answer[answer_length] = '\0';
+        result.state = State::complete;
+        result.error = Error::none;
+        result.response_length = answer_length;
+        complete = true;
+        continue;
       }
-    }
-    cJSON_Delete(root);
-    if (answer_length > kMaxResponseBytes) {
-      set_failure(result, Error::response_too_large, "assistant response exceeds 16 KiB");
-      goto publish;
-    }
-    if (answer_length == 0) {
-      set_failure(result, Error::invalid_response, "provider response contains no assistant text");
-      goto publish;
-    }
-    answer[answer_length] = '\0';
-    result.state = State::complete;
-    result.error = Error::none;
-    if (request_->allow_actions)
-      std::snprintf(result.error_detail, sizeof result.error_detail, "%s",
-                    "actions unsupported; none executed");
-    result.response_length = answer_length;
-    result.action_count = 0;
-  }
+      if (round >= core_domain::max_ai_tool_rounds) {
+        cJSON_Delete(response);
+        failure_error = Error::actions_unsupported;
+        failure_detail = "AI tool round limit exceeded";
+        break;
+      }
+      if (call_count > static_cast<int>(kMaxActions - result.action_count)) {
+        cJSON_Delete(response);
+        failure_error = Error::actions_unsupported;
+        failure_detail = "AI action limit exceeded";
+        break;
+      }
 
-publish: {
-  Lock lock(mutex_);
-  if (!lock.held() || runtime_->snapshot.operation_id != operation_id)
-    return;
+      cJSON* continuation_messages = cJSON_GetObjectItemCaseSensitive(request_root, "messages");
+      cJSON* anthropic_results = provider.backend == ai::ProviderBackend::AnthropicCompatible
+                                     ? cJSON_CreateArray()
+                                     : nullptr;
+      if (provider.backend == ai::ProviderBackend::OpenAiCompatible)
+        cJSON_AddItemToArray(continuation_messages, cJSON_Duplicate(assistant_message, true));
+      else {
+        cJSON* assistant = cJSON_CreateObject();
+        cJSON_AddStringToObject(assistant, "role", "assistant");
+        cJSON_AddItemToObject(assistant, "content", cJSON_Duplicate(content, true));
+        cJSON_AddItemToArray(continuation_messages, assistant);
+      }
+
+      bool calls_valid =
+          anthropic_results != nullptr || provider.backend == ai::ProviderBackend::OpenAiCompatible;
+      const int candidate_count = cJSON_GetArraySize(calls);
+      for (int index = 0; calls_valid && index < candidate_count; ++index) {
+        const cJSON* call = cJSON_GetArrayItem(calls, index);
+        const cJSON* type = cJSON_GetObjectItemCaseSensitive(call, "type");
+        if (provider.backend == ai::ProviderBackend::AnthropicCompatible &&
+            (!cJSON_IsString(type) || std::strcmp(type->valuestring, "tool_use") != 0))
+          continue;
+        const cJSON* id = cJSON_GetObjectItemCaseSensitive(call, "id");
+        const cJSON* function = provider.backend == ai::ProviderBackend::OpenAiCompatible
+                                    ? cJSON_GetObjectItemCaseSensitive(call, "function")
+                                    : call;
+        const cJSON* name = cJSON_GetObjectItemCaseSensitive(function, "name");
+        const cJSON* raw_arguments = cJSON_GetObjectItemCaseSensitive(
+            function,
+            provider.backend == ai::ProviderBackend::OpenAiCompatible ? "arguments" : "input");
+        char arguments_json[kMaxToolArgumentsBytes + 1]{};
+        cJSON* arguments = nullptr;
+        if (cJSON_IsString(raw_arguments) &&
+            std::strlen(raw_arguments->valuestring) <= kMaxToolArgumentsBytes) {
+          std::memcpy(arguments_json, raw_arguments->valuestring,
+                      std::strlen(raw_arguments->valuestring));
+          arguments = cJSON_ParseWithLength(arguments_json, std::strlen(arguments_json));
+        } else if (cJSON_IsObject(raw_arguments) &&
+                   print_bounded(raw_arguments, arguments_json, sizeof arguments_json)) {
+          arguments = cJSON_Duplicate(raw_arguments, true);
+        }
+        if (!cJSON_IsString(id) || std::strlen(id->valuestring) > 128 || !cJSON_IsString(name) ||
+            std::strlen(name->valuestring) > kMaxToolNameBytes || !cJSON_IsObject(arguments)) {
+          cJSON_Delete(arguments);
+          mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
+          calls_valid = false;
+          failure_error = Error::invalid_response;
+          failure_detail = "provider tool call is malformed or oversized";
+          break;
+        }
+        std::uint8_t identical = 0;
+        for (std::size_t prior = 0; prior < prior_count; ++prior)
+          if (same_call(runtime_->prior_tools[prior], runtime_->prior_arguments[prior],
+                        name->valuestring, arguments_json))
+            ++identical;
+        if (identical >= kMaxIdenticalCalls) {
+          cJSON_Delete(arguments);
+          mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
+          calls_valid = false;
+          failure_error = Error::actions_unsupported;
+          failure_detail = "repeated identical AI tool call blocked";
+          break;
+        }
+        std::snprintf(runtime_->prior_tools[prior_count], sizeof runtime_->prior_tools[prior_count],
+                      "%s", name->valuestring);
+        std::snprintf(runtime_->prior_arguments[prior_count],
+                      sizeof runtime_->prior_arguments[prior_count], "%s", arguments_json);
+        ++prior_count;
+
+        cJSON* invocation = nullptr;
+        const esp_err_t invoked =
+            McpService::invoke(*http_runtime_, name->valuestring, arguments, invocation);
+        cJSON_Delete(arguments);
+        if (invocation == nullptr) {
+          invocation = cJSON_CreateObject();
+          cJSON_AddStringToObject(invocation, "status", "rejected");
+          cJSON_AddNumberToObject(invocation, "error", invoked);
+        }
+        Action& action = result.actions[result.action_count++];
+        std::snprintf(action.tool, sizeof action.tool, "%s", name->valuestring);
+        if (!print_bounded(invocation, action.result_json, sizeof action.result_json)) {
+          cJSON_Delete(invocation);
+          mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
+          calls_valid = false;
+          failure_error = Error::response_too_large;
+          failure_detail = "MCP tool result exceeds the bounded action record";
+          break;
+        }
+        if (provider.backend == ai::ProviderBackend::OpenAiCompatible) {
+          cJSON* tool_message = cJSON_CreateObject();
+          cJSON_AddStringToObject(tool_message, "role", "tool");
+          cJSON_AddStringToObject(tool_message, "tool_call_id", id->valuestring);
+          cJSON_AddStringToObject(tool_message, "content", action.result_json);
+          cJSON_AddItemToArray(continuation_messages, tool_message);
+        } else {
+          cJSON* tool_result = cJSON_CreateObject();
+          cJSON_AddStringToObject(tool_result, "type", "tool_result");
+          cJSON_AddStringToObject(tool_result, "tool_use_id", id->valuestring);
+          cJSON_AddStringToObject(tool_result, "content", action.result_json);
+          cJSON_AddItemToArray(anthropic_results, tool_result);
+        }
+        cJSON_Delete(invocation);
+        mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
+      }
+      if (calls_valid && provider.backend == ai::ProviderBackend::AnthropicCompatible) {
+        cJSON* user = cJSON_CreateObject();
+        cJSON_AddStringToObject(user, "role", "user");
+        cJSON_AddItemToObject(user, "content", anthropic_results);
+        anthropic_results = nullptr;
+        cJSON_AddItemToArray(continuation_messages, user);
+      }
+      cJSON_Delete(anthropic_results);
+      cJSON_Delete(response);
+      if (!calls_valid)
+        break;
+    }
+  } while (false);
+
+  cJSON_Delete(request_root);
+  mbedtls_platform_zeroize(runtime_->prior_arguments, sizeof runtime_->prior_arguments);
   if (result.state != State::complete)
-    mbedtls_platform_zeroize(runtime_->result, sizeof runtime_->result);
-  runtime_->snapshot = result;
-}
+    set_failure(result, failure_error,
+                failure_detail == nullptr ? "AI chat failed" : failure_detail);
+
+  {
+    Lock lock(mutex_);
+    if (!lock.held() || runtime_->snapshot.operation_id != operation_id)
+      return;
+    if (result.state != State::complete)
+      mbedtls_platform_zeroize(runtime_->result, sizeof runtime_->result);
+    runtime_->snapshot = result;
+  }
 }
 
 } // namespace core_pilot

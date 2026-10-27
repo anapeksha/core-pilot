@@ -313,6 +313,7 @@ void Application::run() {
   static const HttpRuntime http_runtime{network, activity,       automations, matter,  devices,
                                         models,  wifi_provision, ai_storage,  ai_chat, ota,
                                         smtp,    storage,        random};
+  ai_chat.bindRuntime(http_runtime);
   const esp_err_t mcp_result = McpService::initialize(http_runtime);
   if (mcp_result != ESP_OK) {
     ESP_LOGE(kTag, "MCP permission storage unavailable: %s", esp_err_to_name(mcp_result));
