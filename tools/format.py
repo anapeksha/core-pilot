@@ -40,7 +40,7 @@ def find_formatter() -> str | None:
         if (
             candidate
             and Path(candidate).is_file()
-            and clang_format_version(candidate) == 19
+            and clang_format_version(candidate) == 20
         ):
             return candidate
     return None
@@ -70,7 +70,7 @@ def main() -> int:
 
     formatter = find_formatter()
     if formatter is None:
-        print("ESP-Clang clang-format 19 is required", file=sys.stderr)
+        print("ESP-Clang clang-format 20 is required", file=sys.stderr)
         return 1
     files = source_files()
     if not files:
