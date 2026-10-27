@@ -36,6 +36,23 @@ import { aiPromptsQuery } from "~/queries/ai";
 
 type PromptTab = "editor" | "preview";
 
+const baselinePrompts: readonly AiPromptFile[] = [
+  {
+    path: "assistant/system.md",
+    title: "Assistant system prompt",
+    markdown:
+      "# Core Pilot assistant\n\nHelp the user operate their local smart home clearly and safely. Prefer local state and enabled Core Pilot tools. Never invent device state or claim an action succeeded unless the tool result confirms it.",
+    baseline: true,
+  },
+  {
+    path: "assistant/safety.md",
+    title: "Assistant safety policy",
+    markdown:
+      "# Safety policy\n\n- Keep credentials, tokens, setup payloads, and private keys out of responses.\n- Ask for explicit confirmation before destructive changes.\n- Do not weaken Matter, Thread, storage, or network security checks.\n- State when a service or device is unavailable instead of guessing.",
+    baseline: true,
+  },
+];
+
 function escapeHtml(value: string): string {
   return value
     .replaceAll("&", "&amp;")
@@ -116,8 +133,19 @@ export default function AiPrompts() {
   const shouldShowToast = createToastGate();
 
   const promptFolders = createMemo(() => {
+    const encryptedByPath = new Map(
+      (promptsResult.data?.files ?? []).map((file) => [file.path, file]),
+    );
+    const merged = baselinePrompts.map(
+      (baseline) => encryptedByPath.get(baseline.path) ?? baseline,
+    );
+    for (const file of encryptedByPath.values()) {
+      if (!baselinePrompts.some((baseline) => baseline.path === file.path))
+        merged.push(file);
+    }
+
     const folders: Record<string, AiPromptFile[]> = {};
-    for (const file of promptsResult.data?.files ?? []) {
+    for (const file of merged) {
       const folder = file.path.includes("/")
         ? file.path.split("/").slice(0, -1).join("/")
         : "root";
@@ -199,7 +227,9 @@ export default function AiPrompts() {
               fallback={<Skeleton class="h-5 w-20 rounded-full" />}
             >
               <Badge variant="secondary">
-                {promptsResult.data?.encrypted ? "encrypted" : "baseline"}
+                {promptsResult.data?.encrypted && !promptsResult.isError
+                  ? "encrypted"
+                  : "baseline"}
               </Badge>
             </Show>
           </Flex>
@@ -257,7 +287,10 @@ export default function AiPrompts() {
           </Show>
           <Alert>
             <p>
-              {promptsResult.data?.detail ?? "AI prompts are encrypted-only."}
+              {promptsResult.isError
+                ? "Built-in prompts are available, but encrypted overrides could not be loaded."
+                : (promptsResult.data?.detail ??
+                  "Built-in prompts are ready. Save one to create an encrypted override.")}
             </p>
           </Alert>
         </CardContent>

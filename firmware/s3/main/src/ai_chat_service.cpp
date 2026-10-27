@@ -18,6 +18,7 @@ namespace {
 
 constexpr std::size_t kRequestJsonBytes = std::size_t{256} * 1024;
 constexpr std::size_t kResponseJsonBytes = std::size_t{64} * 1024;
+constexpr std::size_t kSystemContextBytes = std::size_t{64} * 1024;
 constexpr std::size_t kEndpointBytes = ai::kMaxProviderUrlBytes + 32;
 constexpr int kHttpBufferBytes = 2048;
 constexpr std::size_t kMaxToolNameBytes = 64;
@@ -45,65 +46,6 @@ private:
 bool valid_text(const char* text, std::size_t length, std::size_t maximum) {
   return text != nullptr && length != 0 && length <= maximum &&
          std::memchr(text, '\0', length) == nullptr;
-}
-
-bool ascii_equal(const char* value, std::size_t length, const char* expected) {
-  const std::size_t expected_length = std::strlen(expected);
-  if (length != expected_length)
-    return false;
-  for (std::size_t index = 0; index < length; ++index) {
-    char character = value[index];
-    if (character >= 'A' && character <= 'Z')
-      character = static_cast<char>(character - 'A' + 'a');
-    if (character != expected[index])
-      return false;
-  }
-  return true;
-}
-
-bool safe_https_base_url(const char* url) {
-  if (url == nullptr || std::strncmp(url, "https://", 8) != 0)
-    return false;
-  const char* authority = url + 8;
-  const char* authority_end = std::strpbrk(authority, "/?#");
-  if (authority_end == nullptr)
-    authority_end = authority + std::strlen(authority);
-  if (authority == authority_end || std::strchr(authority, '@') != nullptr ||
-      std::strchr(authority_end, '#') != nullptr)
-    return false;
-
-  const char* host = authority;
-  const char* host_end = authority_end;
-  const char* colon = nullptr;
-  for (const char* cursor = authority; cursor < authority_end; ++cursor) {
-    if (*cursor == '[' || *cursor == ']')
-      return false; // All literal IPv6 destinations are forbidden.
-    if (*cursor == ':')
-      colon = cursor;
-  }
-  if (colon != nullptr) {
-    if (static_cast<std::size_t>(authority_end - colon) != 4 ||
-        std::memcmp(colon + 1, "443", 3) != 0)
-      return false;
-    host_end = colon;
-  }
-  const std::size_t host_length = static_cast<std::size_t>(host_end - host);
-  if (host_length == 0 || std::memchr(host, '.', host_length) == nullptr)
-    return false;
-  bool only_ip_characters = true;
-  for (const char* cursor = host; cursor < host_end; ++cursor) {
-    const bool digit = *cursor >= '0' && *cursor <= '9';
-    if (!digit && *cursor != '.')
-      only_ip_characters = false;
-    const bool valid = digit || (*cursor >= 'A' && *cursor <= 'Z') ||
-                       (*cursor >= 'a' && *cursor <= 'z') || *cursor == '-' || *cursor == '.';
-    if (!valid)
-      return false;
-  }
-  // ESP-IDF's HTTP client cannot pin a prevalidated DNS address while preserving SNI.
-  // Never send credentials to arbitrary compatible-provider hostnames.
-  return !only_ip_characters && (ascii_equal(host, host_length, "api.openai.com") ||
-                                 ascii_equal(host, host_length, "api.anthropic.com"));
 }
 
 const char* role_name(AiChatService::Role role) {
@@ -233,6 +175,45 @@ bool same_call(const char* left_tool, const char* left_arguments, const char* ri
          std::strcmp(left_arguments, right_arguments) == 0;
 }
 
+struct SystemContextBuilder final {
+  char* output;
+  std::size_t capacity;
+  std::size_t length{};
+  bool valid{true};
+};
+
+bool append_context(SystemContextBuilder& builder, const char* label, const char* key,
+                    const std::uint8_t* content, std::size_t content_size) {
+  if (!builder.valid || label == nullptr || key == nullptr ||
+      (content == nullptr && content_size != 0))
+    return false;
+  const int header_length =
+      std::snprintf(builder.output + builder.length, builder.capacity - builder.length,
+                    "\n\n[%s:%s]\n", label, key);
+  if (header_length <= 0 ||
+      static_cast<std::size_t>(header_length) >= builder.capacity - builder.length ||
+      content_size >= builder.capacity - builder.length - static_cast<std::size_t>(header_length)) {
+    builder.valid = false;
+    return false;
+  }
+  builder.length += static_cast<std::size_t>(header_length);
+  if (content_size != 0)
+    std::memcpy(builder.output + builder.length, content, content_size);
+  builder.length += content_size;
+  builder.output[builder.length] = '\0';
+  return true;
+}
+
+bool append_prompt(const ai::PromptFileView& prompt, void* context) {
+  return append_context(*static_cast<SystemContextBuilder*>(context), "prompt", prompt.path,
+                        prompt.markdown, prompt.markdown_size);
+}
+
+bool append_memory(const ai::MemorySectionView& memory, void* context) {
+  return append_context(*static_cast<SystemContextBuilder*>(context), "memory", memory.id,
+                        memory.markdown, memory.markdown_size);
+}
+
 } // namespace
 
 struct AiChatService::RequestSlot final {
@@ -254,6 +235,7 @@ struct AiChatService::Runtime final {
   char prior_tools[kMaxActions][kMaxToolNameBytes + 1]{};
   char prior_arguments[kMaxActions][kMaxToolArgumentsBytes + 1]{};
   char result[kMaxResponseBytes + 1]{};
+  char system_context[kSystemContextBytes]{};
   char endpoint[kEndpointBytes]{};
   char request_json[kRequestJsonBytes]{};
   char response_json[kResponseJsonBytes]{};
@@ -405,6 +387,7 @@ void AiChatService::taskLoop() {
     process(operation_id);
     mbedtls_platform_zeroize(request_, sizeof(*request_));
     mbedtls_platform_zeroize(runtime_->endpoint, sizeof runtime_->endpoint);
+    mbedtls_platform_zeroize(runtime_->system_context, sizeof runtime_->system_context);
     mbedtls_platform_zeroize(runtime_->request_json, sizeof runtime_->request_json);
     mbedtls_platform_zeroize(runtime_->response_json, sizeof runtime_->response_json);
   }
@@ -439,9 +422,9 @@ void AiChatService::process(std::uint64_t operation_id) {
       failure_detail = "provider configuration unavailable";
       break;
     }
-    if (!safe_https_base_url(provider.base_url)) {
+    if (!ai::provider_config_usable(provider)) {
       failure_error = Error::unsafe_url;
-      failure_detail = "provider URL must use an allowed HTTPS host";
+      failure_detail = "provider configuration is not supported or usable";
       break;
     }
     if (http_runtime_ == nullptr) {
@@ -478,23 +461,36 @@ void AiChatService::process(std::uint64_t operation_id) {
     else
       cJSON_Delete(messages);
     if (valid) {
+      mbedtls_platform_zeroize(runtime_->system_context, sizeof runtime_->system_context);
+      SystemContextBuilder builder{runtime_->system_context, sizeof runtime_->system_context};
       cJSON* context = McpService::context(*http_runtime_);
       const cJSON* system_prompt =
           context == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(context, "system_prompt");
       const cJSON* context_json =
           context == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(context, "context_json");
-      char system[512]{};
-      const int system_length =
-          cJSON_IsString(system_prompt) && cJSON_IsString(context_json)
-              ? std::snprintf(system, sizeof system, "%s Current local context: %s",
-                              system_prompt->valuestring, context_json->valuestring)
-              : -1;
-      valid = system_length > 0 && static_cast<std::size_t>(system_length) < sizeof system;
-      if (valid && provider.backend == ai::ProviderBackend::OpenAiCompatible)
-        valid = add_message(messages, "system", system, static_cast<std::size_t>(system_length));
-      else if (valid)
-        valid = cJSON_AddStringToObject(request_root, "system", system) != nullptr;
-      mbedtls_platform_zeroize(system, sizeof system);
+      valid = cJSON_IsString(system_prompt) && cJSON_IsString(context_json) &&
+              append_context(builder, "core", "instructions",
+                             reinterpret_cast<const std::uint8_t*>(system_prompt->valuestring),
+                             std::strlen(system_prompt->valuestring));
+      const ai::Status prompts_status =
+          valid ? storage_.prompts.visit(append_prompt, &builder) : ai::Status::StorageError;
+      const ai::Status memory_status =
+          valid ? storage_.memory.visit(append_memory, &builder) : ai::Status::StorageError;
+      valid = valid && builder.valid &&
+              (prompts_status == ai::Status::Ok || prompts_status == ai::Status::NotFound) &&
+              (memory_status == ai::Status::Ok || memory_status == ai::Status::NotFound) &&
+              append_context(builder, "core", "live-context",
+                             reinterpret_cast<const std::uint8_t*>(context_json->valuestring),
+                             std::strlen(context_json->valuestring));
+      if (!valid) {
+        failure_error = Error::internal;
+        failure_detail = builder.valid ? "AI prompt or memory storage is unreadable"
+                                       : "AI prompt and memory context exceeds 64 KiB";
+      } else if (provider.backend == ai::ProviderBackend::OpenAiCompatible) {
+        valid = add_message(messages, "system", builder.output, builder.length);
+      } else {
+        valid = cJSON_AddStringToObject(request_root, "system", builder.output) != nullptr;
+      }
       cJSON_Delete(context);
     }
     for (std::size_t index = 0; valid && index < request_->history_count; ++index) {
@@ -515,8 +511,10 @@ void AiChatService::process(std::uint64_t operation_id) {
         cJSON_Delete(tools);
     }
     if (!valid) {
-      failure_error = Error::json_encode;
-      failure_detail = "provider request allocation failed";
+      if (failure_detail == nullptr) {
+        failure_error = Error::json_encode;
+        failure_detail = "provider request allocation failed";
+      }
       break;
     }
 

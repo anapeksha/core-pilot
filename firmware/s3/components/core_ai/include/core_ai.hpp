@@ -50,6 +50,9 @@ struct ProviderConfig final {
 
 // Wipes the complete object, including padding and the API key.
 void clear_provider_config(ProviderConfig& config);
+// Validates the provider transport, backend, authentication mode, and credential presence.
+// This is local configuration validation only; it does not claim network/provider availability.
+bool provider_config_usable(const ProviderConfig& config);
 
 struct MemorySectionView final {
   const char* id;

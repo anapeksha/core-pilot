@@ -2128,12 +2128,14 @@ esp_err_t aiListHandler(httpd_req_t* request, HttpRuntime& runtime, bool prompts
   const ai::Status status = prompts ? runtime.ai_storage.prompts.visit(addPromptFile, &context)
                                     : runtime.ai_storage.memory.visit(addMemorySection, &context);
   const bool empty = status == ai::Status::NotFound;
-  cJSON_AddBoolToObject(response, "encrypted", true);
+  const bool readable = (status == ai::Status::Ok && context.ok) || empty;
+  cJSON_AddBoolToObject(response, "encrypted", readable && !empty);
   cJSON_AddStringToObject(
       response, "detail",
       status == ai::Status::Ok && context.ok
           ? (prompts ? "Encrypted AI prompts loaded." : "Encrypted AI memory loaded.")
-      : empty ? (prompts ? "No AI prompts configured." : "No AI memory configured.")
+      : empty ? (prompts ? "Built-in prompts are ready; no encrypted overrides are saved."
+                         : "No AI memory configured.")
               : "Encrypted AI storage is unavailable or unreadable.");
   return sendJson(request, response);
 }
@@ -2355,7 +2357,7 @@ esp_err_t aiChatHandler(httpd_req_t* request) {
   if (request->method == HTTP_GET)
     return sendAiChatStatus(request, *runtime);
 
-  RequestBody body(kMaxRequestBody + 1);
+  RequestBody body(core_domain::max_ai_body + 1);
   std::size_t received = 0;
   if (!body || readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_413_CONTENT_TOO_LARGE, "Chat request is too large");

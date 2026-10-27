@@ -24,8 +24,9 @@ export const entityLimits = {
   providerModel: 128,
   apiKey: 256,
   chatMessage: 4096,
-  chatHistory: 16,
+  chatHistory: 12,
   chatHistoryEntry: 4096,
+  chatBody: 64 * 1024,
   memoryId: 48,
   memoryMarkdown: 12_288,
   promptPath: 128,
@@ -388,7 +389,35 @@ export const aiProviderRequestSchema = z
         ).nullish(),
         api_key_redacted: z.boolean(),
       })
-      .strict(),
+      .strict()
+      .superRefine((provider, context) => {
+        const openAi = provider.backend === "open_ai_compatible";
+        const expectedUrl = openAi
+          ? "https://api.openai.com/v1"
+          : "https://api.anthropic.com/v1";
+        const expectedAuth = openAi ? "bearer" : "api_key";
+        if (provider.base_url.replace(/\/$/, "") !== expectedUrl) {
+          context.addIssue({
+            code: "custom",
+            path: ["base_url"],
+            message: `Use ${expectedUrl} for this provider.`,
+          });
+        }
+        if (provider.auth_type !== expectedAuth) {
+          context.addIssue({
+            code: "custom",
+            path: ["auth_type"],
+            message: `Use ${expectedAuth} authentication for this provider.`,
+          });
+        }
+        if (!provider.api_key?.length && !provider.api_key_redacted) {
+          context.addIssue({
+            code: "custom",
+            path: ["api_key"],
+            message: "API key is required.",
+          });
+        }
+      }),
   })
   .strict();
 export const aiChatRequestSchema = z
@@ -409,7 +438,12 @@ export const aiChatRequestSchema = z
       .max(entityLimits.chatHistory),
     chat_id: modelId.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (request) =>
+      utf8.encode(JSON.stringify(request)).length < entityLimits.chatBody,
+    "Chat request is too large.",
+  );
 export const aiMemoryRequestSchema = z
   .object({
     id: modelId,

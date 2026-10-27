@@ -103,11 +103,21 @@ const chatSchema = z.object({
   ).refine((value) => value.trim().length > 0, "Enter a message."),
 });
 
+export function isOfficialProviderBaseUrl(value: string): boolean {
+  const normalized = value.trim().replace(/\/$/, "");
+  return (
+    normalized === "https://api.openai.com/v1" ||
+    normalized === "https://api.anthropic.com/v1"
+  );
+}
+
 const providerSchema = z.object({
-  baseUrl: bytesAtMost(
-    entityLimits.providerUrl,
-    "Base URL is too long.",
-  ).refine((value) => value.trim().length > 0, "Enter a base URL."),
+  baseUrl: bytesAtMost(entityLimits.providerUrl, "Base URL is too long.")
+    .refine((value) => value.trim().length > 0, "Enter a base URL.")
+    .refine(
+      isOfficialProviderBaseUrl,
+      "Use the official OpenAI or Anthropic HTTPS API base URL.",
+    ),
   model: bytesAtMost(
     entityLimits.providerModel,
     "Model identifier is too long.",
@@ -384,11 +394,12 @@ const AiAssistant: Component = () => {
 
   const submitProvider = handleProviderSubmit((formValues) => {
     const apiKey = formValues.apiKey.trim();
+    const openAi = providerMode() === "openai-compatible";
     providerMutation.mutate(
       {
         provider: {
-          backend: providerBackend().value,
-          auth_type: providerAuthType().value,
+          backend: openAi ? "open_ai_compatible" : "anthropic_compatible",
+          auth_type: openAi ? "bearer" : "api_key",
           base_url: formValues.baseUrl.trim(),
           model: formValues.model.trim(),
           max_output_tokens: Number(formValues.maxOutputTokens),
@@ -722,11 +733,12 @@ const AiAssistant: Component = () => {
                           value={providerValues().baseUrl}
                           maxlength={entityLimits.providerUrl}
                           placeholder="https://api.openai.com/v1"
+                          readOnly
                           required
                         />
                         <TextFieldDescription>
-                          HTTPS hostname on port 443; private and IP-literal
-                          endpoints are rejected.
+                          Firmware accepts only the official OpenAI or Anthropic
+                          HTTPS API root on port 443.
                         </TextFieldDescription>
                         <Show when={providerErrors.baseUrl?.message}>
                           {(message) => (
@@ -763,6 +775,7 @@ const AiAssistant: Component = () => {
                       <Grid colsSm={2} class="gap-5">
                         <Select<SelectOption<ProviderBackend>>
                           options={providerBackendOptions}
+                          disabled
                           optionValue="value"
                           optionTextValue="label"
                           value={providerBackend()}
@@ -785,6 +798,7 @@ const AiAssistant: Component = () => {
                         </Select>
                         <Select<SelectOption<ProviderAuthType>>
                           options={providerAuthOptions}
+                          disabled
                           optionValue="value"
                           optionTextValue="label"
                           value={providerAuthType()}
@@ -806,6 +820,14 @@ const AiAssistant: Component = () => {
                           <SelectContent />
                         </Select>
                       </Grid>
+                      <p class="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-muted-foreground">
+                        OpenAI uses Authorization: Bearer; Anthropic uses
+                        X-API-Key. When you chat, prompts, recent chat history,
+                        and enabled tool results are sent to the selected
+                        provider and are subject to that provider’s privacy and
+                        retention policies. API keys remain encrypted on the
+                        device and are not returned by the status API.
+                      </p>
                       <Grid colsSm={2} class="gap-5">
                         <TextField
                           validationState={

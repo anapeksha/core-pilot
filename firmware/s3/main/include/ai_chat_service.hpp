@@ -17,7 +17,7 @@ struct HttpRuntime;
 class AiChatService final {
 public:
   static constexpr std::size_t kMaxMessageBytes = 4096;
-  static constexpr std::size_t kMaxHistoryEntries = 16;
+  static constexpr std::size_t kMaxHistoryEntries = 12;
   static constexpr std::size_t kMaxHistoryContentBytes = 4096;
   static constexpr std::size_t kMaxResponseBytes = std::size_t{16} * 1024;
   static constexpr std::size_t kMaxActions = 8;

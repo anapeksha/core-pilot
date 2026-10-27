@@ -709,11 +709,12 @@ describe("api client", () => {
     await api.setupAiProvider({
       provider: {
         backend: "open_ai_compatible",
-        auth_type: "none",
-        base_url: "http://192.168.1.10:8080",
-        model: "local",
+        auth_type: "bearer",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4.1-mini",
         max_output_tokens: 256,
         timeout_ms: 10_000,
+        api_key: "test-key",
         api_key_redacted: false,
       },
     });

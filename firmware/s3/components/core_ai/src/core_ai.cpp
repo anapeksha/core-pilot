@@ -215,6 +215,19 @@ bool valid_provider(const ProviderConfig& config) {
          config.api_key_length <= kMaxApiKeyBytes;
 }
 
+bool supported_provider(const ProviderConfig& config) {
+  char host[kMaxProviderUrlBytes + 1]{};
+  if (!valid_provider(config) || config.api_key_length == 0 ||
+      !credential_scope(config, host, sizeof host) ||
+      std::strpbrk(config.base_url, "?#") != nullptr ||
+      std::strchr(config.base_url + 8, '@') != nullptr)
+    return false;
+  if (config.backend == ProviderBackend::OpenAiCompatible)
+    return config.auth_type == AuthType::Bearer && std::strcmp(host, "api.openai.com") == 0;
+  return config.backend == ProviderBackend::AnthropicCompatible &&
+         config.auth_type == AuthType::ApiKey && std::strcmp(host, "api.anthropic.com") == 0;
+}
+
 core_security::RecordSpec spec(const char* path, std::size_t path_len,
                                core_security::RecordType type, std::uint64_t generation) {
   return {path, path_len, core_security::Namespace::Ai, type, kSchema, generation};
@@ -281,6 +294,10 @@ void clear_provider_config(ProviderConfig& config) {
   mbedtls_platform_zeroize(&config, sizeof(config));
 }
 
+bool provider_config_usable(const ProviderConfig& config) {
+  return supported_provider(config);
+}
+
 ProviderConfigRepository::ProviderConfigRepository(core_security::StorageService& storage,
                                                    core_security::RandomSource& random)
     : storage_(storage), random_(random) {}
@@ -343,7 +360,7 @@ Status ProviderConfigRepository::load(ProviderConfig& output) {
   output.api_key_redacted = key_size != 0;
   output.api_key_length = key_size;
   std::memcpy(&output.temperature, &temperature_bits, sizeof(output.temperature));
-  if (!valid_provider(output)) {
+  if (!provider_config_usable(output)) {
     clear_provider_config(output);
     return Status::CorruptData;
   }
@@ -410,6 +427,8 @@ Status ProviderConfigRepository::save(ProviderConfig& config) {
     config.api_key_length = part;
     std::memcpy(config.api_key, bytes, part);
   }
+  if (!provider_config_usable(config))
+    return Status::InvalidArgument;
   Workspace workspace(kProviderPayload);
   if (!workspace.valid())
     return Status::StorageError;
