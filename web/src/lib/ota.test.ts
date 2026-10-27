@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   firmwareVersionFromFilename,
   formatOtaSize,
-  MAX_OTA_VERSION_BYTES,
   OTA_CHUNK_BYTES,
   otaChunkCanRetry,
   otaChunkWasCommitted,
@@ -17,12 +16,12 @@ describe("ota helpers", () => {
   it("accepts bounded app firmware images", () => {
     expect(
       validateFirmwareCandidate({
-        name: "core_pilot_firmware.bin",
+        name: "core-pilot-0.2.0-ota.bin",
         size: MAX_OTA_IMAGE_BYTES,
       }),
     ).toBe("");
-    expect(firmwareVersionFromFilename("core_pilot_firmware.bin")).toBe(
-      "core_pilot_firmware",
+    expect(firmwareVersionFromFilename("core-pilot-0.2.0-ota.bin")).toBe(
+      "0.2.0",
     );
     expect(OTA_CHUNK_BYTES).toBe(2048);
   });
@@ -90,20 +89,20 @@ describe("ota helpers", () => {
     expect(otaChunkWasCommitted(staging, 8192, 2048, true)).toBe(false);
   });
 
-  it("matches the effective esp_app_desc version bounds and character rules", () => {
-    expect(validateOtaVersion("v".repeat(MAX_OTA_VERSION_BYTES))).toBe("");
-    expect(validateOtaVersion("v".repeat(MAX_OTA_VERSION_BYTES + 1))).toContain(
-      "at most 31 bytes",
+  it("requires the release artifact SemVer used by esp_app_desc", () => {
+    expect(validateOtaVersion("10.20.30")).toBe("");
+    expect(validateOtaVersion("release-1")).toContain("major.minor.patch");
+    expect(validateOtaVersion("1.2.3-beta")).toContain("major.minor.patch");
+    expect(validateOtaVersion("   ")).toContain(
+      "filename includes its version",
     );
-    expect(validateOtaVersion("release\n1")).toContain("printable ASCII");
-    expect(validateOtaVersion("release-😀")).toContain("printable ASCII");
-    expect(validateOtaVersion("   ")).toContain("required");
+    expect(firmwareVersionFromFilename("core-pilot-v1.2.3-ota.bin")).toBe(
+      "1.2.3",
+    );
+    expect(firmwareVersionFromFilename("core_pilot.bin")).toBe("");
     expect(
-      validateFirmwareCandidate({
-        name: `${"v".repeat(MAX_OTA_VERSION_BYTES + 1)}.bin`,
-        size: 1024,
-      }),
-    ).toContain("at most 31 bytes");
+      validateFirmwareCandidate({ name: "core_pilot.bin", size: 1024 }),
+    ).toContain("filename includes its version");
   });
 
   it("rejects oversized empty and non-bin candidates", () => {

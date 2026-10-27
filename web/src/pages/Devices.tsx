@@ -68,14 +68,13 @@ function DevicesSkeleton() {
               <TableHead>Availability</TableHead>
               <TableHead>Capabilities</TableHead>
               <TableHead>Power</TableHead>
-              <TableHead>Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             <For each={Array.from({ length: 3 })}>
               {() => (
                 <TableRow>
-                  <For each={["w-32", "w-20", "w-24", "w-40", "w-20", "w-20"]}>
+                  <For each={["w-32", "w-20", "w-24", "w-40", "w-20"]}>
                     {(width) => (
                       <TableCell>
                         <Skeleton class={cn("h-4", width)} />
@@ -326,7 +325,6 @@ export default function Devices() {
                           <TableHead>Availability</TableHead>
                           <TableHead>Capabilities</TableHead>
                           <TableHead>Power</TableHead>
-                          <TableHead>Actions</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -337,21 +335,16 @@ export default function Devices() {
                               class={compact() ? "h-10" : "h-14"}
                               onContextMenu={() => setContextDevice(device)}
                             >
-                              <TableCell>
+                              <TableCell class="max-w-72 min-w-0">
                                 <Show
                                   when={editingDeviceId() === deviceKey(device)}
                                   fallback={
-                                    <button
-                                      type="button"
-                                      class="rounded-sm text-left font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                      onClick={() => {
-                                        setDeviceName(device.name);
-                                        setEditingDeviceId(deviceKey(device));
-                                      }}
-                                      aria-label={`Rename ${device.name}`}
+                                    <span
+                                      class="block truncate font-medium"
+                                      title={device.name}
                                     >
                                       {device.name}
-                                    </button>
+                                    </span>
                                   }
                                 >
                                   <form
@@ -389,15 +382,17 @@ export default function Devices() {
                                   </form>
                                 </Show>
                               </TableCell>
-                              <TableCell>{device.protocol}</TableCell>
+                              <TableCell class="min-w-0 wrap-anywhere">
+                                {device.protocol}
+                              </TableCell>
                               <TableCell>
                                 <StatusBadge
                                   tone={availabilityTone(device.availability)}
                                   label={device.availability}
                                 />
                               </TableCell>
-                              <TableCell>
-                                <div class="flex flex-wrap gap-2">
+                              <TableCell class="min-w-0">
+                                <div class="flex min-w-0 flex-wrap gap-2">
                                   <For each={device.capabilities ?? []}>
                                     {(capability) => {
                                       const Icon = capabilityIcon(capability);
@@ -434,16 +429,6 @@ export default function Devices() {
                                     )}
                                   </span>
                                 </Show>
-                              </TableCell>
-                              <TableCell>
-                                <button
-                                  type="button"
-                                  class="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                  aria-label={`Right-click or long-press for ${device.name} actions`}
-                                  onContextMenu={() => setContextDevice(device)}
-                                >
-                                  Actions
-                                </button>
                               </TableCell>
                             </TableRow>
                           )}
@@ -487,6 +472,16 @@ export default function Devices() {
                             <ContextMenuItem
                               class="text-error data-[highlighted]:text-error"
                               aria-label={`Remove ${device.name}`}
+                              disabled={
+                                removeMutation.isPending || !device.node_id
+                              }
+                              title={
+                                removeMutation.isPending
+                                  ? "Another device removal is in progress."
+                                  : !device.node_id
+                                    ? "Removal requires a reported Matter node identity."
+                                    : undefined
+                              }
                               onSelect={() => setRemovalDevice(device)}
                             >
                               Remove device…

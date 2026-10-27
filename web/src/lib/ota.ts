@@ -53,14 +53,19 @@ export function formatOtaSize(size: number) {
   return `${(size / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+const SEMVER_PATTERN =
+  /(?:^|[-_])v?(\d+\.\d+\.\d+)(?:[-_](?:ota|app))?(?:\.bin)?$/i;
+
 export function firmwareVersionFromFilename(name: string) {
-  return name.replace(/\.bin$/i, "").trim();
+  return name.trim().match(SEMVER_PATTERN)?.[1] ?? "";
 }
 
 export function validateOtaVersion(version: string) {
-  if (!version || !version.trim()) return "Firmware version is required.";
-  if (!/^[\x20-\x7e]+$/.test(version)) {
-    return "Firmware version must contain only printable ASCII characters.";
+  if (!version || !version.trim()) {
+    return "Use a release OTA image whose filename includes its version, such as core-pilot-0.2.0-ota.bin.";
+  }
+  if (!/^\d+\.\d+\.\d+$/.test(version)) {
+    return "Firmware version must use major.minor.patch format.";
   }
   if (new TextEncoder().encode(version).length > MAX_OTA_VERSION_BYTES) {
     return `Firmware version must be at most ${MAX_OTA_VERSION_BYTES} bytes.`;

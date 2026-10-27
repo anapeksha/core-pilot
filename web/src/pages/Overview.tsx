@@ -12,14 +12,12 @@ import {
   HiOutlineBolt,
   HiOutlineExclamationTriangle,
   HiOutlineHome,
-  HiOutlineRectangleGroup,
   HiOutlineStar,
-  HiOutlineTrash,
 } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 
 import { Button } from "~/components/button";
-import { TooltipIconButton } from "~/components/tooltip";
+
 import {
   Card,
   CardContent,
@@ -242,31 +240,6 @@ function DeviceAvailabilitySkeleton() {
   );
 }
 
-function FavoriteRow(props: {
-  title: string;
-  detail: string;
-  onRemove: () => void;
-}) {
-  return (
-    <div class="flex min-w-0 items-center gap-3 rounded-md border p-3">
-      <HiOutlineStar class="size-5 shrink-0 text-warning" aria-hidden="true" />
-      <div class="min-w-0 flex-1">
-        <p class="truncate text-sm font-medium">{props.title}</p>
-        <p class="truncate text-xs text-muted-foreground">{props.detail}</p>
-      </div>
-      <TooltipIconButton
-        type="button"
-        size="icon"
-        variant="ghost"
-        aria-label={`Remove ${props.title} from favorites`}
-        onClick={props.onRemove}
-      >
-        <HiOutlineTrash aria-hidden="true" />
-      </TooltipIconButton>
-    </div>
-  );
-}
-
 export default function Overview() {
   const healthQuery = createHealthQuery();
   const systemQuery = createSystemQuery();
@@ -321,14 +294,6 @@ export default function Overview() {
     );
   };
 
-  const favoriteDevices = createMemo(() =>
-    devices().filter((device) =>
-      favoriteKeys().includes(`device:${deviceId(device)}`),
-    ),
-  );
-  const favoriteScenes = createMemo(() =>
-    scenes().filter((scene) => favoriteKeys().includes(`scene:${scene.id}`)),
-  );
   const unavailableDevices = createMemo(() =>
     devices().filter(
       (device) => device.availability.toLowerCase() !== "online",
@@ -644,24 +609,6 @@ export default function Overview() {
                       </For>
                     </div>
                   </Show>
-                  <div class="grid grid-cols-1 gap-2 border-t pt-3 sm:grid-cols-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled
-                      title="Matter device writes are not available yet"
-                    >
-                      All off · unavailable
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      disabled
-                      title="Scene execution is not available yet"
-                    >
-                      Activate scene · unavailable
-                    </Button>
-                  </div>
                 </div>
               </CardQueryContent>
             </Card>
@@ -682,91 +629,80 @@ export default function Overview() {
                 error={devicesQuery.error ?? scenesQuery.error}
                 fallback={<FavoritesSkeleton />}
               >
-                <div class="space-y-4">
-                  <Show
-                    when={
-                      favoriteDevices().length + favoriteScenes().length > 0
-                    }
-                    fallback={
-                      <p class="text-sm text-muted-foreground">
-                        Mark a device or scene below to keep it in this
-                        dashboard.
-                      </p>
-                    }
-                  >
-                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <For each={favoriteDevices()}>
-                        {(device) => (
-                          <FavoriteRow
-                            title={device.name}
-                            detail={`Device · ${device.availability}`}
-                            onRemove={() =>
-                              toggleFavorite(`device:${deviceId(device)}`)
-                            }
-                          />
-                        )}
-                      </For>
-                      <For each={favoriteScenes()}>
-                        {(scene) => (
-                          <FavoriteRow
-                            title={scene.name}
-                            detail={`Scene · ${scene.actions.length} actions`}
-                            onRemove={() => toggleFavorite(`scene:${scene.id}`)}
-                          />
-                        )}
-                      </For>
-                    </div>
-                  </Show>
-                  <div class="space-y-2 border-t pt-3">
-                    <p class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Add favorites
-                    </p>
-                    <div class="flex flex-wrap gap-2">
-                      <For each={devices().slice(0, 4)}>
-                        {(device) => (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={
-                              favoriteKeys().includes(
-                                `device:${deviceId(device)}`,
-                              )
-                                ? "secondary"
-                                : "outline"
-                            }
-                            aria-pressed={favoriteKeys().includes(
+                <div class="space-y-3">
+                  <p class="text-sm text-muted-foreground">
+                    Select or deselect stars below. Favorites stay on this
+                    browser only.
+                  </p>
+                  <div class="flex min-w-0 flex-wrap gap-2">
+                    <For each={devices()}>
+                      {(device) => (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={
+                            favoriteKeys().includes(
                               `device:${deviceId(device)}`,
-                            )}
-                            onClick={() =>
-                              toggleFavorite(`device:${deviceId(device)}`)
-                            }
-                          >
-                            <HiOutlineStar data-icon="inline-start" />
-                            {device.name}
-                          </Button>
-                        )}
-                      </For>
-                      <For each={scenes().slice(0, 4)}>
-                        {(scene) => (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={
-                              favoriteKeys().includes(`scene:${scene.id}`)
-                                ? "secondary"
-                                : "outline"
-                            }
-                            aria-pressed={favoriteKeys().includes(
-                              `scene:${scene.id}`,
-                            )}
-                            onClick={() => toggleFavorite(`scene:${scene.id}`)}
-                          >
-                            <HiOutlineRectangleGroup data-icon="inline-start" />
-                            {scene.name}
-                          </Button>
-                        )}
-                      </For>
-                    </div>
+                            )
+                              ? "secondary"
+                              : "outline"
+                          }
+                          aria-pressed={favoriteKeys().includes(
+                            `device:${deviceId(device)}`,
+                          )}
+                          onClick={() =>
+                            toggleFavorite(`device:${deviceId(device)}`)
+                          }
+                          disabled={
+                            !favoriteKeys().includes(
+                              `device:${deviceId(device)}`,
+                            ) && favoriteKeys().length >= MAX_FAVORITES
+                          }
+                          title={
+                            !favoriteKeys().includes(
+                              `device:${deviceId(device)}`,
+                            ) && favoriteKeys().length >= MAX_FAVORITES
+                              ? "Remove a favorite before adding another."
+                              : undefined
+                          }
+                          class="max-w-full min-w-0"
+                        >
+                          <HiOutlineStar data-icon="inline-start" />
+                          <span class="truncate">{device.name}</span>
+                        </Button>
+                      )}
+                    </For>
+                    <For each={scenes()}>
+                      {(scene) => (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant={
+                            favoriteKeys().includes(`scene:${scene.id}`)
+                              ? "secondary"
+                              : "outline"
+                          }
+                          aria-pressed={favoriteKeys().includes(
+                            `scene:${scene.id}`,
+                          )}
+                          onClick={() => toggleFavorite(`scene:${scene.id}`)}
+                          disabled={
+                            !favoriteKeys().includes(`scene:${scene.id}`) &&
+                            favoriteKeys().length >= MAX_FAVORITES
+                          }
+                          title={
+                            !favoriteKeys().includes(`scene:${scene.id}`) &&
+                            favoriteKeys().length >= MAX_FAVORITES
+                              ? "Remove a favorite before adding another."
+                              : undefined
+                          }
+                          class="max-w-full min-w-0"
+                        >
+                          <HiOutlineStar data-icon="inline-start" />
+                          <span class="truncate">{scene.name}</span>
+                        </Button>
+                      )}
+                    </For>
                   </div>
                 </div>
               </CardQueryContent>
@@ -821,14 +757,20 @@ export default function Overview() {
                               roomAccentClass(room.id),
                             )}
                           >
-                            <Flex class="gap-3">
+                            <Flex class="min-w-0 gap-3">
                               <div class="min-w-0 flex-1">
-                                <p class="font-medium">{room.name}</p>
+                                <p
+                                  class="truncate font-medium"
+                                  title={room.name}
+                                >
+                                  {room.name}
+                                </p>
                                 <p class="text-xs text-muted-foreground">
                                   {assigned().length} reported devices
                                 </p>
                               </div>
                               <StatusBadge
+                                class="shrink-0"
                                 tone={
                                   assigned().length === 0
                                     ? "muted"

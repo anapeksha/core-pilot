@@ -102,12 +102,12 @@ function createFirmwareState() {
       destructive_confirmation: "CONFIRM",
       persistence: "encrypted SD only",
       provider_transport: {
-        http_ipv4_literal: true,
-        dns: false,
-        tls: false,
+        http_ipv4_literal: false,
+        dns: true,
+        tls: true,
         websockets: false,
-        certificate_validation: false,
-        detail: "Local provider ready.",
+        certificate_validation: true,
+        detail: "Official HTTPS provider transport ready.",
       },
       provider_transport_requirements: [],
     },
@@ -680,19 +680,19 @@ test("provides a bounded operational home dashboard", async ({ page }) => {
   await expect(page.getByText("1 reported devices")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "All off · unavailable" }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Activate scene · unavailable" }),
-  ).toBeDisabled();
+  ).toHaveCount(0);
 
-  await page.getByRole("button", { name: "Bench Lamp" }).click();
-  await expect(
-    page.getByRole("button", { name: "Remove Bench Lamp from favorites" }),
-  ).toBeVisible();
+  const benchLampFavorite = page.getByRole("button", { name: "Bench Lamp" });
+  await benchLampFavorite.click();
+  await expect(benchLampFavorite).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Bench Lamp", { exact: true })).toHaveCount(1);
   await page.reload();
   await expect(
-    page.getByRole("button", { name: "Remove Bench Lamp from favorites" }),
-  ).toBeVisible();
+    page.getByRole("button", { name: "Bench Lamp" }),
+  ).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "Welcome home" }).click();
   await expect
@@ -782,7 +782,11 @@ test("uses the keyboard command palette for bounded available actions", async ({
   const search = palette.getByPlaceholder(/Search pages/);
   await expect(search).toBeFocused();
   await search.fill("Welcome home");
-  await search.press("Enter");
+  const automationOption = palette.getByRole("option", {
+    name: /Welcome home/,
+  });
+  await expect(automationOption).toBeVisible();
+  await automationOption.click();
   await expect
     .poll(() => state.posts.at(-1)?.path)
     .toBe("/api/v1/automations/run");
@@ -1234,7 +1238,7 @@ test("adds automation blocks with pointer drag and drop", async ({ page }) => {
     name: "Automation limits",
   });
   await limitsButton.scrollIntoViewIfNeeded();
-  await limitsButton.dispatchEvent("pointerenter", { pointerType: "mouse" });
+  await limitsButton.hover();
   await expect(page.getByRole("tooltip")).toContainText(
     "One trigger and up to eight ordered actions",
   );
@@ -1291,10 +1295,11 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   await expect(page.getByText("On/Off", { exact: true })).toBeVisible();
   await expect(page.getByText("Level", { exact: true })).toBeVisible();
 
+  await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(
+    0,
+  );
   await page
-    .getByRole("button", {
-      name: "Right-click or long-press for Bench Lamp actions",
-    })
+    .locator('[data-device-id="matter-light-1"]')
     .dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
   await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
   await page.getByRole("button", { name: "Remove device" }).click();
@@ -1659,7 +1664,7 @@ test("covers system Wi‑Fi, time settings, and firmware upload validation", asy
   });
 
   await page.locator("#firmware-file").setInputFiles({
-    name: "core-pilot-app.bin",
+    name: "core-pilot-0.2.0-ota.bin",
     mimeType: "application/octet-stream",
     buffer: Buffer.from("firmware image"),
   });
@@ -1789,7 +1794,7 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
   await page.goto("/#/ai");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
   await page.getByRole("button", { name: "Update provider" }).click();
-  await page.getByLabel("Base URL").fill("");
+  await page.getByLabel("Model").fill("");
   await expect(
     page.getByRole("button", { name: "Save provider" }),
   ).toBeEnabled();
