@@ -388,6 +388,7 @@ void Application::run() {
   std::uint64_t reconciled_terminal_sequence = 0;
   std::uint64_t last_removed_node_id = 0;
   while (true) {
+    servicePendingTimeNetworkEvent();
     std::time_t synchronized_time = 0;
     if (consumePendingTimeSync(synchronized_time)) {
       const bool updated = display.setRtcFromUnix(synchronized_time);

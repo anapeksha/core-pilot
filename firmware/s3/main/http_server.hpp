@@ -43,6 +43,7 @@ struct HttpRuntime final {
 };
 
 esp_err_t initializeTimeService(const HttpRuntime& runtime);
+void servicePendingTimeNetworkEvent();
 bool consumePendingTimeSync(std::time_t& timestamp);
 void publishRtcReady(bool ready);
 httpd_handle_t startHttpServer(const HttpRuntime& runtime);

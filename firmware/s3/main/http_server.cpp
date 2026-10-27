@@ -13,6 +13,7 @@
 #include "esp_app_desc.h"
 #include "esp_check.h"
 #include "esp_err.h"
+#include "esp_event.h"
 #include "esp_heap_caps.h"
 #include "esp_netif_sntp.h"
 #include "esp_system.h"
@@ -63,7 +64,9 @@ TimeConfig time_config;
 portMUX_TYPE time_config_lock = portMUX_INITIALIZER_UNLOCKED;
 std::atomic<std::time_t> last_time_sync{0};
 std::atomic<std::time_t> pending_time_sync{0};
+std::atomic<bool> pending_time_network_event{false};
 std::atomic<bool> rtc_ready{false};
+esp_event_handler_instance_t time_ip_handler = nullptr;
 
 class RequestBody final {
 public:
@@ -122,6 +125,11 @@ void onTimeSync(struct timeval* value) {
     last_time_sync.store(value->tv_sec);
     pending_time_sync.store(value->tv_sec);
   }
+}
+
+void onTimeNetworkEvent(void*, esp_event_base_t base, std::int32_t id, void*) {
+  if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP)
+    pending_time_network_event.store(true);
 }
 
 bool applyTimezoneOffset(int offset_minutes) {
@@ -2426,6 +2434,13 @@ esp_err_t statusHandler(httpd_req_t* request) {
 } // namespace
 
 esp_err_t initializeTimeService(const HttpRuntime& runtime) {
+  if (time_ip_handler == nullptr) {
+    const esp_err_t handler_result = esp_event_handler_instance_register(
+        IP_EVENT, IP_EVENT_STA_GOT_IP, onTimeNetworkEvent, nullptr, &time_ip_handler);
+    if (handler_result != ESP_OK)
+      return handler_result;
+  }
+
   TimeConfig loaded{};
   const auto load_result = loadTimeConfig(runtime, loaded);
   if (load_result == core_security::Status::NotFound) {
@@ -2449,6 +2464,19 @@ esp_err_t initializeTimeService(const HttpRuntime& runtime) {
   time_config = loaded;
   taskEXIT_CRITICAL(&time_config_lock);
   return ESP_OK;
+}
+
+void servicePendingTimeNetworkEvent() {
+  if (!pending_time_network_event.exchange(false))
+    return;
+  taskENTER_CRITICAL(&time_config_lock);
+  const bool initialized = time_config.sntp_initialized;
+  taskEXIT_CRITICAL(&time_config_lock);
+  if (!initialized)
+    return;
+  const esp_err_t result = esp_netif_sntp_start();
+  if (result != ESP_OK)
+    ESP_LOGW(kTag, "NTP restart after IPv4 acquisition failed: %s", esp_err_to_name(result));
 }
 
 bool consumePendingTimeSync(std::time_t& timestamp) {
