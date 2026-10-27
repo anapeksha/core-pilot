@@ -92,11 +92,13 @@ def main() -> int:
         data = path.read_bytes()
         symbol = f"k{name.title().replace('_', '')}"
         md5_hex = hashlib.md5(data, usedforsecurity=False).hexdigest().encode() + b"\0"
+        sha256 = hashlib.sha256(data).digest()
         source_lines.extend(
             [
                 f"alignas(4) const std::uint8_t {symbol}[] = {{{c_bytes(data)}}};",
                 f"const std::size_t {symbol}Size = sizeof({symbol});",
                 f"const std::uint8_t {symbol}Md5Hex[33] = {{{c_bytes(md5_hex)}}};",
+                f"const std::uint8_t {symbol}Sha256[32] = {{{c_bytes(sha256)}}};",
                 "",
             ]
         )
@@ -105,6 +107,7 @@ def main() -> int:
                 f"extern const std::uint8_t {symbol}[];",
                 f"extern const std::size_t {symbol}Size;",
                 f"extern const std::uint8_t {symbol}Md5Hex[33];",
+                f"extern const std::uint8_t {symbol}Sha256[32];",
             ]
         )
         records.append(

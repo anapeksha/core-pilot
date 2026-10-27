@@ -9,6 +9,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "gateway_rcp_payload.hpp"
+#include "mbedtls/platform_util.h"
+#include "psa/crypto.h"
 
 #include <algorithm>
 #include <array>
@@ -32,15 +34,17 @@ struct Segment final {
   const std::uint8_t* data;
   std::size_t size;
   const std::uint8_t* md5_hex;
+  const std::uint8_t* sha256;
 };
 
 const Segment kSegments[] = {
     {"bootloader", 0x0000, gateway::payload::kBootloader, gateway::payload::kBootloaderSize,
-     gateway::payload::kBootloaderMd5Hex},
+     gateway::payload::kBootloaderMd5Hex, gateway::payload::kBootloaderSha256},
     {"partition table", 0x8000, gateway::payload::kPartitionTable,
-     gateway::payload::kPartitionTableSize, gateway::payload::kPartitionTableMd5Hex},
+     gateway::payload::kPartitionTableSize, gateway::payload::kPartitionTableMd5Hex,
+     gateway::payload::kPartitionTableSha256},
     {"application", 0x10000, gateway::payload::kApplication, gateway::payload::kApplicationSize,
-     gateway::payload::kApplicationMd5Hex},
+     gateway::payload::kApplicationMd5Hex, gateway::payload::kApplicationSha256},
 };
 
 esp_err_t loaderError(esp_loader_error_t error) {
@@ -62,6 +66,44 @@ esp_err_t loaderError(esp_loader_error_t error) {
     return ESP_FAIL;
   }
   return ESP_FAIL;
+}
+
+esp_err_t verifySegmentSha256(const Segment& segment) {
+  psa_hash_operation_t operation = PSA_HASH_OPERATION_INIT;
+  if (psa_crypto_init() != PSA_SUCCESS ||
+      psa_hash_setup(&operation, PSA_ALG_SHA_256) != PSA_SUCCESS)
+    return ESP_ERR_INVALID_STATE;
+
+  std::array<std::uint8_t, kFlashBlockSize> block{};
+  std::uint32_t offset = 0;
+  psa_status_t status = PSA_SUCCESS;
+  while (offset < segment.size) {
+    const std::size_t count =
+        std::min<std::size_t>(block.size(), segment.size - static_cast<std::size_t>(offset));
+    const auto error = esp_loader_flash_read(block.data(), segment.address + offset,
+                                             static_cast<std::uint32_t>(count));
+    if (error != ESP_LOADER_SUCCESS) {
+      psa_hash_abort(&operation);
+      mbedtls_platform_zeroize(block.data(), block.size());
+      return loaderError(error);
+    }
+    status = psa_hash_update(&operation, block.data(), count);
+    if (status != PSA_SUCCESS)
+      break;
+    offset += static_cast<std::uint32_t>(count);
+  }
+
+  std::array<std::uint8_t, 32> digest{};
+  std::size_t digest_size = 0;
+  if (status == PSA_SUCCESS)
+    status = psa_hash_finish(&operation, digest.data(), digest.size(), &digest_size);
+  else
+    psa_hash_abort(&operation);
+  mbedtls_platform_zeroize(block.data(), block.size());
+  const bool matches = status == PSA_SUCCESS && digest_size == digest.size() &&
+                       std::memcmp(digest.data(), segment.sha256, digest.size()) == 0;
+  mbedtls_platform_zeroize(digest.data(), digest.size());
+  return matches ? ESP_OK : ESP_ERR_INVALID_CRC;
 }
 
 esp_err_t flashSegment(const Segment& segment) {
@@ -116,7 +158,17 @@ esp_err_t CoreGateway::provision() {
       error = esp_loader_flash_verify_known_md5(
           segment.address, static_cast<std::uint32_t>(segment.size), segment.md5_hex);
       if (error == ESP_LOADER_SUCCESS) {
-        ESP_LOGI(kTag, "H2 %s segment is current", segment.name);
+        result = verifySegmentSha256(segment);
+        if (result == ESP_OK) {
+          ESP_LOGI(kTag, "H2 %s segment passed SHA-256 validation", segment.name);
+          continue;
+        }
+        ESP_LOGW(kTag, "H2 %s failed SHA-256 validation; reprovisioning", segment.name);
+        result = flashSegment(segment);
+        if (result == ESP_OK)
+          result = verifySegmentSha256(segment);
+        if (result != ESP_OK)
+          break;
         continue;
       }
       if (error != ESP_LOADER_ERROR_INVALID_MD5) {
@@ -124,6 +176,8 @@ esp_err_t CoreGateway::provision() {
         break;
       }
       result = flashSegment(segment);
+      if (result == ESP_OK)
+        result = verifySegmentSha256(segment);
       if (result != ESP_OK)
         break;
     }

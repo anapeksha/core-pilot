@@ -47,8 +47,20 @@ leave a marker without a record, failing closed rather than accepting stale SD.
 This does **not** protect against rollback of the internal journal, an attacker
 rewriting both NVS and SD, direct use of `SdEncryptedStore` without the replicated
 backend, or an old authentic record on initial legacy import. It also does not
-bind individual flash ciphertext versions: NVS must remain trusted. No eFuse
-counters are burned. Keep the journal partition when upgrading.
+bind individual flash ciphertext versions: NVS must remain trusted. The ESP32-S3
+secure-version eFuse protects firmware anti-rollback only; it is not a general
+monotonic counter and cannot safely be consumed for every mutable record write.
+Adding an NVS, SD, RTC-memory, or in-RAM generation watermark would still permit
+rollback of that watermark with its record (or would break valid records after
+power loss), so no record replay guarantee is claimed. Keep the journal partition
+when upgrading.
+
+The current default image verifies signed OTA applications but does not enable
+Secure Boot or flash encryption. Therefore physical extraction of the Device Seed
+and replacement of boot firmware remain unresolved production risks. Enabling
+those irreversible eFuse-backed protections requires a separately validated
+manufacturing signing, provisioning, migration, and recovery procedure; they must
+not be silently enabled in the ordinary developer/CI configuration.
 
 Production defaults disable core dumps; this does not erase plaintext dumps
 previously written to the `crash` partition. Existing devices need an explicit
