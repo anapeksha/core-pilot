@@ -23,7 +23,7 @@ constexpr auto kDimBlue = rgb(1, 16, 24);
 constexpr auto kMuted = rgb(12, 20, 24);
 constexpr auto kCyan = rgb(3, 45, 30);
 constexpr auto kClock = rgb(3, 50, 31);
-constexpr auto kCharge = rgb(31, 52, 12);
+constexpr auto kCharge = kWhite;
 constexpr int kBatteryX = 286;
 constexpr int kBatteryY = 5;
 constexpr int kAccessButtonX = 16;
@@ -434,15 +434,9 @@ void CoreDisplay::updateBattery() {
   const int level = M5.Power.getBatteryLevel();
   const int next = level >= 0 && level <= 100 ? level : -1;
   const int vbus_mv = M5.Power.getVBUSVoltage();
+  const float base_input_volts = M5.Power.Axp2101.getTSVoltage();
   const bool charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
-  const bool sampled_external_power = charging || vbus_mv >= 4000;
-  if (sampled_external_power == sampled_external_power_) {
-    external_power_samples_ = std::min<std::uint8_t>(external_power_samples_ + 1, 2);
-  } else {
-    sampled_external_power_ = sampled_external_power;
-    external_power_samples_ = 1;
-  }
-  const bool plugged = external_power_samples_ >= 2 ? sampled_external_power_ : external_power_;
+  const bool plugged = charging || vbus_mv >= 4000 || base_input_volts >= 2.0f;
   if (next == battery_percent_ && plugged == external_power_)
     return;
   battery_percent_ = next;
@@ -479,7 +473,7 @@ CoreDisplay::Action CoreDisplay::poll() {
         action = Action::generate_access_code;
     }
   }
-  if (static_cast<std::uint32_t>(now - last_battery_ms_) >= 2000 || last_battery_ms_ == 0) {
+  if (static_cast<std::uint32_t>(now - last_battery_ms_) >= 100 || last_battery_ms_ == 0) {
     last_battery_ms_ = now;
     updateBattery();
   }

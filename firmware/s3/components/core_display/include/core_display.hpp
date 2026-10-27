@@ -109,8 +109,6 @@ private:
   std::uint8_t digits_[6]{255, 255, 255, 255, 255, 255};
   int battery_percent_{-1};
   bool external_power_{false};
-  bool sampled_external_power_{false};
-  std::uint8_t external_power_samples_{0};
   bool initialized_{false};
   bool saver_{false};
   bool blanked_{false};
