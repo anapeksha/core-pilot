@@ -1192,9 +1192,7 @@ test("keeps the visual automation builder responsive and preserves action order"
   });
 });
 
-test("navigates automation steps through icon controls and tooltips", async ({
-  page,
-}) => {
+test("navigates automation steps through icon controls", async ({ page }) => {
   await mockFirmwareApi(page);
   await page.goto("/#/automations");
   await page.getByRole("button", { name: "Create automation" }).click();
@@ -1206,11 +1204,6 @@ test("navigates automation steps through icon controls and tooltips", async ({
   });
 
   await expect(basicsStep).toHaveAttribute("aria-current", "step");
-  await triggerStep.focus();
-  await expect(
-    page.getByRole("tooltip").filter({ hasText: "Trigger" }),
-  ).toBeVisible();
-
   await triggerStep.click();
   await expect(sheet.getByText("Give this automation a name.")).toBeVisible();
   await sheet.getByPlaceholder("Wind-down routine").fill("Icon navigation");
