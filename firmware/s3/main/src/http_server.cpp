@@ -2202,23 +2202,49 @@ const char* aiChatState(AiChatService::State state) {
   return "failed";
 }
 
+bool aiChatOperationId(httpd_req_t* request, std::uint64_t& operation_id) {
+  operation_id = 0;
+  const std::size_t query_length = httpd_req_get_url_query_len(request);
+  if (query_length == 0 || query_length >= 64)
+    return false;
+  char query[64]{};
+  char value[24]{};
+  if (httpd_req_get_url_query_str(request, query, sizeof query) != ESP_OK ||
+      httpd_query_key_value(query, "operation_id", value, sizeof value) != ESP_OK ||
+      value[0] == '\0')
+    return false;
+  char* end = nullptr;
+  errno = 0;
+  const unsigned long long parsed = std::strtoull(value, &end, 10);
+  operation_id = static_cast<std::uint64_t>(parsed);
+  return operation_id != 0 && errno == 0 && end != nullptr && *end == '\0';
+}
+
 esp_err_t sendAiChatStatus(httpd_req_t* request, HttpRuntime& runtime) {
+  std::uint64_t operation_id{};
+  if (!aiChatOperationId(request, operation_id))
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Valid operation_id required");
   RequestBody reply(AiChatService::kMaxResponseBytes + 1);
   auto* snapshot = static_cast<AiChatService::Snapshot*>(
       heap_caps_calloc(1, sizeof(AiChatService::Snapshot), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
   if (!reply || snapshot == nullptr ||
-      !runtime.ai_chat.status(*snapshot, reply.data(), reply.capacity())) {
+      !runtime.ai_chat.status(operation_id, *snapshot, reply.data(), reply.capacity())) {
     heap_caps_free(snapshot);
-    httpd_resp_set_status(request, "503 Service Unavailable");
+    httpd_resp_set_status(request, "404 Not Found");
     cJSON* response = cJSON_CreateObject();
     cJSON_AddBoolToObject(response, "accepted", false);
-    cJSON_AddStringToObject(response, "status", "AI_CHAT_BUSY");
-    cJSON_AddStringToObject(response, "reply", "AI chat status is momentarily unavailable.");
+    cJSON_AddStringToObject(response, "status", "AI_CHAT_OPERATION_NOT_FOUND");
+    cJSON_AddStringToObject(response, "operation_id", "");
+    cJSON_AddStringToObject(response, "reply", "AI chat operation is unavailable.");
     cJSON_AddArrayToObject(response, "actions");
     return sendJson(request, response);
   }
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", snapshot->state != AiChatService::State::failed);
+  char operation_text[24]{};
+  std::snprintf(operation_text, sizeof operation_text, "%llu",
+                static_cast<unsigned long long>(operation_id));
+  cJSON_AddStringToObject(response, "operation_id", operation_text);
   cJSON_AddStringToObject(response, "status", aiChatState(snapshot->state));
   cJSON_AddStringToObject(response, "reply",
                           snapshot->state == AiChatService::State::complete ? reply.data()
@@ -2228,7 +2254,8 @@ esp_err_t sendAiChatStatus(httpd_req_t* request, HttpRuntime& runtime) {
   for (std::size_t index = 0; index < snapshot->action_count; ++index) {
     cJSON* action = cJSON_CreateObject();
     cJSON_AddStringToObject(action, "tool", snapshot->actions[index].tool);
-    cJSON_AddStringToObject(action, "result_json", snapshot->actions[index].result_json);
+    cJSON_AddStringToObject(action, "detail",
+                            "Executed locally; result withheld from the browser.");
     cJSON_AddItemToArray(actions, action);
   }
   mbedtls_platform_zeroize(snapshot, sizeof(*snapshot));
@@ -2248,18 +2275,19 @@ esp_err_t aiChatHandler(httpd_req_t* request) {
   if (!body || readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_413_CONTENT_TOO_LARGE, "Chat request is too large");
   cJSON* document = cJSON_ParseWithLength(body.data(), received);
-  static constexpr const char* fields[] = {"message", "history", "allow_actions"};
-  static constexpr const char* fields_with_id[] = {"message", "history", "chat_id",
-                                                   "allow_actions"};
+  static constexpr const char* fields[] = {"message", "history"};
+  static constexpr const char* fields_with_id[] = {"message", "history", "chat_id"};
   const bool has_chat_id =
       cJSON_IsObject(document) && cJSON_GetObjectItemCaseSensitive(document, "chat_id") != nullptr;
-  bool valid = exactObject(document, has_chat_id ? fields_with_id : fields, has_chat_id ? 4 : 3);
+  bool valid = exactObject(document, has_chat_id ? fields_with_id : fields, has_chat_id ? 3 : 2);
+  const cJSON* chat_id = cJSON_GetObjectItemCaseSensitive(document, "chat_id");
+  if (has_chat_id)
+    valid = valid && cJSON_IsString(chat_id) && nonWhitespace(chat_id->valuestring) &&
+            std::strlen(chat_id->valuestring) <= core_domain::max_id;
   const cJSON* message = cJSON_GetObjectItemCaseSensitive(document, "message");
   const cJSON* history = cJSON_GetObjectItemCaseSensitive(document, "history");
-  const cJSON* allow_actions = cJSON_GetObjectItemCaseSensitive(document, "allow_actions");
   const int history_count = cJSON_IsArray(history) ? cJSON_GetArraySize(history) : -1;
-  valid = valid && cJSON_IsString(message) && cJSON_IsArray(history) &&
-          (cJSON_IsTrue(allow_actions) || cJSON_IsFalse(allow_actions)) && history_count >= 0 &&
+  valid = valid && cJSON_IsString(message) && cJSON_IsArray(history) && history_count >= 0 &&
           history_count <= static_cast<int>(AiChatService::kMaxHistoryEntries);
   AiChatService::HistoryEntry entries[AiChatService::kMaxHistoryEntries]{};
   for (int index = 0; valid && index < history_count; ++index) {
@@ -2287,7 +2315,6 @@ esp_err_t aiChatHandler(httpd_req_t* request) {
     chat.message_length = std::strlen(message->valuestring);
     chat.history = entries;
     chat.history_count = static_cast<std::size_t>(history_count);
-    chat.allow_actions = cJSON_IsTrue(allow_actions);
   }
   std::uint64_t operation_id = 0;
   const auto submitted =
@@ -2295,11 +2322,20 @@ esp_err_t aiChatHandler(httpd_req_t* request) {
   cJSON_Delete(document);
   const bool accepted = submitted == AiChatService::SubmitResult::queued;
   if (!accepted)
-    httpd_resp_set_status(request, submitted == AiChatService::SubmitResult::busy
-                                       ? "409 Conflict"
+    httpd_resp_set_status(request, submitted == AiChatService::SubmitResult::busy ? "409 Conflict"
+                                   : submitted == AiChatService::SubmitResult::too_large
+                                       ? "413 Content Too Large"
+                                   : submitted == AiChatService::SubmitResult::not_ready ||
+                                           submitted == AiChatService::SubmitResult::no_memory
+                                       ? "503 Service Unavailable"
                                        : "400 Bad Request");
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", accepted);
+  char operation_text[24]{};
+  if (accepted)
+    std::snprintf(operation_text, sizeof operation_text, "%llu",
+                  static_cast<unsigned long long>(operation_id));
+  cJSON_AddStringToObject(response, "operation_id", operation_text);
   cJSON_AddStringToObject(response, "status", accepted ? "processing" : "AI_CHAT_REJECTED");
   cJSON_AddStringToObject(response, "reply", "");
   cJSON_AddArrayToObject(response, "actions");

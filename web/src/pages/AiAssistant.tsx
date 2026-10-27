@@ -53,12 +53,6 @@ import {
   SheetTitle,
 } from "~/components/sheet";
 import { Skeleton } from "~/components/skeleton";
-import {
-  Switch,
-  SwitchControl,
-  SwitchLabel,
-  SwitchThumb,
-} from "~/components/switch";
 
 import {
   TextField,
@@ -166,15 +160,6 @@ function newChatId(): string {
   return `chat-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function redactToolResult(result: string): string {
-  return result
-    .replace(
-      /(api[_-]?key|password|token)\s*[:=]\s*[^,\s}]+/gi,
-      "$1: [redacted]",
-    )
-    .slice(0, 2048);
-}
-
 function messageLabel(role: AiChatMessage["role"]): string {
   if (role === "user") return "You";
   if (role === "tool") return "Tool";
@@ -205,15 +190,9 @@ const ChatMessage: Component<{ message: AiChatMessage; pending?: boolean }> = (
           </p>
         </MessageBubble>
         <Show when={props.message.role === "tool"}>
-          <MessageFooter>Executed local tool</MessageFooter>
-          <details class="mt-2 rounded border px-3 py-2 text-xs">
-            <summary class="min-h-6 cursor-pointer font-medium">
-              Redacted tool details
-            </summary>
-            <pre class="mt-2 max-h-48 overflow-auto whitespace-pre-wrap wrap-break-word text-muted-foreground">
-              {redactToolResult(props.message.content)}
-            </pre>
-          </details>
+          <MessageFooter>
+            Executed locally; sensitive result data withheld
+          </MessageFooter>
         </Show>
       </MessageContent>
     </Message>
@@ -304,7 +283,6 @@ const AiAssistant: Component = () => {
   const [providerAuthType, setProviderAuthType] = createSignal<
     SelectOption<ProviderAuthType>
   >(providerAuthOptions[0]);
-  const [assistantEnabled, setAssistantEnabled] = createSignal(false);
 
   const [providerSheetOpen, setProviderSheetOpen] = createSignal(false);
   const {
@@ -339,7 +317,7 @@ const AiAssistant: Component = () => {
     {
       role: "assistant",
       content:
-        "Hi — I can help with Core Pilot after you configure an encrypted HTTPS provider. Local tool execution is not available yet.",
+        "Hi — configure an encrypted HTTPS provider, then I can answer questions and use the local tools you have explicitly enabled.",
     },
   ]);
   const chatId = newChatId();
@@ -380,7 +358,6 @@ const AiAssistant: Component = () => {
     setProviderMode("openai-compatible");
     setProviderBackend(providerBackendOptions[0]);
     setProviderAuthType(providerAuthOptions[0]);
-    setAssistantEnabled(false);
     resetProvider(providerDefaults());
   }
 
@@ -437,7 +414,6 @@ const AiAssistant: Component = () => {
         message,
         history,
         chat_id: chatId,
-        allow_actions: false,
       },
       {
         onSuccess: (response) => {
@@ -450,7 +426,7 @@ const AiAssistant: Component = () => {
               (next, action) =>
                 appendChatMessage(next, {
                   role: "tool",
-                  content: `${action.tool}: ${action.result_json}`,
+                  content: `${action.tool}: ${action.detail}`,
                 }),
               withAnswer,
             );
@@ -467,8 +443,10 @@ const AiAssistant: Component = () => {
     );
   });
 
-  const availableTools = createMemo(() =>
-    (toolsQuery.data?.tools ?? []).filter((tool) => tool.available),
+  const enabledTools = createMemo(() =>
+    (toolsQuery.data?.tools ?? []).filter(
+      (tool) => tool.available && tool.enabled,
+    ),
   );
 
   return (
@@ -529,8 +507,8 @@ const AiAssistant: Component = () => {
                   >
                     <CardTitle>Chat</CardTitle>
                     <CardDescription>
-                      Model-generated answers only. Local tool execution is not
-                      available yet.
+                      Answers can use only the local tools enabled in
+                      Permissions.
                     </CardDescription>
                   </Flex>
                 </Flex>
@@ -659,35 +637,25 @@ const AiAssistant: Component = () => {
 
               <Card>
                 <CardHeader>
-                  <CardTitle>Local tool trust</CardTitle>
+                  <CardTitle>Assistant access</CardTitle>
                   <CardDescription>
-                    Tool permissions are stored locally, but chat cannot execute
-                    tools in this release.
+                    Core Pilot keeps tool authorization local and checks it
+                    again before every action.
                   </CardDescription>
                 </CardHeader>
-                <CardContent class="space-y-3">
-                  <Show
-                    when={availableTools().length > 0}
-                    fallback={
-                      <p class="text-sm text-muted-foreground">
-                        No executable local tools are currently available.
-                      </p>
-                    }
-                  >
-                    <ul
-                      class="flex flex-wrap gap-2"
-                      aria-label="Available local tools"
-                    >
-                      <For each={availableTools()}>
-                        {(tool) => (
-                          <li>
-                            <Badge variant="outline">{tool.title}</Badge>
-                          </li>
-                        )}
-                      </For>
-                    </ul>
-                  </Show>
+                <CardContent class="space-y-2">
+                  <p class="text-2xl font-semibold">{enabledTools().length}</p>
+                  <p class="text-sm text-muted-foreground">
+                    {enabledTools().length === 1
+                      ? "local tool is enabled for chat"
+                      : "local tools are enabled for chat"}
+                  </p>
                 </CardContent>
+                <CardFooter class="justify-end">
+                  <Button as="a" href="#/ai/tools" variant="outline">
+                    Manage permissions
+                  </Button>
+                </CardFooter>
               </Card>
 
               <Sheet
@@ -916,26 +884,7 @@ const AiAssistant: Component = () => {
                           )}
                         </Show>
                       </TextField>
-                      <Switch
-                        checked={assistantEnabled()}
-                        onChange={setAssistantEnabled}
-                        class="flex items-start gap-3 rounded-md border p-3"
-                      >
-                        <SwitchControl class="mt-0.5">
-                          <SwitchThumb />
-                        </SwitchControl>
-                        <Flex
-                          flexDirection="col"
-                          alignItems="start"
-                          justifyContent="start"
-                          class="gap-1"
-                        >
-                          <SwitchLabel>Enable assistant</SwitchLabel>
-                          <p class="text-sm text-muted-foreground">
-                            Local controls always remain available.
-                          </p>
-                        </Flex>
-                      </Switch>
+
                       <Show
                         when={
                           providerMutation.isPending ||
@@ -970,9 +919,7 @@ const AiAssistant: Component = () => {
                       </Button>
                       <Button
                         type="submit"
-                        disabled={
-                          providerMutation.isPending || !assistantEnabled()
-                        }
+                        disabled={providerMutation.isPending}
                       >
                         Save provider
                       </Button>

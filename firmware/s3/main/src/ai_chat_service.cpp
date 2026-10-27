@@ -242,7 +242,6 @@ struct AiChatService::RequestSlot final {
     char content[kMaxHistoryContentBytes + 1]{};
   };
   std::uint64_t operation_id{};
-  bool allow_actions{};
   std::size_t message_length{};
   char message[kMaxMessageBytes + 1]{};
   std::size_t history_count{};
@@ -348,7 +347,6 @@ AiChatService::SubmitResult AiChatService::submit(const Request& input,
   request_->operation_id = next_operation_id_++;
   if (request_->operation_id == 0)
     request_->operation_id = next_operation_id_++;
-  request_->allow_actions = input.allow_actions;
   request_->message_length = input.message_length;
   std::memcpy(request_->message, input.message, input.message_length);
   request_->history_count = input.history_count;
@@ -371,16 +369,12 @@ AiChatService::SubmitResult AiChatService::submit(const Request& input,
   return SubmitResult::queued;
 }
 
-bool AiChatService::status(Snapshot& output, char* response, std::size_t response_capacity) const {
+bool AiChatService::status(std::uint64_t operation_id, Snapshot& output, char* response,
+                           std::size_t response_capacity) const {
   Lock lock(mutex_);
-  if (!lock.held())
+  if (!lock.held() || runtime_ == nullptr || operation_id == 0 ||
+      runtime_->snapshot.operation_id != operation_id)
     return false;
-  if (runtime_ == nullptr) {
-    output = {};
-    if (response != nullptr && response_capacity != 0)
-      response[0] = '\0';
-    return true;
-  }
   if (runtime_->snapshot.response_length != 0 &&
       (response == nullptr || response_capacity <= runtime_->snapshot.response_length))
     return false;
@@ -450,7 +444,7 @@ void AiChatService::process(std::uint64_t operation_id) {
       failure_detail = "provider URL must use an allowed HTTPS host";
       break;
     }
-    if (request_->allow_actions && http_runtime_ == nullptr) {
+    if (http_runtime_ == nullptr) {
       failure_error = Error::actions_unsupported;
       failure_detail = "AI actions require a bound HTTP runtime";
       break;
@@ -483,7 +477,7 @@ void AiChatService::process(std::uint64_t operation_id) {
       cJSON_AddItemToObject(request_root, "messages", messages);
     else
       cJSON_Delete(messages);
-    if (valid && request_->allow_actions) {
+    if (valid) {
       cJSON* context = McpService::context(*http_runtime_);
       const cJSON* system_prompt =
           context == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(context, "system_prompt");
@@ -512,7 +506,7 @@ void AiChatService::process(std::uint64_t operation_id) {
                           request_->history[index].length);
     }
     valid = valid && add_message(messages, "user", request_->message, request_->message_length);
-    if (valid && request_->allow_actions) {
+    if (valid) {
       cJSON* tools = provider_tools(provider.backend);
       valid = tools != nullptr;
       if (valid && cJSON_GetArraySize(tools) != 0)
@@ -624,7 +618,7 @@ void AiChatService::process(std::uint64_t operation_id) {
       }
 
       int call_count = 0;
-      if (request_->allow_actions && cJSON_IsArray(calls)) {
+      if (cJSON_IsArray(calls)) {
         const int candidate_count = cJSON_GetArraySize(calls);
         for (int index = 0; index < candidate_count; ++index) {
           const cJSON* call = cJSON_GetArrayItem(calls, index);

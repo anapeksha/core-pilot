@@ -61,7 +61,6 @@ public:
     std::size_t message_length{};
     const HistoryEntry* history{};
     std::size_t history_count{};
-    bool allow_actions{};
   };
 
   struct Action final {
@@ -97,7 +96,8 @@ public:
 
   // Never waits for the network. Returns false if the snapshot is momentarily busy or the
   // supplied response buffer cannot hold the completed response (including its trailing NUL).
-  bool status(Snapshot& output, char* response, std::size_t response_capacity) const;
+  bool status(std::uint64_t operation_id, Snapshot& output, char* response,
+              std::size_t response_capacity) const;
 
 private:
   struct RequestSlot;

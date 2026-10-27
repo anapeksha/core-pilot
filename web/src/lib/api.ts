@@ -374,14 +374,14 @@ export type AiChatRequest = {
   message: string;
   history: AiChatMessage[];
   chat_id?: string;
-  allow_actions: boolean;
 };
 
 export type AiChatResponse = {
   accepted: boolean;
+  operation_id: string;
   status: string;
   reply: string;
-  actions: { tool: McpToolName; result_json: string }[];
+  actions: { tool: McpToolName; detail: string }[];
 };
 
 export type AiMemorySection = {
@@ -1343,11 +1343,14 @@ export async function sendAiChat(
     request,
   );
   if (!accepted.accepted || accepted.status !== "processing") return accepted;
+  if (!/^[1-9][0-9]*$/.test(accepted.operation_id))
+    throw new Error("Core Pilot returned an invalid AI operation identifier.");
 
   const deadline = Date.now() + AI_CHAT_RESULT_TIMEOUT_MS;
+  const statusPath = `/api/v1/ai/chat?operation_id=${encodeURIComponent(accepted.operation_id)}`;
   while (Date.now() < deadline) {
     await delay(AI_CHAT_POLL_INTERVAL_MS);
-    const result = await loadJson<AiChatResponse>("/api/v1/ai/chat");
+    const result = await loadJson<AiChatResponse>(statusPath);
     if (result.status !== "processing") return result;
   }
   throw new Error(
