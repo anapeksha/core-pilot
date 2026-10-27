@@ -54,6 +54,15 @@ public:
     failed,
   };
 
+  enum class CommandRejection : std::uint8_t {
+    none,
+    invalid_request,
+    matter_not_ready,
+    commissioning_busy,
+    command_busy,
+    queue_full,
+  };
+
   struct CommandStatus final {
     CommandKind kind;
     CommandState state;
@@ -137,7 +146,8 @@ public:
   esp_err_t setColorTemperature(std::uint64_t node_id, std::uint16_t endpoint_id,
                                 std::uint16_t color_temperature_mireds,
                                 std::uint16_t transition_time_ds, std::uint32_t& operation_id);
-  esp_err_t unpairDevice(std::uint64_t node_id, std::uint32_t& operation_id);
+  esp_err_t unpairDevice(std::uint64_t node_id, std::uint32_t& operation_id,
+                         CommandRejection* rejection = nullptr);
   esp_err_t discoverEndpoints(std::uint64_t node_id);
   esp_err_t subscribeOnOff(std::uint64_t node_id);
   Status status() const;
@@ -191,7 +201,8 @@ private:
   esp_err_t enqueueCommand(const Command& command);
   bool receiveCommand(Command& command, TickType_t timeout);
   void clearSecrets();
-  esp_err_t enqueueDeviceCommand(Command command, std::uint32_t& operation_id);
+  esp_err_t enqueueDeviceCommand(Command command, std::uint32_t& operation_id,
+                                 CommandRejection* rejection = nullptr);
   bool finishCommand(std::uint32_t operation_id, CommandState state, esp_err_t error);
 
   struct InvokeCallbackContext final {

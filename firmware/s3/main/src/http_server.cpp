@@ -1728,17 +1728,54 @@ esp_err_t removeMatterDeviceHandler(httpd_req_t* request) {
   const bool valid = parseMatterNodeId(device_id, node_id);
   cJSON_Delete(document);
 
+  bool registered = false;
+  if (valid) {
+    const auto devices = runtime->devices.snapshot();
+    for (std::size_t index = 0; index < devices.count; ++index)
+      registered = registered || devices.entries[index].node_id == node_id;
+  }
+
   std::uint32_t operation_id = 0;
-  const esp_err_t result =
-      valid ? runtime->matter.unpairDevice(node_id, operation_id) : ESP_ERR_INVALID_ARG;
+  auto rejection = CoreMatter::CommandRejection::invalid_request;
+  const esp_err_t result = valid && registered
+                               ? runtime->matter.unpairDevice(node_id, operation_id, &rejection)
+                               : ESP_ERR_INVALID_ARG;
+  const char* status = "queued";
+  const char* detail = "Matter device removal queued.";
+  if (result != ESP_OK) {
+    switch (valid && registered ? rejection : CoreMatter::CommandRejection::invalid_request) {
+    case CoreMatter::CommandRejection::matter_not_ready:
+      status = core_domain::error_code::MATTER_COMMAND_NOT_READY;
+      detail = "Matter is not ready to remove a device.";
+      break;
+    case CoreMatter::CommandRejection::commissioning_busy:
+      status = core_domain::error_code::MATTER_BUSY_COMMISSIONING;
+      detail = "Cancel or finish Matter commissioning before removing a device.";
+      break;
+    case CoreMatter::CommandRejection::command_busy:
+      status = core_domain::error_code::MATTER_COMMAND_BUSY;
+      detail = "Another Matter device command is still active.";
+      break;
+    case CoreMatter::CommandRejection::queue_full:
+      status = core_domain::error_code::MATTER_COMMAND_QUEUE_FULL;
+      detail = "The Matter command queue is full.";
+      break;
+    case CoreMatter::CommandRejection::none:
+    case CoreMatter::CommandRejection::invalid_request:
+      status = core_domain::error_code::MATTER_COMMAND_TARGET_INVALID;
+      detail = "The Matter device ID is invalid or is not in the local registry.";
+      break;
+    }
+  }
+
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
   if (result == ESP_OK)
     cJSON_AddNumberToObject(response, "operation_id", operation_id);
-  cJSON_AddStringToObject(response, "status", result == ESP_OK ? "queued" : "rejected");
-  cJSON_AddStringToObject(response, "detail",
-                          result == ESP_OK ? "Matter device removal queued."
-                                           : "Matter device removal was rejected.");
+  else
+    cJSON_AddNullToObject(response, "operation_id");
+  cJSON_AddStringToObject(response, "status", status);
+  cJSON_AddStringToObject(response, "detail", detail);
   return sendJson(request, response);
 }
 

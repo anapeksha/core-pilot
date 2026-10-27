@@ -635,13 +635,25 @@ esp_err_t CoreMatter::cancelCommissioning(std::uint32_t operation_id) {
   return enqueueCommand(command);
 }
 
-esp_err_t CoreMatter::enqueueDeviceCommand(Command command, std::uint32_t& operation_id) {
+esp_err_t CoreMatter::enqueueDeviceCommand(Command command, std::uint32_t& operation_id,
+                                           CommandRejection* rejection) {
   operation_id = 0;
+  if (rejection != nullptr)
+    *rejection = CommandRejection::none;
   taskENTER_CRITICAL(&status_lock_);
   const bool ready = status_.state == State::ready;
-  const bool busy = command_status_.state == CommandState::queued ||
-                    command_status_.state == CommandState::invoking;
-  if (!ready || busy) {
+  const auto current_commissioning_state = commissioning_state.load();
+  const bool commissioning_busy = status_.commissioning_state == CommissioningState::queued ||
+                                  current_commissioning_state == CommissioningState::pase ||
+                                  current_commissioning_state == CommissioningState::cancelling;
+  const bool command_busy = command_status_.state == CommandState::queued ||
+                            command_status_.state == CommandState::invoking;
+  if (!ready || commissioning_busy || command_busy) {
+    if (rejection != nullptr) {
+      *rejection = !ready               ? CommandRejection::matter_not_ready
+                   : commissioning_busy ? CommandRejection::commissioning_busy
+                                        : CommandRejection::command_busy;
+    }
     taskEXIT_CRITICAL(&status_lock_);
     return ESP_ERR_INVALID_STATE;
   }
@@ -675,6 +687,8 @@ esp_err_t CoreMatter::enqueueDeviceCommand(Command command, std::uint32_t& opera
   if (enqueueCommand(command) != ESP_OK) {
     finishCommand(operation_id, CommandState::failed, ESP_ERR_TIMEOUT);
     operation_id = 0;
+    if (rejection != nullptr)
+      *rejection = CommandRejection::queue_full;
     return ESP_ERR_TIMEOUT;
   }
   return ESP_OK;
@@ -728,13 +742,17 @@ esp_err_t CoreMatter::setColorTemperature(std::uint64_t node_id, std::uint16_t e
                               operation_id);
 }
 
-esp_err_t CoreMatter::unpairDevice(std::uint64_t node_id, std::uint32_t& operation_id) {
+esp_err_t CoreMatter::unpairDevice(std::uint64_t node_id, std::uint32_t& operation_id,
+                                   CommandRejection* rejection) {
   if (node_id == 0 || queue_ == nullptr) {
     operation_id = 0;
-    return ESP_ERR_INVALID_ARG;
+    if (rejection != nullptr)
+      *rejection =
+          node_id == 0 ? CommandRejection::invalid_request : CommandRejection::matter_not_ready;
+    return node_id == 0 ? ESP_ERR_INVALID_ARG : ESP_ERR_INVALID_STATE;
   }
   return enqueueDeviceCommand(Command{.type = CommandType::unpair_device, .node_id = node_id},
-                              operation_id);
+                              operation_id, rejection);
 }
 
 esp_err_t CoreMatter::discoverEndpoints(std::uint64_t node_id) {
