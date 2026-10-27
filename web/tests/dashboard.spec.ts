@@ -1206,7 +1206,7 @@ test("navigates automation steps through icon controls and tooltips", async ({
   });
 
   await expect(basicsStep).toHaveAttribute("aria-current", "step");
-  await triggerStep.hover();
+  await triggerStep.focus();
   await expect(
     page.getByRole("tooltip").filter({ hasText: "Trigger" }),
   ).toBeVisible();
