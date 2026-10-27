@@ -27,6 +27,7 @@ constexpr Entry kEntries[] = {
     {"/core-pilot/ai/memory-v2.enc", {"AIMEM2.ENC", "AIMEM2.TMP", "AIMEM2.BAK"}},
     {"/core-pilot/ai/prompts.enc", {"AIPROM.ENC", "AIPROM.TMP", "AIPROM.BAK"}},
     {"/core-pilot/ai/tool-permissions.enc", {"AITOOL.ENC", "AITOOL.TMP", "AITOOL.BAK"}},
+    {"/core-pilot/ai/tool-permissions-v2.enc", {"AITOOL2.ENC", "AITOOL2.TMP", "AITOOL2.BAK"}},
     {"/core-pilot/config/time.enc", {"TIME.ENC", "TIME.TMP", "TIME.BAK"}},
     {"/core-pilot/config/smtp.enc", {"SMTP.ENC", "SMTP.TMP", "SMTP.BAK"}},
     {"/core-pilot/matter/fabric.enc", {"FABRIC.ENC", "FABRIC.TMP", "FABRIC.BAK"}},

@@ -317,6 +317,7 @@ void Application::run() {
   if (mcp_result != ESP_OK) {
     ESP_LOGE(kTag, "MCP permission storage unavailable: %s", esp_err_to_name(mcp_result));
   }
+  publishRtcReady(display.rtcReady());
   const esp_err_t time_result = initializeTimeService(http_runtime);
   if (time_result != ESP_OK) {
     ESP_LOGE(kTag, "time service startup failed: %s", esp_err_to_name(time_result));
@@ -387,6 +388,14 @@ void Application::run() {
   std::uint64_t reconciled_terminal_sequence = 0;
   std::uint64_t last_removed_node_id = 0;
   while (true) {
+    std::time_t synchronized_time = 0;
+    if (consumePendingTimeSync(synchronized_time)) {
+      const bool updated = display.setRtcFromUnix(synchronized_time);
+      publishRtcReady(updated);
+      if (!updated)
+        ESP_LOGW(kTag, "failed to update hardware RTC from synchronized network time");
+    }
+
     const auto matter_status = matter.status();
     CoreMatter::TerminalCommand terminals[8]{};
     const std::size_t terminal_count =

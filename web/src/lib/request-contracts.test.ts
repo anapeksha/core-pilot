@@ -4,12 +4,39 @@ import {
   automationUpsertRequestSchema,
   groupUpsertRequestSchema,
   matterDeviceRemoveRequestSchema,
+  mcpInvokeRequestSchema,
+  mcpToolIds,
+  mcpToolNames,
+  mcpToolPermissionRequestSchema,
   otaPrepareRequestSchema,
   roomUpsertRequestSchema,
   sceneUpsertRequestSchema,
   wifiForgetRequestSchema,
   wifiProvisionRequestSchema,
 } from "./request-contracts";
+
+const expectedMcpTools = [
+  ["ListRooms", "rooms.list"],
+  ["CreateRoom", "rooms.create"],
+  ["UpdateRoom", "rooms.update"],
+  ["DeleteRoom", "rooms.delete"],
+  ["ListGroups", "groups.list"],
+  ["CreateGroup", "groups.create"],
+  ["UpdateGroup", "groups.update"],
+  ["DeleteGroup", "groups.delete"],
+  ["ListScenes", "scenes.list"],
+  ["CreateScene", "scenes.create"],
+  ["UpdateScene", "scenes.update"],
+  ["DeleteScene", "scenes.delete"],
+  ["ListAutomations", "automations.list"],
+  ["CreateAutomation", "automations.create"],
+  ["UpdateAutomation", "automations.update"],
+  ["DeleteAutomation", "automations.delete"],
+  ["RunAutomation", "automations.run"],
+  ["EnableAutomation", "automations.enable"],
+  ["DisableAutomation", "automations.disable"],
+  ["GetMatterOperation", "matter.get_operation"],
+] as const;
 
 const exactName = "😀".repeat(16);
 const oversizedName = `${exactName}a`;
@@ -77,6 +104,40 @@ describe("persisted name limits", () => {
       expect(otaPrepareRequestSchema.safeParse(request(version)).success).toBe(
         false,
       );
+  });
+
+  it("keeps the MCP name and ID allowlists in parity", () => {
+    expect(mcpToolNames).toHaveLength(mcpToolIds.length);
+    for (const [name, id] of expectedMcpTools) {
+      expect(mcpToolNames).toContain(name);
+      expect(mcpToolIds).toContain(id);
+      expect(
+        mcpToolPermissionRequestSchema.safeParse({ tool: name, enabled: true })
+          .success,
+      ).toBe(true);
+      expect(
+        mcpInvokeRequestSchema.safeParse({ tool: id, arguments_json: "{}" })
+          .success,
+      ).toBe(true);
+    }
+    for (const obsolete of [
+      "CreateSimpleAutomation",
+      "ResetMatterFabric",
+      "RestartHub",
+      "ShutdownHub",
+      "FactoryReset",
+      "automations.create_simple",
+      "matter.reset_fabric",
+      "hub.restart",
+      "hub.shutdown",
+      "hub.factory_reset",
+    ])
+      expect(
+        mcpToolPermissionRequestSchema.safeParse({
+          tool: obsolete,
+          enabled: true,
+        }).success,
+      ).toBe(false);
   });
 
   it("accepts only nonzero 64-bit hexadecimal Matter node IDs", () => {

@@ -62,6 +62,8 @@ struct TimeConfig final {
 TimeConfig time_config;
 portMUX_TYPE time_config_lock = portMUX_INITIALIZER_UNLOCKED;
 std::atomic<std::time_t> last_time_sync{0};
+std::atomic<std::time_t> pending_time_sync{0};
+std::atomic<bool> rtc_ready{false};
 
 class RequestBody final {
 public:
@@ -116,8 +118,9 @@ private:
 };
 
 void onTimeSync(struct timeval* value) {
-  if (value != nullptr) {
+  if (value != nullptr && value->tv_sec >= 1704067200) {
     last_time_sync.store(value->tv_sec);
+    pending_time_sync.store(value->tv_sec);
   }
 }
 
@@ -839,6 +842,8 @@ esp_err_t startTimeService(const char* host, int offset_minutes) {
     return ESP_FAIL;
   }
   esp_netif_sntp_deinit();
+  last_time_sync.store(0);
+  pending_time_sync.store(0);
   esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG(host);
   config.sync_cb = onTimeSync;
   return esp_netif_sntp_init(&config);
@@ -943,8 +948,8 @@ esp_err_t timeStatusHandler(httpd_req_t* request) {
   cJSON_AddNumberToObject(response, "timezone_offset_minutes", config.timezone_offset_minutes);
   cJSON_AddStringToObject(response, "timezone_offset_label", offset);
   const std::time_t now = std::time(nullptr);
-  const bool synchronized = now >= 1704067200;
   const std::time_t last_sync = last_time_sync.load();
+  const bool synchronized = last_sync >= 1704067200;
   std::tm local{};
   char current_date[16]{};
   char current_time[16]{};
@@ -957,7 +962,7 @@ esp_err_t timeStatusHandler(httpd_req_t* request) {
                           synchronized              ? "synchronized"
                           : config.sntp_initialized ? "syncing"
                                                     : "not-synced");
-  cJSON_AddStringToObject(response, "rtc", "ready");
+  cJSON_AddStringToObject(response, "rtc", rtc_ready.load() ? "ready" : "not-ready");
   if (last_sync > 0) {
     cJSON_AddNumberToObject(response, "last_sync_unix_seconds", static_cast<double>(last_sync));
   } else {
@@ -972,11 +977,12 @@ esp_err_t timeStatusHandler(httpd_req_t* request) {
     cJSON_AddNullToObject(response, "current_date");
     cJSON_AddNullToObject(response, "current_time");
   }
-  cJSON_AddStringToObject(
-      response, "detail",
-      synchronized ? "Network time is synchronized and the configured offset is active."
-      : config.sntp_initialized ? "NTP synchronization is in progress."
-                                : "RTC available; network time is not yet synchronized.");
+  cJSON_AddStringToObject(response, "detail",
+                          synchronized
+                              ? "Network time is synchronized and the configured offset is active."
+                          : config.sntp_initialized ? "NTP synchronization is in progress."
+                          : rtc_ready.load() ? "RTC is valid; network time is not yet synchronized."
+                                             : "Network time and RTC are not yet ready.");
   return sendJson(request, response);
 }
 
@@ -1342,6 +1348,20 @@ esp_err_t sendModelError(httpd_req_t* request, const char* http_status, const ch
   return sendJson(request, response);
 }
 
+struct ModelListContext final {
+  cJSON* items;
+  core_domain::ModelKind kind;
+};
+
+bool appendModelJson(const core_domain::ModelUpsert& model, void* opaque) {
+  auto& context = *static_cast<ModelListContext*>(opaque);
+  cJSON* item = modelJson(model, context.kind);
+  if (item == nullptr)
+    return false;
+  cJSON_AddItemToArray(context.items, item);
+  return true;
+}
+
 esp_err_t modelsHandler(httpd_req_t* request, const HttpRuntime& runtime,
                         core_domain::ModelKind kind) {
   cJSON* response = cJSON_CreateObject();
@@ -1349,11 +1369,14 @@ esp_err_t modelsHandler(httpd_req_t* request, const HttpRuntime& runtime,
   char plural[16]{};
   std::snprintf(plural, sizeof(plural), "%ss", key);
   cJSON* items = cJSON_AddArrayToObject(response, plural);
-  const std::size_t count = runtime.models.count(kind);
-  for (std::size_t index = 0; items && index < count; ++index) {
-    core_domain::ModelUpsert model{};
-    if (runtime.models.get(kind, index, model))
-      cJSON_AddItemToArray(items, modelJson(model, kind));
+  ModelListContext context{items, kind};
+  std::size_t count = 0;
+  const bool complete =
+      items != nullptr && runtime.models.visit(kind, appendModelJson, &context, count);
+  if (!complete) {
+    cJSON_Delete(response);
+    return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR,
+                               "Could not create a coherent model snapshot");
   }
   cJSON_AddBoolToObject(response, "writable", runtime.models.writable());
   cJSON_AddStringToObject(response, "detail",
@@ -1394,10 +1417,11 @@ esp_err_t modelMutationHandler(httpd_req_t* request) {
     return sendModelError(request, "400 Bad Request",
                           core_domain::error_code::MODEL_MUTATION_REJECTED,
                           "Model payload failed strict validation.");
+  const auto mutation = remove         ? ModelRepository::Mutation::remove
+                        : model.has_id ? ModelRepository::Mutation::update
+                                       : ModelRepository::Mutation::create;
   ModelRepository::Result result{};
-  if (!runtime->models.submit(remove ? ModelRepository::Mutation::remove
-                                     : ModelRepository::Mutation::upsert,
-                              kind, model, result))
+  if (!runtime->models.submit(mutation, kind, model, result))
     return sendModelError(request, "503 Service Unavailable",
                           core_domain::error_code::MODEL_MUTATION_REJECTED,
                           "Model mutation queue is full.");
@@ -1420,8 +1444,11 @@ esp_err_t modelMutationHandler(httpd_req_t* request) {
   cJSON_AddBoolToObject(response, "accepted", true);
   cJSON_AddStringToObject(response, "status", "ok");
   cJSON_AddStringToObject(response, "detail", remove ? "Model deleted." : "Model saved.");
-  if (!remove)
-    cJSON_AddItemToObject(response, modelKey(kind), modelJson(result.model, kind));
+  if (!remove) {
+    model.has_id = true;
+    std::memcpy(model.id, result.id, sizeof(model.id));
+    cJSON_AddItemToObject(response, modelKey(kind), modelJson(model, kind));
+  }
   return sendJson(request, response);
 }
 
@@ -1936,7 +1963,9 @@ esp_err_t aiStatusHandler(httpd_req_t* request, HttpRuntime& runtime) {
   cJSON_AddNumberToObject(response, "max_tool_rounds", core_domain::max_ai_tool_rounds);
   cJSON_AddNumberToObject(response, "max_repeated_tool_calls", 3);
   cJSON_AddNumberToObject(response, "max_actions", core_domain::max_actions);
-  cJSON_AddStringToObject(response, "destructive_confirmation", "CONFIRM");
+  cJSON_AddStringToObject(
+      response, "destructive_confirmation",
+      "Target-bound: DELETE <model-id> for model deletion; REMOVE <device-id> for Matter removal.");
   cJSON_AddStringToObject(response, "persistence", "encrypted flash with optional SD replication");
   cJSON* transport = cJSON_AddObjectToObject(response, "provider_transport");
   cJSON_AddBoolToObject(transport, "http_ipv4_literal", false);
@@ -2243,13 +2272,23 @@ esp_err_t mcpInvokeHandler(httpd_req_t* request) {
           : ESP_ERR_INVALID_ARG;
   cJSON_Delete(arguments);
   cJSON_Delete(document);
-  cJSON_Delete(invocation);
   cJSON* response = cJSON_CreateObject();
-  cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
-  cJSON_AddStringToObject(response, "status", result == ESP_OK ? "queued" : "AI_TOOL_REJECTED");
+  const bool accepted = result == ESP_OK && invocation != nullptr;
+  const cJSON* invocation_status =
+      invocation == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(invocation, "status");
+  cJSON_AddBoolToObject(response, "accepted", accepted);
+  cJSON_AddStringToObject(response, "status",
+                          cJSON_IsString(invocation_status) ? invocation_status->valuestring
+                          : accepted                        ? "completed"
+                                                            : "AI_TOOL_REJECTED");
+  const cJSON* invocation_detail =
+      invocation == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(invocation, "detail");
   cJSON_AddStringToObject(response, "detail",
-                          result == ESP_OK ? "MCP tool accepted."
-                                           : "Tool unavailable or arguments invalid.");
+                          cJSON_IsString(invocation_detail) ? invocation_detail->valuestring
+                          : accepted ? "MCP tool completed or was queued as reported in result."
+                                     : "Tool unavailable or arguments invalid.");
+  if (invocation != nullptr)
+    cJSON_AddItemToObject(response, "result", invocation);
   return sendJson(request, response);
 }
 
@@ -2390,7 +2429,13 @@ esp_err_t initializeTimeService(const HttpRuntime& runtime) {
   TimeConfig loaded{};
   const auto load_result = loadTimeConfig(runtime, loaded);
   if (load_result == core_security::Status::NotFound) {
-    return applyTimezoneOffset(0) ? ESP_OK : ESP_FAIL;
+    const esp_err_t result = startTimeService(time_config.ntp_server_host, 0);
+    if (result == ESP_OK) {
+      taskENTER_CRITICAL(&time_config_lock);
+      time_config.sntp_initialized = true;
+      taskEXIT_CRITICAL(&time_config_lock);
+    }
+    return result;
   }
   if (load_result != core_security::Status::Ok) {
     return ESP_ERR_INVALID_RESPONSE;
@@ -2404,6 +2449,15 @@ esp_err_t initializeTimeService(const HttpRuntime& runtime) {
   time_config = loaded;
   taskEXIT_CRITICAL(&time_config_lock);
   return ESP_OK;
+}
+
+bool consumePendingTimeSync(std::time_t& timestamp) {
+  timestamp = pending_time_sync.exchange(0);
+  return timestamp >= 1704067200;
+}
+
+void publishRtcReady(bool ready) {
+  rtc_ready.store(ready);
 }
 
 httpd_handle_t startHttpServer(const HttpRuntime& runtime) {

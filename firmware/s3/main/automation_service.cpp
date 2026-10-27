@@ -31,18 +31,7 @@ AutomationService::SubmitResult AutomationService::submit(const char* id) {
   if (id == nullptr || queue_ == nullptr || task_ == nullptr)
     return SubmitResult::not_found;
   Work work{};
-  bool found = false;
-  const std::size_t count = models_.count(core_domain::ModelKind::automation);
-  for (std::size_t index = 0; index < count; ++index) {
-    core_domain::ModelUpsert candidate{};
-    if (models_.get(core_domain::ModelKind::automation, index, candidate) &&
-        std::strcmp(candidate.id, id) == 0) {
-      work.automation = candidate;
-      found = true;
-      break;
-    }
-  }
-  if (!found)
+  if (!models_.find(core_domain::ModelKind::automation, id, work.automation))
     return SubmitResult::not_found;
   if (!work.automation.enabled)
     return SubmitResult::disabled;

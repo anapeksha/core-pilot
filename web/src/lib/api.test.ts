@@ -294,6 +294,11 @@ describe("api client", () => {
                 enabled: true,
                 destructive: false,
                 available: true,
+                inputSchema: {
+                  type: "object",
+                  properties: {},
+                  additionalProperties: false,
+                },
               },
             ],
           }),
@@ -310,6 +315,11 @@ describe("api client", () => {
           category: "Capabilities",
           enabled: true,
           available: true,
+          inputSchema: {
+            type: "object",
+            properties: {},
+            additionalProperties: false,
+          },
         }),
       ],
     });

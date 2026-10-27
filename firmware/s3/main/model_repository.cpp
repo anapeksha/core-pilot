@@ -101,6 +101,38 @@ bool ModelRepository::get(core_domain::ModelKind kind, std::size_t index,
   return true;
 }
 
+bool ModelRepository::find(core_domain::ModelKind kind, const char* id,
+                           core_domain::ModelUpsert& model) const {
+  if (!databases_[active_] || id == nullptr)
+    return false;
+  SemaphoreLock lock(state_mutex_);
+  if (!lock.held())
+    return false;
+  const auto& collection = databases_[active_]->collections[core_storage::model_kind_index(kind)];
+  for (std::size_t index = 0; index < collection.count; ++index) {
+    if (std::strcmp(collection.entries[index].id, id) == 0) {
+      model = collection.entries[index];
+      return true;
+    }
+  }
+  return false;
+}
+
+bool ModelRepository::visit(core_domain::ModelKind kind, Visitor visitor, void* context,
+                            std::size_t& visited) const {
+  visited = 0;
+  if (!databases_[active_] || visitor == nullptr)
+    return false;
+  SemaphoreLock lock(state_mutex_);
+  if (!lock.held())
+    return false;
+  const auto& collection = databases_[active_]->collections[core_storage::model_kind_index(kind)];
+  for (; visited < collection.count; ++visited)
+    if (!visitor(collection.entries[visited], context))
+      return false;
+  return true;
+}
+
 bool ModelRepository::resetUnreadable(Result& result) {
   return submit(Mutation::reset_unreadable, core_domain::ModelKind::room, {}, result);
 }
@@ -188,13 +220,27 @@ void ModelRepository::process(WorkSlot& slot) {
       slot.result.status = core_security::Status::NotFound;
       return;
     }
-    slot.result.model = collection.entries[index];
+    std::memcpy(slot.result.id, collection.entries[index].id, sizeof(slot.result.id));
     for (std::size_t current = index + 1; current < collection.count; ++current)
       collection.entries[current - 1] = collection.entries[current];
     collection.entries[--collection.count] = {};
+  } else if (slot.mutation == Mutation::set_automation_enabled) {
+    if (slot.kind != core_domain::ModelKind::automation || index == collection.count) {
+      slot.result.status = core_security::Status::NotFound;
+      return;
+    }
+    collection.entries[index].enabled = slot.input.enabled;
+    std::memcpy(slot.result.id, collection.entries[index].id, sizeof(slot.result.id));
   } else {
-    auto updated = slot.input;
-    if (!updated.has_id) {
+    if (slot.mutation == Mutation::create && slot.input.has_id) {
+      slot.result.status = core_security::Status::Invalid;
+      return;
+    }
+    if (slot.mutation == Mutation::update && (!slot.input.has_id || index == collection.count)) {
+      slot.result.status = core_security::Status::NotFound;
+      return;
+    }
+    if (slot.mutation == Mutation::create) {
       if (collection.count == core_domain::max_models) {
         slot.result.status = core_security::Status::TooLarge;
         return;
@@ -202,30 +248,23 @@ void ModelRepository::process(WorkSlot& slot) {
       static constexpr const char* prefixes[] = {"room", "group", "scene", "automation"};
       bool unique = false;
       for (std::size_t suffix = 0; suffix <= core_domain::max_models && !unique; ++suffix) {
-        std::snprintf(updated.id, sizeof(updated.id), "%s-%016llx-%02x",
+        std::snprintf(slot.input.id, sizeof(slot.input.id), "%s-%016llx-%02x",
                       prefixes[core_storage::model_kind_index(slot.kind)],
                       static_cast<unsigned long long>(generation_ + 1),
                       static_cast<unsigned>(suffix));
         unique = true;
         for (std::size_t current = 0; current < collection.count; ++current)
-          unique = unique && std::strcmp(updated.id, collection.entries[current].id) != 0;
+          unique = unique && std::strcmp(slot.input.id, collection.entries[current].id) != 0;
       }
       if (!unique) {
         slot.result.status = core_security::Status::TooLarge;
         return;
       }
-      updated.has_id = true;
-      index = collection.count;
+      slot.input.has_id = true;
+      index = collection.count++;
     }
-    if (index == collection.count) {
-      if (collection.count == core_domain::max_models) {
-        slot.result.status = core_security::Status::TooLarge;
-        return;
-      }
-      ++collection.count;
-    }
-    collection.entries[index] = updated;
-    slot.result.model = updated;
+    collection.entries[index] = slot.input;
+    std::memcpy(slot.result.id, slot.input.id, sizeof(slot.result.id));
   }
 
   const auto result = persist(*databases_[staging], generation_ + 1);

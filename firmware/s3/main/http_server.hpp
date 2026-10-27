@@ -2,6 +2,8 @@
 
 #include "esp_http_server.h"
 
+#include <ctime>
+
 namespace core_security {
 class RandomSource;
 class StorageService;
@@ -41,6 +43,8 @@ struct HttpRuntime final {
 };
 
 esp_err_t initializeTimeService(const HttpRuntime& runtime);
+bool consumePendingTimeSync(std::time_t& timestamp);
+void publishRtcReady(bool ready);
 httpd_handle_t startHttpServer(const HttpRuntime& runtime);
 
 } // namespace core_pilot

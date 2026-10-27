@@ -15,12 +15,13 @@ namespace core_pilot {
 
 class ModelRepository final {
 public:
-  enum class Mutation { upsert, remove, reset_unreadable };
+  enum class Mutation { create, update, remove, set_automation_enabled, reset_unreadable };
   struct Result final {
     core_security::Status status{core_security::Status::Invalid};
-    core_domain::ModelUpsert model{};
+    char id[core_domain::max_id + 1]{};
     bool found{false};
   };
+  using Visitor = bool (*)(const core_domain::ModelUpsert& model, void* context);
 
   ModelRepository(core_security::StorageService& storage, core_security::RandomSource& random);
   ModelRepository(const ModelRepository&) = delete;
@@ -32,6 +33,11 @@ public:
   }
   std::size_t count(core_domain::ModelKind kind) const;
   bool get(core_domain::ModelKind kind, std::size_t index, core_domain::ModelUpsert& model) const;
+  bool find(core_domain::ModelKind kind, const char* id, core_domain::ModelUpsert& model) const;
+  // Visits one coherent in-memory generation while holding the state mutex. Visitors must not
+  // call back into ModelRepository or perform storage I/O.
+  bool visit(core_domain::ModelKind kind, Visitor visitor, void* context,
+             std::size_t& visited) const;
   bool submit(Mutation mutation, core_domain::ModelKind kind, const core_domain::ModelUpsert& model,
               Result& result);
   bool resetUnreadable(Result& result);
@@ -40,7 +46,7 @@ private:
   static constexpr std::size_t kQueueDepth = 4;
   static constexpr std::size_t kTaskStackBytes = 8 * 1024;
   struct WorkSlot final {
-    Mutation mutation{Mutation::upsert};
+    Mutation mutation{Mutation::create};
     core_domain::ModelKind kind{core_domain::ModelKind::room};
     core_domain::ModelUpsert input{};
     Result result{};
@@ -48,6 +54,9 @@ private:
     SemaphoreHandle_t completion{nullptr};
     bool occupied{false};
   };
+  static_assert(sizeof(core_domain::ModelUpsert) <= 4096);
+  static_assert(sizeof(Result) <= 64);
+  static_assert(sizeof(WorkSlot) * kQueueDepth <= 20 * 1024);
 
   static void taskEntry(void* context);
   void taskLoop();

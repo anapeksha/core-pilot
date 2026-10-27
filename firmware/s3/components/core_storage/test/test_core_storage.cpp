@@ -21,6 +21,7 @@ constexpr Expected kExpected[] = {
     {"/core-pilot/ai/memory-v2.enc", "AIMEM2.ENC", "AIMEM2.TMP"},
     {"/core-pilot/ai/prompts.enc", "AIPROM.ENC", "AIPROM.TMP"},
     {"/core-pilot/ai/tool-permissions.enc", "AITOOL.ENC", "AITOOL.TMP"},
+    {"/core-pilot/ai/tool-permissions-v2.enc", "AITOOL2.ENC", "AITOOL2.TMP"},
     {"/core-pilot/config/time.enc", "TIME.ENC", "TIME.TMP"},
     {"/core-pilot/config/smtp.enc", "SMTP.ENC", "SMTP.TMP"},
     {"/core-pilot/matter/fabric.enc", "FABRIC.ENC", "FABRIC.TMP"},

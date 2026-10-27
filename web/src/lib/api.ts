@@ -459,18 +459,29 @@ export type McpToolName =
   | "SetLevel"
   | "SetColor"
   | "SetColorTemperature"
+  | "ListRooms"
+  | "CreateRoom"
+  | "UpdateRoom"
+  | "DeleteRoom"
+  | "ListGroups"
+  | "CreateGroup"
+  | "UpdateGroup"
+  | "DeleteGroup"
   | "ActivateScene"
   | "ListScenes"
+  | "CreateScene"
+  | "UpdateScene"
+  | "DeleteScene"
   | "ListAutomations"
+  | "CreateAutomation"
+  | "UpdateAutomation"
+  | "DeleteAutomation"
+  | "RunAutomation"
   | "EnableAutomation"
   | "DisableAutomation"
-  | "CreateSimpleAutomation"
   | "GetHubStatus"
-  | "RemoveMatterDevice"
-  | "ResetMatterFabric"
-  | "RestartHub"
-  | "ShutdownHub"
-  | "FactoryReset";
+  | "GetMatterOperation"
+  | "RemoveMatterDevice";
 
 export type McpToolDescriptor = {
   id: string;
@@ -481,6 +492,7 @@ export type McpToolDescriptor = {
   enabled: boolean;
   destructive: boolean;
   available: boolean;
+  inputSchema?: Record<string, unknown>;
 };
 
 export type McpToolPermissionUpdateRequest = {
@@ -495,6 +507,10 @@ export type McpToolsResponse = {
 export type McpInvokeRequest = {
   tool: string;
   arguments_json: string;
+};
+
+export type McpInvokeResponse = MutationResponse & {
+  result?: Record<string, unknown>;
 };
 
 export { MAX_OTA_IMAGE_BYTES };
@@ -1402,18 +1418,29 @@ const mcpToolIds: Record<McpToolName, string> = {
   SetLevel: "devices.set_level",
   SetColor: "devices.set_color",
   SetColorTemperature: "devices.set_color_temperature",
+  ListRooms: "rooms.list",
+  CreateRoom: "rooms.create",
+  UpdateRoom: "rooms.update",
+  DeleteRoom: "rooms.delete",
+  ListGroups: "groups.list",
+  CreateGroup: "groups.create",
+  UpdateGroup: "groups.update",
+  DeleteGroup: "groups.delete",
   ActivateScene: "scenes.activate",
   ListScenes: "scenes.list",
+  CreateScene: "scenes.create",
+  UpdateScene: "scenes.update",
+  DeleteScene: "scenes.delete",
   ListAutomations: "automations.list",
+  CreateAutomation: "automations.create",
+  UpdateAutomation: "automations.update",
+  DeleteAutomation: "automations.delete",
+  RunAutomation: "automations.run",
   EnableAutomation: "automations.enable",
   DisableAutomation: "automations.disable",
-  CreateSimpleAutomation: "automations.create_simple",
   GetHubStatus: "hub.status",
+  GetMatterOperation: "matter.get_operation",
   RemoveMatterDevice: "matter.remove_device",
-  ResetMatterFabric: "matter.reset_fabric",
-  RestartHub: "hub.restart",
-  ShutdownHub: "hub.shutdown",
-  FactoryReset: "hub.factory_reset",
 };
 
 const mcpToolNames = Object.keys(mcpToolIds) as McpToolName[];
@@ -1462,6 +1489,9 @@ function normalizeMcpTool(
     enabled: value.enabled === true,
     destructive: value.destructive === true,
     available: value.available === true,
+    ...(value.inputSchema && typeof value.inputSchema === "object"
+      ? { inputSchema: value.inputSchema }
+      : {}),
   };
 }
 
@@ -1506,8 +1536,8 @@ export async function loadMcpContext(
 
 export function invokeMcpTool(
   request: McpInvokeRequest,
-): Promise<MutationResponse> {
-  return postJson<MutationResponse, McpInvokeRequest>(
+): Promise<McpInvokeResponse> {
+  return postJson<McpInvokeResponse, McpInvokeRequest>(
     "/api/v1/ai/mcp/invoke",
     request,
   );

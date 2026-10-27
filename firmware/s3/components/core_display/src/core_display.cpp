@@ -175,6 +175,35 @@ void CoreDisplay::fatal(const FatalContent& content) {
   push();
 }
 
+bool CoreDisplay::rtcReady() {
+  if (!initialized_)
+    return false;
+  m5::rtc_datetime_t value{};
+  return M5.Rtc.getDateTime(&value) && value.time.hours >= 0 && value.time.hours <= 23 &&
+         value.time.minutes >= 0 && value.time.minutes <= 59 && value.time.seconds >= 0 &&
+         value.time.seconds <= 59 && value.date.month >= 1 && value.date.month <= 12 &&
+         value.date.date >= 1 && value.date.date <= 31 && value.date.year >= 2000;
+}
+
+bool CoreDisplay::setRtcFromUnix(std::time_t timestamp) {
+  if (!initialized_ || timestamp < 1704067200)
+    return false;
+  std::tm local{};
+  if (localtime_r(&timestamp, &local) == nullptr || local.tm_year + 1900 < 2000 ||
+      local.tm_year + 1900 > 2099)
+    return false;
+  m5::rtc_datetime_t value{};
+  value.time.hours = static_cast<std::int8_t>(local.tm_hour);
+  value.time.minutes = static_cast<std::int8_t>(local.tm_min);
+  value.time.seconds = static_cast<std::int8_t>(local.tm_sec);
+  value.date.year = static_cast<std::int16_t>(local.tm_year + 1900);
+  value.date.month = static_cast<std::int8_t>(local.tm_mon + 1);
+  value.date.date = static_cast<std::int8_t>(local.tm_mday);
+  value.date.weekDay = static_cast<std::int8_t>(local.tm_wday);
+  M5.Rtc.setDateTime(&value);
+  return rtcReady();
+}
+
 bool CoreDisplay::readClock(int& hour, int& minute, int& second, int& day, int& month, int& year) {
   const std::time_t now = std::time(nullptr);
   std::tm local{};
@@ -188,7 +217,7 @@ bool CoreDisplay::readClock(int& hour, int& minute, int& second, int& day, int& 
     return true;
   }
 
-  m5::rtc_datetime_t dt;
+  m5::rtc_datetime_t dt{};
   if (!M5.Rtc.getDateTime(&dt) || dt.time.hours < 0 || dt.time.hours > 23 || dt.time.minutes < 0 ||
       dt.time.minutes > 59 || dt.time.seconds < 0 || dt.time.seconds > 59 || dt.date.month < 1 ||
       dt.date.month > 12 || dt.date.date < 1 || dt.date.date > 31 || dt.date.year < 2000)

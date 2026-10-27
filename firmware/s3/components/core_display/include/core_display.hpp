@@ -4,6 +4,7 @@
 
 #include <M5Unified.h>
 #include <cstdint>
+#include <ctime>
 
 namespace core_pilot {
 
@@ -54,6 +55,12 @@ public:
 
   /** Processes touch, power, clock, screensaver, and wake events. */
   Action poll();
+
+  /** Returns whether the hardware RTC contains a validated calendar value. */
+  bool rtcReady();
+
+  /** Writes local calendar time derived from a synchronized Unix timestamp to the RTC. */
+  bool setRtcFromUnix(std::time_t timestamp);
 
   /** Shows the initial boot screen. */
   void bootSplash();

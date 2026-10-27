@@ -290,46 +290,70 @@ export const matterCommissionRequestSchema = z
   })
   .strict();
 
-const mcpToolName = z.enum([
+export const mcpToolNames = [
   "ListDevices",
   "GetDeviceState",
   "SetOnOff",
   "SetLevel",
   "SetColor",
   "SetColorTemperature",
+  "ListRooms",
+  "CreateRoom",
+  "UpdateRoom",
+  "DeleteRoom",
+  "ListGroups",
+  "CreateGroup",
+  "UpdateGroup",
+  "DeleteGroup",
   "ActivateScene",
   "ListScenes",
+  "CreateScene",
+  "UpdateScene",
+  "DeleteScene",
   "ListAutomations",
+  "CreateAutomation",
+  "UpdateAutomation",
+  "DeleteAutomation",
+  "RunAutomation",
   "EnableAutomation",
   "DisableAutomation",
-  "CreateSimpleAutomation",
   "GetHubStatus",
+  "GetMatterOperation",
   "RemoveMatterDevice",
-  "ResetMatterFabric",
-  "RestartHub",
-  "ShutdownHub",
-  "FactoryReset",
-]);
-const mcpToolId = z.enum([
+] as const;
+export const mcpToolIds = [
   "devices.list",
   "devices.get_state",
   "devices.set_power",
   "devices.set_level",
   "devices.set_color",
   "devices.set_color_temperature",
+  "rooms.list",
+  "rooms.create",
+  "rooms.update",
+  "rooms.delete",
+  "groups.list",
+  "groups.create",
+  "groups.update",
+  "groups.delete",
   "scenes.activate",
   "scenes.list",
+  "scenes.create",
+  "scenes.update",
+  "scenes.delete",
   "automations.list",
+  "automations.create",
+  "automations.update",
+  "automations.delete",
+  "automations.run",
   "automations.enable",
   "automations.disable",
-  "automations.create_simple",
   "hub.status",
+  "matter.get_operation",
   "matter.remove_device",
-  "matter.reset_fabric",
-  "hub.restart",
-  "hub.shutdown",
-  "hub.factory_reset",
-]);
+] as const;
+const mcpToolName = z.enum(mcpToolNames);
+const mcpToolId = z.enum(mcpToolIds);
 const mcpTool = z.union([mcpToolName, mcpToolId]);
 
 export const aiProviderRequestSchema = z
