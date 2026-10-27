@@ -61,7 +61,10 @@ jobs:
           name: dashboard-dist
           path: dist
       - name: Install ESP-Clang
-        run: python "$IDF_PATH/tools/idf_tools.py" install esp-clang
+        run: |
+          python "$IDF_PATH/tools/idf_tools.py" install esp-clang
+          . "$IDF_PATH/export.sh"
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
       - name: Check C++ formatting
         run: python tools/format.py
       - name: Configure isolated ESP-Clang compilation database
