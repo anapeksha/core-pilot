@@ -370,20 +370,21 @@ void Application::run() {
   std::uint64_t discovery_nodes[core_storage::kMaxMatterDevices]{};
   std::size_t discovery_node_count = 0;
   const auto registered_devices = devices.snapshot();
-  for (std::size_t index = 0; index < registered_devices.count; ++index) {
-    const auto node_id = registered_devices.entries[index].node_id;
+  // Registry replacement appends newly commissioned nodes. Restore those first so stale or
+  // temporarily offline records cannot delay the device the user most recently added.
+  for (std::size_t remaining = registered_devices.count; remaining > 0; --remaining) {
+    const auto node_id = registered_devices.entries[remaining - 1].node_id;
     bool known = false;
-    for (std::size_t node_index = 0; node_index < discovery_node_count; ++node_index) {
-      known = known || discovery_nodes[node_index] == node_id;
-    }
-    if (!known) {
+    for (std::size_t known_index = 0; known_index < discovery_node_count; ++known_index)
+      known = known || discovery_nodes[known_index] == node_id;
+    if (!known && discovery_node_count < core_storage::kMaxMatterDevices)
       discovery_nodes[discovery_node_count++] = node_id;
-    }
   }
 
   std::uint64_t recorded_node_id = 0;
   std::size_t discovery_node_index = 0;
   bool discovery_in_flight = false;
+  const TickType_t discovery_not_before = xTaskGetTickCount() + pdMS_TO_TICKS(15000);
   bool matter_ready_reported = false;
   bool ota_update_shown = false;
   std::uint64_t reconciled_terminal_sequence = 0;
@@ -455,6 +456,7 @@ void Application::run() {
     }
 
     if (matter_owner_started && matter_status.state == CoreMatter::State::ready &&
+        xTaskGetTickCount() >= discovery_not_before &&
         discovery_node_index < discovery_node_count) {
       if (!discovery_in_flight) {
         discovery_in_flight =
@@ -469,7 +471,9 @@ void Application::run() {
             for (std::size_t index = 0; index < count; ++index) {
               endpoints[index] = {discovery.endpoints[index].node_id,
                                   discovery.endpoints[index].endpoint_id,
-                                  discovery.endpoints[index].capabilities, true};
+                                  discovery.endpoints[index].capabilities,
+                                  true,
+                                  {}};
             }
             const auto result =
                 devices.replaceNode(discovery_nodes[discovery_node_index], endpoints, count);

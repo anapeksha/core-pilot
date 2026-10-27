@@ -4,11 +4,11 @@ import {
   commissionMatter,
   removeMatterDevice,
   requireAccepted,
-  setMatterOnOff,
   type MatterCommissionRequest,
+  type MatterDeviceMutationRequest,
   type MatterDeviceRemoveRequest,
-  type MatterOnOffRequest,
   type ThreadDatasetUpdateRequest,
+  updateMatterDevice,
   updateThreadDataset,
 } from "../lib/api";
 
@@ -40,12 +40,12 @@ export function matterCommissionMutation() {
   }));
 }
 
-export function matterOnOffMutation() {
+export function matterDeviceMutation() {
   const queryClient = useQueryClient();
   return createMutation(() => ({
-    mutationKey: ["matter", "on-off"],
-    mutationFn: async (request: MatterOnOffRequest) =>
-      requireAccepted(await setMatterOnOff(request)),
+    mutationKey: ["matter", "devices", "update"],
+    mutationFn: async (request: MatterDeviceMutationRequest) =>
+      requireAccepted(await updateMatterDevice(request)),
     onSuccess: () =>
       queryClient.invalidateQueries({
         queryKey: ["devices"],

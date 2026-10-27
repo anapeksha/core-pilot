@@ -67,12 +67,13 @@ constexpr RouteContract routes[] = {
      "thread_commissioning_ready:b adapter_status:s parser_ready:b "
      "transport_adapter_ready:b fabric_credentials_ready:b pase_ready:b "
      "case_ready:b subscriptions_ready:b operation:o detail:s"},
-    {"POST", "/api/v1/matter/commission",
-     "transport:s setup_payload:s discriminator:h? thread_dataset_id:s?",
+    {"POST", "/api/v1/matter/commission", "transport:s setup_payload:s thread_dataset_id:s?",
      "accepted:b operation_id:q? transport:s status:s detail:s"},
     {"POST", "/api/v1/matter/commission/cancel", "operation_id:q", "accepted:b status:s detail:s"},
-    {"POST", "/api/v1/matter/on-off", "device_id:s endpoint_id:h? on:b",
-     "accepted:b status:s detail:s"},
+    {"PATCH", "/api/v1/devices",
+     "device_id:s endpoint_id:h name:s? on:b? level:h? color_temperature_mireds:h? "
+     "transition_time_ds:h?",
+     "accepted:b operation_id:q? status:s detail:s"},
     {"POST", "/api/v1/matter/devices/remove", "device_id:s",
      "accepted:b operation_id:q? status:s detail:s"},
     {"POST", "/api/v1/matter/thread/dataset", "active_dataset_tlvs_hex:s",
@@ -83,7 +84,7 @@ constexpr RouteContract routes[] = {
      "persistence:s provider_transport:v provider_transport_requirements:a"},
     {"POST", "/api/v1/ai/provider", "provider:o", "accepted:b status:s detail:s"},
     {"GET", "/api/v1/ai/chat", nullptr, "accepted:b status:s reply:s actions:a"},
-    {"POST", "/api/v1/ai/chat", "message:s history:a chat_id:s? allow_actions:b",
+    {"POST", "/api/v1/ai/chat", "message:s history:a chat_id:s?",
      "accepted:b status:s reply:s actions:a"},
     {"GET", "/api/v1/ai/memory", nullptr, "sections:a encrypted:b detail:s"},
     {"POST", "/api/v1/ai/memory/section", "id:s markdown:s", "accepted:b status:s detail:s"},
@@ -323,6 +324,10 @@ bool request_bounds(const RouteContract& route, const cJSON* object) {
               bounded_string(data, "password", 256)) &&
              bounded_string(data, "from", 254);
     return bounded_string(data, "subject", 160, 1) && bounded_string(data, "body", 4096, 1);
+  }
+  if (std::strcmp(p, "/api/v1/devices") == 0) {
+    const cJSON* name = cJSON_GetObjectItemCaseSensitive(object, "name");
+    return name == nullptr || bounded_string(object, "name", 64, 1);
   }
   if (std::strcmp(p, "/api/v1/matter/commission") == 0) {
     const cJSON* transport = cJSON_GetObjectItemCaseSensitive(object, "transport");

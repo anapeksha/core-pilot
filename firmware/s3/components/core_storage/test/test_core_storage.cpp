@@ -83,10 +83,13 @@ TEST_CASE("tracked missing flash record cannot be imported from SD", "[core_stor
                     static_cast<int>(missing_flash_status(true)));
 }
 
-TEST_CASE("Matter device codec rejects malformed records", "[core_storage]") {
+TEST_CASE("Matter device codec round trips names and rejects malformed records", "[core_storage]") {
   MatterDevices source{};
-  source.entries[0] = {0x0002000000000001ULL, 1, 0x00000001, true};
-  source.entries[1] = {0x0002000000000002ULL, 3, 0x00000006, false};
+  source.entries[0] = {0x0002000000000001ULL, 1, 0x00000001, true, {}};
+  source.entries[1] = {0x0002000000000002ULL, 3, 0x00000006, false, {}};
+  std::strcpy(source.entries[0].name, "Kitchen light");
+  std::memset(source.entries[1].name, 'n', kMaxMatterDeviceNameBytes);
+  source.entries[1].name[kMaxMatterDeviceNameBytes] = '\0';
   source.count = 2;
   uint8_t encoded[kMaxMatterDevicesPayload]{};
   size_t written = 0;
@@ -103,8 +106,10 @@ TEST_CASE("Matter device codec rejects malformed records", "[core_storage]") {
   TEST_ASSERT_EQUAL_UINT16(3, decoded.entries[1].endpoint_id);
   TEST_ASSERT_EQUAL_HEX32(0x00000006, decoded.entries[1].capabilities);
   TEST_ASSERT_FALSE(decoded.entries[1].reachable);
+  TEST_ASSERT_EQUAL_STRING("Kitchen light", decoded.entries[0].name);
+  TEST_ASSERT_EQUAL_UINT32(kMaxMatterDeviceNameBytes, std::strlen(decoded.entries[1].name));
   TEST_ASSERT_EQUAL(static_cast<int>(Status::UnsupportedFormat),
-                    static_cast<int>(decode_matter_devices(3, encoded, written, decoded)));
+                    static_cast<int>(decode_matter_devices(4, encoded, written, decoded)));
   TEST_ASSERT_EQUAL(
       static_cast<int>(Status::Invalid),
       static_cast<int>(decode_matter_devices(kMatterDevicesSchema, encoded, written - 1, decoded)));
@@ -112,11 +117,33 @@ TEST_CASE("Matter device codec rejects malformed records", "[core_storage]") {
   TEST_ASSERT_EQUAL(
       static_cast<int>(Status::Invalid),
       static_cast<int>(decode_matter_devices(kMatterDevicesSchema, encoded, written, decoded)));
+  encoded[15] = 1;
+  encoded[16] = 65;
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Invalid),
+      static_cast<int>(decode_matter_devices(kMatterDevicesSchema, encoded, written, decoded)));
+  encoded[16] = 1;
+  encoded[17] = 0;
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Invalid),
+      static_cast<int>(decode_matter_devices(kMatterDevicesSchema, encoded, written, decoded)));
 
-  const uint8_t legacy[] = {1, 1, 0, 0, 0, 0, 0, 2, 0, 1, 0, 1};
-  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok),
-                    static_cast<int>(decode_matter_devices(1, legacy, sizeof(legacy), decoded)));
+  std::memset(source.entries[0].name, 'x', sizeof source.entries[0].name);
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Invalid),
+      static_cast<int>(encode_matter_devices(source, encoded, sizeof(encoded), written)));
+
+  const uint8_t legacy_v1[] = {1, 1, 0, 0, 0, 0, 0, 2, 0, 1, 0, 1};
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok), static_cast<int>(decode_matter_devices(
+                                                      1, legacy_v1, sizeof(legacy_v1), decoded)));
   TEST_ASSERT_EQUAL_UINT32(0, decoded.entries[0].capabilities);
+  TEST_ASSERT_EQUAL_STRING("", decoded.entries[0].name);
+
+  const uint8_t legacy_v2[] = {1, 1, 0, 0, 0, 0, 0, 2, 0, 1, 0, 6, 0, 0, 0, 1};
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok), static_cast<int>(decode_matter_devices(
+                                                      2, legacy_v2, sizeof(legacy_v2), decoded)));
+  TEST_ASSERT_EQUAL_HEX32(6, decoded.entries[0].capabilities);
+  TEST_ASSERT_EQUAL_STRING("", decoded.entries[0].name);
 }
 
 TEST_CASE("models codec round trips and rejects malformed records", "[core_storage]") {

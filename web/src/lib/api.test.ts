@@ -631,7 +631,11 @@ describe("api client", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(
-      api.setMatterOnOff({ device_id: "", endpoint_id: 0x1_0000, on: true }),
+      api.updateMatterDevice({
+        device_id: "",
+        endpoint_id: 0x1_0000,
+        on: true,
+      }),
     ).rejects.toThrow();
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -662,7 +666,11 @@ describe("api client", () => {
       timezone_offset_minutes: 0,
     });
     await api.loadDevices();
-    await api.setMatterOnOff({ device_id: "1234", endpoint_id: 1, on: true });
+    await api.updateMatterDevice({
+      device_id: "1234",
+      endpoint_id: 1,
+      on: true,
+    });
     await api.loadRooms();
     await api.upsertRoom({ name: "Kitchen" });
     await api.deleteRoom(sampleDelete);
@@ -692,7 +700,7 @@ describe("api client", () => {
     await api.loadAi();
     await api.loadAiMemory();
     await api.loadAiPrompts();
-    await api.sendAiChat({ message: "hi", history: [], allow_actions: false });
+    await api.sendAiChat({ message: "hi", history: [] });
     await api.saveAiMemorySection({ id: "notes", markdown: "hello" });
     await api.saveAiPromptFile({ path: "system.md", markdown: "hello" });
     await api.provisionWifi({
@@ -727,7 +735,7 @@ describe("api client", () => {
       "/api/v1/time",
       "/api/v1/time",
       "/api/v1/devices",
-      "/api/v1/matter/on-off",
+      "/api/v1/devices",
       "/api/v1/rooms",
       "/api/v1/rooms/upsert",
       "/api/v1/rooms/delete",
@@ -765,7 +773,6 @@ describe("api client", () => {
     ).toEqual([
       "/api/v1/system/reboot",
       "/api/v1/time",
-      "/api/v1/matter/on-off",
       "/api/v1/rooms/upsert",
       "/api/v1/rooms/delete",
       "/api/v1/groups/upsert",

@@ -9,6 +9,7 @@ import {
   AlertDialogTrigger,
 } from "~/components/alert-dialog";
 import { Button, buttonVariants } from "~/components/button";
+import { ContextMenuItem } from "~/components/context-menu";
 import { Flex } from "~/components/flex";
 import { Tooltip, TooltipContent, TooltipTrigger } from "~/components/tooltip";
 
@@ -21,13 +22,22 @@ type ConfirmDestructiveActionProps = {
   cancelLabel?: string;
   disabled?: boolean;
   blockedReason?: string;
+  menuItem?: boolean;
+  hideTrigger?: boolean;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
   onConfirm: () => unknown | Promise<unknown>;
   onError?: (error: unknown) => void;
 };
 
 function ConfirmDestructiveAction(props: ConfirmDestructiveActionProps) {
-  const [open, setOpen] = createSignal(false);
+  const [internalOpen, setInternalOpen] = createSignal(false);
   const [pending, setPending] = createSignal(false);
+  const open = () => props.open ?? internalOpen();
+  const setOpen = (value: boolean) => {
+    setInternalOpen(value);
+    props.onOpenChange?.(value);
+  };
 
   const confirm = async () => {
     setPending(true);
@@ -43,19 +53,31 @@ function ConfirmDestructiveAction(props: ConfirmDestructiveActionProps) {
 
   return (
     <AlertDialog open={open()} onOpenChange={setOpen}>
-      <Tooltip>
-        <TooltipTrigger
-          as={AlertDialogTrigger}
-          class={buttonVariants({ variant: "destructive", size: "icon" })}
+      {!props.hideTrigger && props.menuItem ? (
+        <ContextMenuItem
+          class="text-error data-[highlighted]:text-error"
           disabled={props.disabled}
           aria-label={props.triggerAriaLabel ?? props.triggerLabel}
+          onSelect={() => setOpen(true)}
         >
           <HiOutlineTrash aria-hidden="true" />
-        </TooltipTrigger>
-        <TooltipContent>
-          {props.triggerAriaLabel ?? props.triggerLabel}
-        </TooltipContent>
-      </Tooltip>
+          {props.triggerLabel}
+        </ContextMenuItem>
+      ) : !props.hideTrigger ? (
+        <Tooltip>
+          <TooltipTrigger
+            as={AlertDialogTrigger}
+            class={buttonVariants({ variant: "destructive", size: "icon" })}
+            disabled={props.disabled}
+            aria-label={props.triggerAriaLabel ?? props.triggerLabel}
+          >
+            <HiOutlineTrash aria-hidden="true" />
+          </TooltipTrigger>
+          <TooltipContent>
+            {props.triggerAriaLabel ?? props.triggerLabel}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
       <AlertDialogContent>
         <div class="flex items-start gap-3 pr-6">
           <div class="grid size-10 shrink-0 place-items-center rounded-full bg-destructive/10 text-error">

@@ -109,6 +109,13 @@ public:
     DiscoveredEndpoint endpoints[16];
   };
 
+  struct OnOffState final {
+    std::uint64_t node_id;
+    std::uint16_t endpoint_id;
+    bool known;
+    bool on;
+  };
+
   struct Status final {
     State state;
     bool commissioner_ready;
@@ -140,12 +147,14 @@ public:
   esp_err_t applyThreadDataset(const std::uint8_t* dataset, std::size_t length);
   esp_err_t cancelCommissioning(std::uint32_t operation_id);
   esp_err_t setOnOff(std::uint64_t node_id, std::uint16_t endpoint_id, bool on,
-                     std::uint32_t& operation_id);
+                     std::uint32_t& operation_id, CommandRejection* rejection = nullptr);
   esp_err_t setLevel(std::uint64_t node_id, std::uint16_t endpoint_id, std::uint8_t level,
-                     std::uint16_t transition_time_ds, std::uint32_t& operation_id);
+                     std::uint16_t transition_time_ds, std::uint32_t& operation_id,
+                     CommandRejection* rejection = nullptr);
   esp_err_t setColorTemperature(std::uint64_t node_id, std::uint16_t endpoint_id,
                                 std::uint16_t color_temperature_mireds,
-                                std::uint16_t transition_time_ds, std::uint32_t& operation_id);
+                                std::uint16_t transition_time_ds, std::uint32_t& operation_id,
+                                CommandRejection* rejection = nullptr);
   esp_err_t unpairDevice(std::uint64_t node_id, std::uint32_t& operation_id,
                          CommandRejection* rejection = nullptr);
   esp_err_t discoverEndpoints(std::uint64_t node_id);
@@ -158,6 +167,7 @@ public:
   esp_err_t waitForTerminalCommand(std::uint32_t operation_id, TickType_t timeout,
                                    TerminalCommand& terminal);
   DiscoveryStatus discoveryStatus() const;
+  OnOffState onOffState() const;
 
 private:
   enum class CommandType : std::uint8_t {

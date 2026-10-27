@@ -54,6 +54,10 @@ std::atomic<esp_err_t> commissioning_error{ESP_OK};
 std::atomic<std::int64_t> commissioning_started_us{0};
 std::atomic<std::uint8_t> cancellation_reason{0};
 std::atomic_bool on_off_subscription_active{false};
+std::atomic<std::uint64_t> reported_on_off_node_id{0};
+std::atomic<std::uint16_t> reported_on_off_endpoint_id{0};
+std::atomic_bool reported_on_off_known{false};
+std::atomic_bool reported_on_off_value{false};
 constexpr std::int64_t kCommissioningTimeoutUs = 120LL * 1000 * 1000;
 constexpr std::int64_t kDiscoveryTimeoutUs = 30LL * 1000 * 1000;
 
@@ -75,12 +79,25 @@ void onCommissioningSuccess(chip::ScopedNodeId peer_id) {
            static_cast<unsigned long long>(peer_id.GetNodeId()));
 }
 
+void onOnOffReport(std::uint64_t node_id, const chip::app::ConcreteDataAttributePath& path,
+                   chip::TLV::TLVReader* data, const chip::app::StatusIB& status) {
+  bool value = false;
+  if (data == nullptr || !status.IsSuccess() || data->Get(value) != CHIP_NO_ERROR)
+    return;
+  reported_on_off_node_id.store(node_id);
+  reported_on_off_endpoint_id.store(path.mEndpointId);
+  reported_on_off_value.store(value);
+  reported_on_off_known.store(true);
+}
+
 void onSubscriptionEstablished(std::uint64_t, std::uint32_t) {
   on_off_subscription_active.store(true);
 }
 
-void onSubscriptionTerminated(std::uint64_t, std::uint32_t) {
+void onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t) {
   on_off_subscription_active.store(false);
+  if (reported_on_off_node_id.load() == node_id)
+    reported_on_off_known.store(false);
 }
 
 void onCommissioningFailure(chip::NodeId node_id, CHIP_ERROR error,
@@ -695,7 +712,7 @@ esp_err_t CoreMatter::enqueueDeviceCommand(Command command, std::uint32_t& opera
 }
 
 esp_err_t CoreMatter::setOnOff(std::uint64_t node_id, std::uint16_t endpoint_id, bool on,
-                               std::uint32_t& operation_id) {
+                               std::uint32_t& operation_id, CommandRejection* rejection) {
   if (node_id == 0 || endpoint_id == 0 || queue_ == nullptr) {
     operation_id = 0;
     return ESP_ERR_INVALID_ARG;
@@ -704,11 +721,12 @@ esp_err_t CoreMatter::setOnOff(std::uint64_t node_id, std::uint16_t endpoint_id,
                                       .node_id = node_id,
                                       .endpoint_id = endpoint_id,
                                       .on = on},
-                              operation_id);
+                              operation_id, rejection);
 }
 
 esp_err_t CoreMatter::setLevel(std::uint64_t node_id, std::uint16_t endpoint_id, std::uint8_t level,
-                               std::uint16_t transition_time_ds, std::uint32_t& operation_id) {
+                               std::uint16_t transition_time_ds, std::uint32_t& operation_id,
+                               CommandRejection* rejection) {
   if (node_id == 0 || endpoint_id == 0 || queue_ == nullptr || level > 254 ||
       transition_time_ds > kMaxTransitionTimeDs) {
     operation_id = 0;
@@ -720,13 +738,14 @@ esp_err_t CoreMatter::setLevel(std::uint64_t node_id, std::uint16_t endpoint_id,
                                       .value = level,
                                       .transition_time_ds = transition_time_ds,
                                       .on = level != 0},
-                              operation_id);
+                              operation_id, rejection);
 }
 
 esp_err_t CoreMatter::setColorTemperature(std::uint64_t node_id, std::uint16_t endpoint_id,
                                           std::uint16_t color_temperature_mireds,
                                           std::uint16_t transition_time_ds,
-                                          std::uint32_t& operation_id) {
+                                          std::uint32_t& operation_id,
+                                          CommandRejection* rejection) {
   if (node_id == 0 || endpoint_id == 0 || queue_ == nullptr ||
       color_temperature_mireds < kMinColorTemperatureMireds ||
       color_temperature_mireds > kMaxColorTemperatureMireds ||
@@ -739,7 +758,7 @@ esp_err_t CoreMatter::setColorTemperature(std::uint64_t node_id, std::uint16_t e
                                       .endpoint_id = endpoint_id,
                                       .value = color_temperature_mireds,
                                       .transition_time_ds = transition_time_ds},
-                              operation_id);
+                              operation_id, rejection);
 }
 
 esp_err_t CoreMatter::unpairDevice(std::uint64_t node_id, std::uint32_t& operation_id,
@@ -796,6 +815,14 @@ CoreMatter::DiscoveryStatus CoreMatter::discoveryStatus() const {
   const DiscoveryStatus snapshot = discovery_status_;
   taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
   return snapshot;
+}
+
+CoreMatter::OnOffState CoreMatter::onOffState() const {
+  const bool known = reported_on_off_known.load();
+  return {.node_id = known ? reported_on_off_node_id.load() : 0,
+          .endpoint_id = static_cast<std::uint16_t>(known ? reported_on_off_endpoint_id.load() : 0),
+          .known = known,
+          .on = known && reported_on_off_value.load()};
 }
 
 CoreMatter::CommandStatus CoreMatter::commandStatus() const {
@@ -1150,11 +1177,12 @@ void CoreMatter::run() {
       continue;
     }
     if (command.type == CommandType::subscribe_on_off) {
+      reported_on_off_known.store(false);
       esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
       auto* subscription = chip::Platform::New<esp_matter::controller::subscribe_command>(
           command.node_id, 0xffff, 0x0006, 0x0000, esp_matter::controller::SUBSCRIBE_ATTRIBUTE, 1,
-          60, true, nullptr, nullptr, onSubscriptionEstablished, onSubscriptionTerminated, nullptr,
-          true);
+          60, true, onOnOffReport, nullptr, onSubscriptionEstablished, onSubscriptionTerminated,
+          nullptr, true);
       const esp_err_t result =
           subscription == nullptr ? ESP_ERR_NO_MEM : subscription->send_command();
       if (result != ESP_OK) {

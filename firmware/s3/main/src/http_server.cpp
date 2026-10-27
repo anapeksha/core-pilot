@@ -1290,11 +1290,14 @@ esp_err_t devicesHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   for (std::size_t index = 0; index < devices.count; ++index) {
     const auto& device = devices.entries[index];
     char id[24]{};
-    char name[40]{};
+    char name[core_storage::kMaxMatterDeviceNameBytes + 1]{};
     std::snprintf(id, sizeof(id), "%016llx-%u", static_cast<unsigned long long>(device.node_id),
                   static_cast<unsigned>(device.endpoint_id));
-    std::snprintf(name, sizeof(name), "Matter device %u endpoint %u",
-                  static_cast<unsigned>(index + 1), static_cast<unsigned>(device.endpoint_id));
+    if (device.name[0] != '\0')
+      std::snprintf(name, sizeof(name), "%s", device.name);
+    else
+      std::snprintf(name, sizeof(name), "Matter device %u endpoint %u",
+                    static_cast<unsigned>(index + 1), static_cast<unsigned>(device.endpoint_id));
     cJSON* item = cJSON_CreateObject();
     cJSON_AddStringToObject(item, "id", id);
     cJSON_AddStringToObject(item, "name", name);
@@ -1302,7 +1305,21 @@ esp_err_t devicesHandler(httpd_req_t* request, const HttpRuntime& runtime) {
     cJSON_AddStringToObject(item, "protocol", "matter");
     cJSON* capabilities = cJSON_AddArrayToObject(item, "capabilities");
     addCapabilities(capabilities, device.capabilities);
-    cJSON_AddArrayToObject(item, "state");
+    cJSON* state = cJSON_AddArrayToObject(item, "state");
+    const auto reported_on_off = runtime.matter.onOffState();
+    const auto command = runtime.matter.commandStatus();
+    const bool has_report = reported_on_off.known && reported_on_off.node_id == device.node_id &&
+                            reported_on_off.endpoint_id == device.endpoint_id;
+    const bool has_completed_command = command.kind == CoreMatter::CommandKind::set_on_off &&
+                                       command.state == CoreMatter::CommandState::complete &&
+                                       command.node_id == device.node_id &&
+                                       command.endpoint_id == device.endpoint_id;
+    if (has_report || has_completed_command) {
+      cJSON* on_off = cJSON_CreateObject();
+      cJSON_AddBoolToObject(on_off, "OnOff",
+                            has_report ? reported_on_off.on : command.requested_on);
+      cJSON_AddItemToArray(state, on_off);
+    }
     cJSON_AddStringToObject(item, "availability", device.reachable ? "online" : "unknown");
     cJSON_AddNumberToObject(item, "last_seen", 0);
     cJSON_AddNumberToObject(item, "endpoint_id", device.endpoint_id);
@@ -1639,48 +1656,116 @@ bool parseMatterNodeId(const cJSON* value, std::uint64_t& node_id) {
   return node_id != 0 && errno == 0 && end != nullptr && *end == '\0';
 }
 
-esp_err_t onOffHandler(httpd_req_t* request) {
+esp_err_t deviceMutationHandler(httpd_req_t* request) {
   auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
   RequestBody body(kMaxRequestBody + 1);
   std::size_t received = 0;
   if (runtime == nullptr || !body ||
-      readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK) {
+      readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  }
+
   cJSON* document = cJSON_ParseWithLength(body.data(), received);
-  if (document == nullptr) {
-    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid JSON");
-  }
+  const char* const rename_fields[]{"device_id", "endpoint_id", "name"};
+  const char* const on_fields[]{"device_id", "endpoint_id", "on"};
+  const char* const level_fields[]{"device_id", "endpoint_id", "level", "transition_time_ds"};
+  const char* const temperature_fields[]{"device_id", "endpoint_id", "color_temperature_mireds",
+                                         "transition_time_ds"};
+  const bool rename = exactObject(document, rename_fields, 3);
+  const bool set_on = exactObject(document, on_fields, 3);
+  const bool set_level = exactObject(document, level_fields, 4);
+  const bool set_temperature = exactObject(document, temperature_fields, 4);
   const cJSON* device_id = cJSON_GetObjectItemCaseSensitive(document, "device_id");
   const cJSON* endpoint = cJSON_GetObjectItemCaseSensitive(document, "endpoint_id");
-  const cJSON* on = cJSON_GetObjectItemCaseSensitive(document, "on");
   std::uint64_t node_id = 0;
-  const bool valid_id = parseMatterNodeId(device_id, node_id);
-  const bool valid_endpoint =
-      endpoint == nullptr ||
-      (cJSON_IsNumber(endpoint) && endpoint->valuedouble == endpoint->valueint &&
-       endpoint->valueint > 0 && endpoint->valueint <= 0xffff);
+  const bool valid_endpoint = cJSON_IsNumber(endpoint) &&
+                              endpoint->valuedouble == endpoint->valueint &&
+                              endpoint->valueint > 0 && endpoint->valueint <= 0xffff;
   const std::uint16_t endpoint_id =
-      endpoint == nullptr ? 1 : static_cast<std::uint16_t>(endpoint->valueint);
-  const bool valid = valid_id && valid_endpoint && cJSON_IsBool(on) &&
-                     runtime->devices.contains(node_id, endpoint_id);
+      valid_endpoint ? static_cast<std::uint16_t>(endpoint->valueint) : 0;
+  bool found = false;
+  bool reachable = false;
+  std::uint32_t capabilities = 0;
+  if (parseMatterNodeId(device_id, node_id) && valid_endpoint) {
+    const auto devices = runtime->devices.snapshot();
+    for (std::size_t index = 0; index < devices.count; ++index) {
+      const auto& candidate = devices.entries[index];
+      if (candidate.node_id == node_id && candidate.endpoint_id == endpoint_id) {
+        found = true;
+        reachable = candidate.reachable;
+        capabilities = candidate.capabilities;
+        break;
+      }
+    }
+  }
+
   std::uint32_t operation_id = 0;
-  const esp_err_t result =
-      valid ? runtime->matter.setOnOff(node_id, endpoint_id, cJSON_IsTrue(on), operation_id)
-            : ESP_ERR_INVALID_ARG;
+  auto rejection = CoreMatter::CommandRejection::invalid_request;
+  esp_err_t result = ESP_ERR_INVALID_ARG;
+  const char* accepted_detail = "Device updated.";
+  if (found && rename) {
+    char name[core_storage::kMaxMatterDeviceNameBytes + 1]{};
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(document, "name");
+    if (copyJsonString(value, name, sizeof(name)) && nonWhitespace(name))
+      result = runtime->devices.rename(node_id, endpoint_id, name) == core_security::Status::Ok
+                   ? ESP_OK
+                   : ESP_FAIL;
+    accepted_detail = "Device name saved.";
+  } else if (found && reachable && set_on && (capabilities & CoreMatter::on_off) != 0) {
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(document, "on");
+    if (cJSON_IsBool(value))
+      result = runtime->matter.setOnOff(node_id, endpoint_id, cJSON_IsTrue(value), operation_id,
+                                        &rejection);
+    accepted_detail = "Matter OnOff command queued.";
+  } else if (found && reachable && set_level && (capabilities & CoreMatter::level) != 0) {
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(document, "level");
+    const cJSON* transition = cJSON_GetObjectItemCaseSensitive(document, "transition_time_ds");
+    if (cJSON_IsNumber(value) && value->valuedouble == value->valueint && value->valueint >= 0 &&
+        value->valueint <= 254 && cJSON_IsNumber(transition) &&
+        transition->valuedouble == transition->valueint && transition->valueint >= 0 &&
+        transition->valueint <= 0xfffe)
+      result = runtime->matter.setLevel(node_id, endpoint_id, value->valueint, transition->valueint,
+                                        operation_id, &rejection);
+    accepted_detail = "Matter level command queued.";
+  } else if (found && reachable && set_temperature && (capabilities & CoreMatter::color) != 0) {
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(document, "color_temperature_mireds");
+    const cJSON* transition = cJSON_GetObjectItemCaseSensitive(document, "transition_time_ds");
+    if (cJSON_IsNumber(value) && value->valuedouble == value->valueint && value->valueint >= 1 &&
+        value->valueint <= 0xfeff && cJSON_IsNumber(transition) &&
+        transition->valuedouble == transition->valueint && transition->valueint >= 0 &&
+        transition->valueint <= 0xfffe)
+      result = runtime->matter.setColorTemperature(node_id, endpoint_id, value->valueint,
+                                                   transition->valueint, operation_id, &rejection);
+    accepted_detail = "Matter color-temperature command queued.";
+  }
   cJSON_Delete(document);
 
-  cJSON* response = cJSON_CreateObject();
-  cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
-  if (result == ESP_OK) {
-    cJSON_AddNumberToObject(response, "operation_id", operation_id);
-  } else {
-    cJSON_AddNullToObject(response, "operation_id");
+  const bool accepted = result == ESP_OK;
+  const char* status = accepted ? (rename ? "saved" : "queued") : "rejected";
+  const char* detail = accepted_detail;
+  if (!accepted) {
+    if (!found)
+      detail = "Matter device or endpoint is not in the local registry.";
+    else if (!rename && !reachable)
+      detail = "Matter device or endpoint is not currently reachable.";
+    else if (rejection == CoreMatter::CommandRejection::matter_not_ready)
+      detail = "Matter is not ready for device commands.";
+    else if (rejection == CoreMatter::CommandRejection::commissioning_busy)
+      detail = "Finish Matter commissioning before controlling devices.";
+    else if (rejection == CoreMatter::CommandRejection::command_busy)
+      detail = "Another Matter device command is still active.";
+    else if (rejection == CoreMatter::CommandRejection::queue_full)
+      detail = "The Matter command queue is full.";
+    else
+      detail = "The requested device change is invalid or unsupported.";
   }
-  cJSON_AddStringToObject(response, "status", result == ESP_OK ? "queued" : "rejected");
-  cJSON_AddStringToObject(response, "detail",
-                          result == ESP_OK ? "Matter OnOff command queued."
-                                           : "Matter device or endpoint is unavailable.");
+  cJSON* response = cJSON_CreateObject();
+  cJSON_AddBoolToObject(response, "accepted", accepted);
+  if (operation_id != 0)
+    cJSON_AddNumberToObject(response, "operation_id", operation_id);
+  else
+    cJSON_AddNullToObject(response, "operation_id");
+  cJSON_AddStringToObject(response, "status", status);
+  cJSON_AddStringToObject(response, "detail", detail);
   return sendJson(request, response);
 }
 
@@ -2628,10 +2713,10 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                                    .method = HTTP_POST,
                                    .handler = automationRunHandler,
                                    .user_ctx = const_cast<HttpRuntime*>(&runtime)};
-  const httpd_uri_t on_off{.uri = "/api/v1/matter/on-off",
-                           .method = HTTP_POST,
-                           .handler = onOffHandler,
-                           .user_ctx = const_cast<HttpRuntime*>(&runtime)};
+  const httpd_uri_t device_mutation{.uri = "/api/v1/devices",
+                                    .method = HTTP_PATCH,
+                                    .handler = deviceMutationHandler,
+                                    .user_ctx = const_cast<HttpRuntime*>(&runtime)};
   const httpd_uri_t device_remove{.uri = "/api/v1/matter/devices/remove",
                                   .method = HTTP_POST,
                                   .handler = removeMatterDeviceHandler,
@@ -2738,7 +2823,7 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
       registerHttpAccessRoute(server, &commission) != ESP_OK ||
       registerHttpAccessRoute(server, &thread_dataset) != ESP_OK ||
       registerHttpAccessRoute(server, &automation_run) != ESP_OK ||
-      registerHttpAccessRoute(server, &on_off) != ESP_OK ||
+      registerHttpAccessRoute(server, &device_mutation) != ESP_OK ||
       registerHttpAccessRoute(server, &device_remove) != ESP_OK ||
       registerHttpAccessRoute(server, &registry_reset) != ESP_OK ||
       registerHttpAccessRoute(server, &models_reset) != ESP_OK ||

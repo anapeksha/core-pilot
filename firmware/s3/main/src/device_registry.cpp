@@ -9,6 +9,7 @@ namespace {
 
 constexpr char kPath[] = "/core-pilot/matter/devices.enc";
 constexpr char kLegacyPath[] = "/core-pilot/matter/devices-legacy.enc";
+constexpr std::size_t kEncryptedScratchBytes = core_storage::kMaxMatterDevicesPayload + 64;
 constexpr core_security::RecordSpec recordSpec(std::uint64_t generation) {
   return {kPath,
           sizeof(kPath) - 1,
@@ -44,7 +45,7 @@ DeviceRegistry::DeviceRegistry(core_security::StorageService& storage,
       mutation_mutex_(xSemaphoreCreateMutexStatic(&mutation_mutex_storage_)) {}
 
 core_security::Status DeviceRegistry::load() {
-  std::uint8_t encrypted[256]{};
+  std::uint8_t encrypted[kEncryptedScratchBytes]{};
   std::uint8_t plaintext[core_storage::kMaxMatterDevicesPayload]{};
   std::size_t size = 0;
   core_security::Metadata metadata{};
@@ -96,7 +97,7 @@ core_security::Status DeviceRegistry::add(std::uint64_t node_id, std::uint16_t e
   }
   if (candidate.count == core_storage::kMaxMatterDevices)
     return core_security::Status::TooLarge;
-  candidate.entries[candidate.count++] = {node_id, endpoint_id, capabilities, true};
+  candidate.entries[candidate.count++] = {node_id, endpoint_id, capabilities, true, {}};
   return persist(candidate);
 }
 
@@ -121,7 +122,30 @@ core_security::Status DeviceRegistry::replaceNode(std::uint64_t node_id,
   for (std::size_t index = 0; index < count; ++index) {
     if (endpoints[index].node_id != node_id || endpoints[index].endpoint_id == 0)
       return core_security::Status::Invalid;
-    updated.entries[updated.count++] = endpoints[index];
+    auto endpoint = endpoints[index];
+    for (std::size_t current_index = 0; current_index < current.count; ++current_index) {
+      const auto& existing = current.entries[current_index];
+      if (existing.node_id == node_id && existing.endpoint_id == endpoint.endpoint_id) {
+        std::memcpy(endpoint.name, existing.name, sizeof endpoint.name);
+        break;
+      }
+    }
+    updated.entries[updated.count++] = endpoint;
+  }
+
+  bool persistent_change = current.count != updated.count;
+  for (std::size_t index = 0; !persistent_change && index < current.count; ++index) {
+    const auto& before = current.entries[index];
+    const auto& after = updated.entries[index];
+    persistent_change =
+        before.node_id != after.node_id || before.endpoint_id != after.endpoint_id ||
+        before.capabilities != after.capabilities || std::strcmp(before.name, after.name) != 0;
+  }
+  if (!persistent_change) {
+    taskENTER_CRITICAL(&lock_);
+    devices_ = updated;
+    taskEXIT_CRITICAL(&lock_);
+    return core_security::Status::Ok;
   }
   return persist(updated);
 }
@@ -130,6 +154,28 @@ core_security::Status DeviceRegistry::removeNode(std::uint64_t node_id) {
   if (node_id == 0 || !writable_)
     return core_security::Status::Invalid;
   return replaceNode(node_id, nullptr, 0);
+}
+
+core_security::Status DeviceRegistry::rename(std::uint64_t node_id, std::uint16_t endpoint_id,
+                                             const char* name) {
+  if (node_id == 0 || endpoint_id == 0 || name == nullptr || !writable_)
+    return core_security::Status::Invalid;
+  const std::size_t name_length = strnlen(name, core_storage::kMaxMatterDeviceNameBytes + 1);
+  if (name_length == 0 || name_length > core_storage::kMaxMatterDeviceNameBytes)
+    return core_security::Status::Invalid;
+  SemaphoreLock mutation(mutation_mutex_);
+  if (!mutation.held())
+    return core_security::Status::IoError;
+  auto candidate = snapshot();
+  for (std::size_t index = 0; index < candidate.count; ++index) {
+    auto& device = candidate.entries[index];
+    if (device.node_id == node_id && device.endpoint_id == endpoint_id) {
+      std::memcpy(device.name, name, name_length);
+      device.name[name_length] = '\0';
+      return persist(candidate);
+    }
+  }
+  return core_security::Status::NotFound;
 }
 
 bool DeviceRegistry::contains(std::uint64_t node_id, std::uint16_t endpoint_id) const {
@@ -176,7 +222,7 @@ core_security::Status DeviceRegistry::persist(const core_storage::MatterDevices&
   generation = generation_ + 1;
   taskEXIT_CRITICAL(&lock_);
   std::uint8_t plaintext[core_storage::kMaxMatterDevicesPayload]{};
-  std::uint8_t encrypted[256]{};
+  std::uint8_t encrypted[kEncryptedScratchBytes]{};
   std::size_t written = 0;
   auto result =
       core_storage::encode_matter_devices(candidate, plaintext, sizeof(plaintext), written);

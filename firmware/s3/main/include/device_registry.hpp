@@ -19,6 +19,7 @@ public:
   core_security::Status replaceNode(std::uint64_t node_id,
                                     const core_storage::MatterDevice* endpoints, std::size_t count);
   core_security::Status removeNode(std::uint64_t node_id);
+  core_security::Status rename(std::uint64_t node_id, std::uint16_t endpoint_id, const char* name);
   bool contains(std::uint64_t node_id, std::uint16_t endpoint_id) const;
   bool writable() const {
     return writable_.load();

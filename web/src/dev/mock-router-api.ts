@@ -337,14 +337,12 @@ export function mockRouterApi(): Plugin {
             accepted: true,
             status: "completed",
             reply: `Mock response for: ${String(body.message ?? "").slice(0, 160)}. I can list hub status/devices/scenes in the dev router.`,
-            actions: body.allow_actions
-              ? [
-                  {
-                    tool: "GetHubStatus",
-                    result_json: JSON.stringify({ status: "mock-ready" }),
-                  },
-                ]
-              : [],
+            actions: [
+              {
+                tool: "GetHubStatus",
+                result_json: JSON.stringify({ status: "mock-ready" }),
+              },
+            ],
           });
           return;
         }

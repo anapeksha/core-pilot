@@ -13,8 +13,8 @@ import {
   groupUpsertRequestSchema,
   matterCommissionCancelRequestSchema,
   matterCommissionRequestSchema,
+  matterDeviceMutationSchema,
   matterDeviceRemoveRequestSchema,
-  matterOnOffRequestSchema,
   mcpInvokeRequestSchema,
   mcpToolPermissionRequestSchema,
   modelDeleteRequestSchema,
@@ -255,7 +255,6 @@ export type MatterStatus = {
 export type MatterCommissionRequest = {
   transport: MatterTransport;
   setup_payload: string;
-  discriminator?: number;
   thread_dataset_id?: string;
 };
 
@@ -579,13 +578,25 @@ export type DevicesResponse = {
   detail: string;
 };
 
-export type MatterOnOffRequest = {
-  device_id: string;
-  endpoint_id?: number;
-  on: boolean;
-};
+export type MatterDeviceMutationRequest =
+  | { device_id: string; endpoint_id: number; name: string }
+  | { device_id: string; endpoint_id: number; on: boolean }
+  | {
+      device_id: string;
+      endpoint_id: number;
+      level: number;
+      transition_time_ds: number;
+    }
+  | {
+      device_id: string;
+      endpoint_id: number;
+      color_temperature_mireds: number;
+      transition_time_ds: number;
+    };
 
-export type MatterOnOffResponse = MutationResponse;
+export type MatterDeviceMutationResponse = MutationResponse & {
+  operation_id?: number | null;
+};
 
 export type MatterDeviceRemoveRequest = { device_id: string };
 export type MatterDeviceRemoveResponse = MutationResponse & {
@@ -966,7 +977,7 @@ const requestSchemas: Readonly<Record<string, z.ZodType>> = {
   "/api/v1/automations/run": modelDeleteRequestSchema,
   "/api/v1/matter/commission": matterCommissionRequestSchema,
   "/api/v1/matter/commission/cancel": matterCommissionCancelRequestSchema,
-  "/api/v1/matter/on-off": matterOnOffRequestSchema,
+  "/api/v1/devices": matterDeviceMutationSchema,
   "/api/v1/matter/devices/remove": matterDeviceRemoveRequestSchema,
   "/api/v1/matter/thread/dataset": threadDatasetUpdateRequestSchema,
   "/api/v1/ai/provider": aiProviderRequestSchema,
@@ -979,7 +990,8 @@ const requestSchemas: Readonly<Record<string, z.ZodType>> = {
   "/api/v1/ota/chunk": otaChunkRequestSchema,
 };
 
-export function postJson<TResponse, TRequest>(
+function mutationJson<TResponse, TRequest>(
+  method: "PATCH" | "POST",
   path: string,
   body: TRequest,
   signal?: globalThis.AbortSignal,
@@ -997,7 +1009,7 @@ export function postJson<TResponse, TRequest>(
     return fetchWithTimeout(
       path,
       {
-        method: "POST",
+        method,
         headers: {
           accept: "application/json",
           "content-type": "application/json",
@@ -1012,6 +1024,22 @@ export function postJson<TResponse, TRequest>(
       },
     );
   });
+}
+
+export function postJson<TResponse, TRequest>(
+  path: string,
+  body: TRequest,
+  signal?: globalThis.AbortSignal,
+): Promise<TResponse> {
+  return mutationJson<TResponse, TRequest>("POST", path, body, signal);
+}
+
+export function patchJson<TResponse, TRequest>(
+  path: string,
+  body: TRequest,
+  signal?: globalThis.AbortSignal,
+): Promise<TResponse> {
+  return mutationJson<TResponse, TRequest>("PATCH", path, body, signal);
 }
 
 export function loadHealth(signal?: AbortSignal): Promise<Health> {
@@ -1160,11 +1188,11 @@ export function loadDevices(signal?: AbortSignal): Promise<DevicesResponse> {
   return loadJson<DevicesResponse>("/api/v1/devices", signal);
 }
 
-export function setMatterOnOff(
-  request: MatterOnOffRequest,
-): Promise<MatterOnOffResponse> {
-  return postJson<MatterOnOffResponse, MatterOnOffRequest>(
-    "/api/v1/matter/on-off",
+export function updateMatterDevice(
+  request: MatterDeviceMutationRequest,
+): Promise<MatterDeviceMutationResponse> {
+  return patchJson<MatterDeviceMutationResponse, MatterDeviceMutationRequest>(
+    "/api/v1/devices",
     request,
   );
 }

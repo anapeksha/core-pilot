@@ -1,5 +1,7 @@
 #include "matter_devices_codec.hpp"
 
+#include <cstring>
+
 namespace core_storage {
 namespace {
 
@@ -39,17 +41,22 @@ core_security::Status encode_matter_devices(const MatterDevices& devices, std::u
   if (output == nullptr || devices.count > kMaxMatterDevices) {
     return core_security::Status::Invalid;
   }
-  const std::size_t required = 1 + devices.count * 15;
-  if (capacity < required) {
-    return core_security::Status::BufferTooSmall;
+  std::size_t required = 1 + devices.count * 16;
+  for (std::size_t index = 0; index < devices.count; ++index) {
+    const auto& device = devices.entries[index];
+    if (device.node_id == 0 || device.endpoint_id == 0)
+      return core_security::Status::Invalid;
+    const std::size_t name_length = strnlen(device.name, sizeof device.name);
+    if (name_length > kMaxMatterDeviceNameBytes)
+      return core_security::Status::Invalid;
+    required += name_length;
   }
+  if (capacity < required)
+    return core_security::Status::BufferTooSmall;
   output[0] = static_cast<std::uint8_t>(devices.count);
   std::size_t position = 1;
   for (std::size_t index = 0; index < devices.count; ++index) {
     const auto& device = devices.entries[index];
-    if (device.node_id == 0 || device.endpoint_id == 0) {
-      return core_security::Status::Invalid;
-    }
     writeU64(output + position, device.node_id);
     position += 8;
     output[position++] = static_cast<std::uint8_t>(device.endpoint_id);
@@ -57,6 +64,10 @@ core_security::Status encode_matter_devices(const MatterDevices& devices, std::u
     writeU32(output + position, device.capabilities);
     position += 4;
     output[position++] = device.reachable ? 1 : 0;
+    const std::size_t name_length = strnlen(device.name, sizeof device.name);
+    output[position++] = static_cast<std::uint8_t>(name_length);
+    std::memcpy(output + position, device.name, name_length);
+    position += name_length;
   }
   written = position;
   return core_security::Status::Ok;
@@ -65,34 +76,53 @@ core_security::Status encode_matter_devices(const MatterDevices& devices, std::u
 core_security::Status decode_matter_devices(std::uint16_t schema, const std::uint8_t* input,
                                             std::size_t length, MatterDevices& devices) {
   devices = {};
-  if (schema != 1 && schema != kMatterDevicesSchema) {
+  if (schema != 1 && schema != 2 && schema != kMatterDevicesSchema) {
     return core_security::Status::UnsupportedFormat;
   }
   if (input == nullptr || length == 0 || length > kMaxMatterDevicesPayload) {
     return core_security::Status::Invalid;
   }
   const std::size_t count = input[0];
-  const std::size_t entry_size = schema == 1 ? 11 : 15;
-  if (count > kMaxMatterDevices || length != 1 + count * entry_size) {
+  if (count > kMaxMatterDevices)
     return core_security::Status::Invalid;
+  if (schema < kMatterDevicesSchema) {
+    const std::size_t entry_size = schema == 1 ? 11 : 15;
+    if (length != 1 + count * entry_size)
+      return core_security::Status::Invalid;
   }
   std::size_t position = 1;
   for (std::size_t index = 0; index < count; ++index) {
+    if (schema == kMatterDevicesSchema && length - position < 16)
+      return core_security::Status::Invalid;
     auto& device = devices.entries[index];
     device.node_id = readU64(input + position);
     position += 8;
     device.endpoint_id = static_cast<std::uint16_t>(input[position]) |
                          static_cast<std::uint16_t>(input[position + 1]) << 8;
     position += 2;
-    if (schema == kMatterDevicesSchema) {
+    if (schema >= 2) {
       device.capabilities = readU32(input + position);
       position += 4;
     }
-    if (input[position] > 1 || device.node_id == 0 || device.endpoint_id == 0) {
+    if (position >= length || input[position] > 1 || device.node_id == 0 ||
+        device.endpoint_id == 0) {
       return core_security::Status::Invalid;
     }
     device.reachable = input[position++] == 1;
+    if (schema == kMatterDevicesSchema) {
+      if (position >= length)
+        return core_security::Status::Invalid;
+      const std::size_t name_length = input[position++];
+      if (name_length > kMaxMatterDeviceNameBytes || name_length > length - position ||
+          std::memchr(input + position, '\0', name_length) != nullptr)
+        return core_security::Status::Invalid;
+      std::memcpy(device.name, input + position, name_length);
+      device.name[name_length] = '\0';
+      position += name_length;
+    }
   }
+  if (position != length)
+    return core_security::Status::Invalid;
   devices.count = count;
   return core_security::Status::Ok;
 }

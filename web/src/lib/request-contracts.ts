@@ -248,13 +248,29 @@ const matterNodeId = z
   )
   .refine((value) => !/^0+$/.test(value), "Device ID must be nonzero.");
 
-export const matterOnOffRequestSchema = z
-  .object({
-    device_id: matterNodeId,
-    endpoint_id: z.number().int().min(0).max(0xffff).optional(),
-    on: z.boolean(),
-  })
-  .strict();
+const matterDeviceIdentity = {
+  device_id: matterNodeId,
+  endpoint_id: z.number().int().min(1).max(0xffff),
+};
+
+export const matterDeviceMutationSchema = z.union([
+  z.object({ ...matterDeviceIdentity, name: modelNameSchema }).strict(),
+  z.object({ ...matterDeviceIdentity, on: z.boolean() }).strict(),
+  z
+    .object({
+      ...matterDeviceIdentity,
+      level: z.number().int().min(0).max(254),
+      transition_time_ds: z.number().int().min(0).max(0xfffe),
+    })
+    .strict(),
+  z
+    .object({
+      ...matterDeviceIdentity,
+      color_temperature_mireds: z.number().int().min(1).max(0xfeff),
+      transition_time_ds: z.number().int().min(0).max(0xfffe),
+    })
+    .strict(),
+]);
 
 export const matterDeviceRemoveRequestSchema = z
   .object({ device_id: matterNodeId })
@@ -285,7 +301,6 @@ export const matterCommissionRequestSchema = z
   .object({
     transport: z.enum(["wifi", "thread"]),
     setup_payload: trimmedRequired(entityLimits.setupPayload, "Setup code"),
-    discriminator: z.number().int().min(0).max(4095).optional(),
     thread_dataset_id: modelId.optional(),
   })
   .strict();
@@ -393,7 +408,6 @@ export const aiChatRequestSchema = z
       )
       .max(entityLimits.chatHistory),
     chat_id: modelId.optional(),
-    allow_actions: z.boolean(),
   })
   .strict();
 export const aiMemoryRequestSchema = z

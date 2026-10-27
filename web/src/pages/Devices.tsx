@@ -5,11 +5,19 @@ import {
   HiOutlineBolt,
   HiOutlineCpuChip,
   HiOutlineLightBulb,
+  HiOutlinePencil,
   HiOutlineSwatch,
 } from "solid-icons/hi";
 
 import { Button } from "~/components/button";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from "~/components/context-menu";
 import {
   Card,
   CardContent,
@@ -21,12 +29,7 @@ import { Flex } from "~/components/flex";
 
 import { Skeleton } from "~/components/skeleton";
 import { StatusBadge, type StatusTone } from "~/components/status";
-import {
-  Switch,
-  SwitchControl,
-  SwitchLabel,
-  SwitchThumb,
-} from "~/components/switch";
+
 import {
   Table,
   TableBody,
@@ -38,8 +41,8 @@ import {
 import type { Device } from "~/lib/api";
 import { cn } from "~/lib/utils";
 import {
+  matterDeviceMutation,
   matterDeviceRemoveMutation,
-  matterOnOffMutation,
 } from "~/mutations/matter";
 
 import {
@@ -130,8 +133,10 @@ function supportsMatterOnOff(device: {
 
 function powerControlDescription(device: Device, pending: boolean): string {
   if (pending) return `A power command for ${device.name} is pending.`;
+  if (device.availability.toLowerCase() !== "online")
+    return `Power control is unavailable until ${device.name} is online.`;
   if (onOffState(device.state) === undefined)
-    return `Power control is unavailable until ${device.name} reports its current state.`;
+    return `The current power state is unknown. Sending a command will establish the displayed state for ${device.name}.`;
   return `Turn ${device.name} on or off.`;
 }
 
@@ -146,19 +151,49 @@ function capabilityIcon(capability: string) {
 
 export default function Devices() {
   const devicesQuery = createDevicesQuery();
-  const onOffMutation = matterOnOffMutation();
+  const deviceMutation = matterDeviceMutation();
   const removeMutation = matterDeviceRemoveMutation();
   const [compact, setCompact] = createSignal(false);
+  const [editingDeviceId, setEditingDeviceId] = createSignal<string | null>(
+    null,
+  );
+  const [deviceName, setDeviceName] = createSignal("");
   const [pendingDeviceId, setPendingDeviceId] = createSignal<string | null>(
     null,
   );
+  const [contextDevice, setContextDevice] = createSignal<Device | null>(null);
+  const [removalDevice, setRemovalDevice] = createSignal<Device | null>(null);
+  const [commandedOnOff, setCommandedOnOff] = createSignal<
+    Record<string, boolean>
+  >({});
   const response = () => devicesQuery.data ?? fallbackDevices;
+  const displayedOnOff = (device: Device): boolean | undefined =>
+    onOffState(device.state) ?? commandedOnOff()[deviceKey(device)];
 
   const removeDevice = async (device: Device) => {
     if (!device.node_id)
       throw new Error("Matter node identity is unavailable.");
     await removeMutation.mutateAsync({ device_id: device.node_id });
     toast.success("Matter device removal queued.");
+  };
+
+  const renameDevice = async (device: Device) => {
+    if (!device.node_id || !device.endpoint_id)
+      throw new Error("Matter endpoint identity is unavailable.");
+    const name = deviceName().trim();
+    try {
+      await deviceMutation.mutateAsync({
+        device_id: device.node_id,
+        endpoint_id: device.endpoint_id,
+        name,
+      });
+      setEditingDeviceId(null);
+      toast.success("Device name saved.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Could not rename device.",
+      );
+    }
   };
 
   const setOnOff = async (device: Device, on: boolean) => {
@@ -168,11 +203,12 @@ export default function Devices() {
       if (!device.node_id || !device.endpoint_id) {
         throw new Error("Matter endpoint identity is unavailable.");
       }
-      await onOffMutation.mutateAsync({
+      await deviceMutation.mutateAsync({
         device_id: device.node_id,
         endpoint_id: device.endpoint_id,
         on,
       });
+      setCommandedOnOff((current) => ({ ...current, [id]: on }));
       toast.success(
         "Matter command queued. Power will update when the device reports state.",
       );
@@ -280,115 +316,209 @@ export default function Devices() {
                 </div>
               </Flex>
               <div class="scroll-fade-x overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Protocol</TableHead>
-                      <TableHead>Availability</TableHead>
-                      <TableHead>Capabilities</TableHead>
-                      <TableHead>Power</TableHead>
-                      <TableHead>Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    <For each={response().devices}>
-                      {(device) => (
-                        <TableRow
-                          data-device-id={deviceKey(device)}
-                          class={compact() ? "h-10" : "h-14"}
-                        >
-                          <TableCell>{device.name}</TableCell>
-                          <TableCell>{device.protocol}</TableCell>
-                          <TableCell>
-                            <StatusBadge
-                              tone={availabilityTone(device.availability)}
-                              label={device.availability}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <div class="flex flex-wrap gap-2">
-                              <For each={device.capabilities ?? []}>
-                                {(capability) => {
-                                  const Icon = capabilityIcon(capability);
-                                  return (
-                                    <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs">
-                                      <Icon
-                                        class="size-3.5"
-                                        aria-hidden="true"
-                                      />
-                                      {capability}
-                                    </span>
-                                  );
-                                }}
-                              </For>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <Show when={supportsMatterOnOff(device)}>
-                              <Switch
-                                checked={onOffState(device.state) ?? false}
-                                disabled={
-                                  onOffState(device.state) === undefined ||
-                                  onOffMutation.isPending ||
-                                  pendingDeviceId() === deviceKey(device)
-                                }
-                                onChange={(checked) =>
-                                  void setOnOff(device, checked)
-                                }
-                                aria-describedby={`power-${deviceKey(device)}-description`}
-                                class="inline-flex items-center gap-2"
-                              >
-                                <SwitchControl>
-                                  <SwitchThumb />
-                                </SwitchControl>
-                                <SwitchLabel>
-                                  {onOffState(device.state) === undefined
-                                    ? "Unknown"
-                                    : onOffState(device.state)
-                                      ? "On"
-                                      : "Off"}{" "}
-                                  {device.name}
-                                </SwitchLabel>
-                              </Switch>
-                              <span
-                                id={`power-${deviceKey(device)}-description`}
-                                class="sr-only"
-                              >
-                                {powerControlDescription(
-                                  device,
-                                  onOffMutation.isPending ||
-                                    pendingDeviceId() === deviceKey(device),
-                                )}
-                              </span>
-                            </Show>
-                          </TableCell>
-                          <TableCell>
-                            <Show
-                              when={device.protocol.toLowerCase() === "matter"}
-                            >
-                              <ConfirmDestructiveAction
-                                triggerLabel="Remove"
-                                triggerAriaLabel={`Remove ${device.name}`}
-                                title={`Remove ${device.name}?`}
-                                description="This will unpair the Matter device and remove it from Core Pilot. This action cannot be undone."
-                                confirmLabel="Remove device"
-                                onConfirm={() => removeDevice(device)}
-                                onError={(error) =>
-                                  toast.error(
-                                    error instanceof Error
-                                      ? error.message
-                                      : "Could not remove Matter device.",
-                                  )
-                                }
-                              />
-                            </Show>
-                          </TableCell>
+                <ContextMenu>
+                  <ContextMenuTrigger>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Name</TableHead>
+                          <TableHead>Protocol</TableHead>
+                          <TableHead>Availability</TableHead>
+                          <TableHead>Capabilities</TableHead>
+                          <TableHead>Power</TableHead>
+                          <TableHead>Actions</TableHead>
                         </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        <For each={response().devices}>
+                          {(device) => (
+                            <TableRow
+                              data-device-id={deviceKey(device)}
+                              class={compact() ? "h-10" : "h-14"}
+                              onContextMenu={() => setContextDevice(device)}
+                            >
+                              <TableCell>
+                                <Show
+                                  when={editingDeviceId() === deviceKey(device)}
+                                  fallback={
+                                    <button
+                                      type="button"
+                                      class="rounded-sm text-left font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                      onClick={() => {
+                                        setDeviceName(device.name);
+                                        setEditingDeviceId(deviceKey(device));
+                                      }}
+                                      aria-label={`Rename ${device.name}`}
+                                    >
+                                      {device.name}
+                                    </button>
+                                  }
+                                >
+                                  <form
+                                    class="flex min-w-56 items-center gap-2"
+                                    onSubmit={(event) => {
+                                      event.preventDefault();
+                                      void renameDevice(device);
+                                    }}
+                                  >
+                                    <input
+                                      value={deviceName()}
+                                      onInput={(event) =>
+                                        setDeviceName(event.currentTarget.value)
+                                      }
+                                      maxlength={64}
+                                      class="h-9 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                      aria-label="Device name"
+                                      autofocus
+                                    />
+                                    <Button
+                                      type="submit"
+                                      size="sm"
+                                      disabled={deviceMutation.isPending}
+                                    >
+                                      Save
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="ghost"
+                                      onClick={() => setEditingDeviceId(null)}
+                                    >
+                                      Cancel
+                                    </Button>
+                                  </form>
+                                </Show>
+                              </TableCell>
+                              <TableCell>{device.protocol}</TableCell>
+                              <TableCell>
+                                <StatusBadge
+                                  tone={availabilityTone(device.availability)}
+                                  label={device.availability}
+                                />
+                              </TableCell>
+                              <TableCell>
+                                <div class="flex flex-wrap gap-2">
+                                  <For each={device.capabilities ?? []}>
+                                    {(capability) => {
+                                      const Icon = capabilityIcon(capability);
+                                      return (
+                                        <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs">
+                                          <Icon
+                                            class="size-3.5"
+                                            aria-hidden="true"
+                                          />
+                                          {capability}
+                                        </span>
+                                      );
+                                    }}
+                                  </For>
+                                </div>
+                              </TableCell>
+                              <TableCell>
+                                <Show when={supportsMatterOnOff(device)}>
+                                  <span class="text-sm font-medium">
+                                    {displayedOnOff(device) === undefined
+                                      ? "Unknown"
+                                      : displayedOnOff(device)
+                                        ? "On"
+                                        : "Off"}
+                                  </span>
+                                  <span
+                                    id={`power-${deviceKey(device)}-description`}
+                                    class="sr-only"
+                                  >
+                                    {powerControlDescription(
+                                      device,
+                                      deviceMutation.isPending ||
+                                        pendingDeviceId() === deviceKey(device),
+                                    )}
+                                  </span>
+                                </Show>
+                              </TableCell>
+                              <TableCell>
+                                <button
+                                  type="button"
+                                  class="rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                  aria-label={`Right-click or long-press for ${device.name} actions`}
+                                  onContextMenu={() => setContextDevice(device)}
+                                >
+                                  Actions
+                                </button>
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </For>
+                      </TableBody>
+                    </Table>
+                  </ContextMenuTrigger>
+                  <ContextMenuContent>
+                    <Show when={contextDevice()} keyed>
+                      {(device) => (
+                        <>
+                          <ContextMenuItem
+                            onSelect={() => {
+                              setDeviceName(device.name);
+                              setEditingDeviceId(deviceKey(device));
+                            }}
+                          >
+                            <HiOutlinePencil aria-hidden="true" />
+                            Rename
+                          </ContextMenuItem>
+                          <Show when={supportsMatterOnOff(device)}>
+                            <ContextMenuItem
+                              disabled={
+                                device.availability.toLowerCase() !==
+                                  "online" ||
+                                deviceMutation.isPending ||
+                                pendingDeviceId() === deviceKey(device)
+                              }
+                              onSelect={() =>
+                                void setOnOff(device, !displayedOnOff(device))
+                              }
+                            >
+                              <HiOutlineBolt aria-hidden="true" />
+                              {displayedOnOff(device) ? "Turn off" : "Turn on"}
+                            </ContextMenuItem>
+                          </Show>
+                          <Show
+                            when={device.protocol.toLowerCase() === "matter"}
+                          >
+                            <ContextMenuSeparator />
+                            <ContextMenuItem
+                              class="text-error data-[highlighted]:text-error"
+                              aria-label={`Remove ${device.name}`}
+                              onSelect={() => setRemovalDevice(device)}
+                            >
+                              Remove device…
+                            </ContextMenuItem>
+                          </Show>
+                        </>
                       )}
-                    </For>
-                  </TableBody>
-                </Table>
+                    </Show>
+                  </ContextMenuContent>
+                </ContextMenu>
+                <Show when={removalDevice()} keyed>
+                  {(device) => (
+                    <ConfirmDestructiveAction
+                      hideTrigger
+                      open
+                      onOpenChange={(open) => !open && setRemovalDevice(null)}
+                      triggerLabel="Remove"
+                      triggerAriaLabel={`Remove ${device.name}`}
+                      title={`Remove ${device.name}?`}
+                      description="This will unpair the Matter device and remove it from Core Pilot. This action cannot be undone."
+                      confirmLabel="Remove device"
+                      onConfirm={() => removeDevice(device)}
+                      onError={(error) =>
+                        toast.error(
+                          error instanceof Error
+                            ? error.message
+                            : "Could not remove Matter device.",
+                        )
+                      }
+                    />
+                  )}
+                </Show>
               </div>
             </Show>
           </Show>

@@ -64,22 +64,12 @@ const setupCodeSchema = z
   .min(1, "Enter a setup code.")
   .max(512, "Setup codes must be 512 characters or fewer.");
 
-const wifiCommissioningSchema = z.object({
+const commissioningSchema = z.object({
   setupCode: setupCodeSchema,
 });
 
-const threadCommissioningSchema = z.object({
-  setupCode: setupCodeSchema,
-  discriminator: z
-    .string()
-    .trim()
-    .min(1, "Enter the device discriminator.")
-    .regex(/^\d+$/, "Discriminator must be a whole number.")
-    .transform(Number)
-    .refine((value) => value >= 0 && value <= 4095, {
-      message: "Discriminator must be between 0 and 4095.",
-    }),
-});
+const wifiCommissioningSchema = commissioningSchema;
+const threadCommissioningSchema = commissioningSchema;
 
 type WifiCommissioningValues = z.input<typeof wifiCommissioningSchema>;
 type ThreadCommissioningValues = z.input<typeof threadCommissioningSchema>;
@@ -195,7 +185,7 @@ export default function MatterDiagnostics() {
     mode: "onTouched",
   });
   const threadForm = createForm<ThreadCommissioningValues>({
-    defaultValues: { setupCode: "", discriminator: "" },
+    defaultValues: { setupCode: "" },
     mode: "onTouched",
   });
 
@@ -211,20 +201,13 @@ export default function MatterDiagnostics() {
       return result.success || result.error.issues[0]?.message;
     },
   });
-  const threadDiscriminatorField = threadForm.register("discriminator", {
-    validate: (value) => {
-      const result =
-        threadCommissioningSchema.shape.discriminator.safeParse(value);
-      return result.success || result.error.issues[0]?.message;
-    },
-  });
 
   const shouldShowToast = createToastGate();
 
   const closeCommissioningSheet = () => {
     setCommissioningSheet(null);
     wifiForm.reset({ setupCode: "" });
-    threadForm.reset({ setupCode: "", discriminator: "" });
+    threadForm.reset({ setupCode: "" });
   };
 
   const submitWifiCommissioning = wifiForm.handleSubmit((values) => {
@@ -249,7 +232,6 @@ export default function MatterDiagnostics() {
       {
         transport: "thread",
         setup_payload: input.setupCode,
-        discriminator: input.discriminator,
       },
       {
         onSuccess: (response) => {
@@ -760,36 +742,6 @@ export default function MatterDiagnostics() {
                   aria-invalid={Boolean(threadForm.errors.setupCode)}
                 />
                 <Show when={threadForm.errors.setupCode?.message}>
-                  {(message) => (
-                    <TextFieldErrorMessage>{message()}</TextFieldErrorMessage>
-                  )}
-                </Show>
-              </TextField>
-
-              <TextField
-                validationState={
-                  threadForm.errors.discriminator ? "invalid" : "valid"
-                }
-              >
-                <TextFieldLabel for="thread-discriminator">
-                  Discriminator
-                </TextFieldLabel>
-                <TextFieldInput
-                  {...threadDiscriminatorField}
-                  id="thread-discriminator"
-                  type="number"
-                  min="0"
-                  max="4095"
-                  inputmode="numeric"
-                  placeholder="3840"
-                  autocomplete="off"
-                  aria-invalid={Boolean(threadForm.errors.discriminator)}
-                />
-                <TextFieldDescription>
-                  Enter the device’s 12-bit discriminator. A manual setup code
-                  contains only its short discriminator.
-                </TextFieldDescription>
-                <Show when={threadForm.errors.discriminator?.message}>
                   {(message) => (
                     <TextFieldErrorMessage>{message()}</TextFieldErrorMessage>
                   )}

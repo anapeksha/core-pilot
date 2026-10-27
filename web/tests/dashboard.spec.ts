@@ -1291,7 +1291,12 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   await expect(page.getByText("On/Off", { exact: true })).toBeVisible();
   await expect(page.getByText("Level", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "Remove Bench Lamp" }).click();
+  await page
+    .getByRole("button", {
+      name: "Right-click or long-press for Bench Lamp actions",
+    })
+    .dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
+  await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
   await page.getByRole("button", { name: "Remove device" }).click();
   await expect(page.getByText("Matter device removal queued.")).toBeVisible();
   expect(state.posts.at(-1)).toMatchObject({
@@ -1325,7 +1330,6 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
 
   await page.getByRole("button", { name: "Start Thread journey" }).click();
   await page.getByPlaceholder("Enter manual setup code").fill("34970112332");
-  await page.getByLabel("Discriminator").fill("3840");
   await page.getByRole("button", { name: "Add with Thread" }).click();
   await expect.poll(() => state.posts.at(-1)?.body.transport).toBe("thread");
   expect(state.posts.at(-1)).toEqual({
@@ -1333,7 +1337,6 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
     body: {
       transport: "thread",
       setup_payload: "34970112332",
-      discriminator: 3840,
     },
   });
 });
@@ -1390,7 +1393,6 @@ test("covers AI chat, provider setup, encrypted memory, and tool permissions", a
   ).toBeVisible();
   await page.getByLabel("Model").fill("gpt-test");
   await page.getByLabel("API key").fill("secret-key");
-  await page.getByText("Enable assistant").click();
   await page.getByRole("button", { name: "Save provider" }).click();
   await expect(
     page
@@ -1790,7 +1792,11 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
   await page.getByLabel("Base URL").fill("");
   await expect(
     page.getByRole("button", { name: "Save provider" }),
-  ).toBeDisabled();
+  ).toBeEnabled();
+  await page.getByRole("button", { name: "Save provider" }).click();
+  expect(
+    state.posts.filter((request) => request.path === "/api/v1/ai/provider"),
+  ).toHaveLength(0);
 
   await page.goto("/#/system");
   await expect(
