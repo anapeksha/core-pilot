@@ -74,7 +74,7 @@ The setup network is intentionally password protected. Do not configure it as an
 
 ### Requirements
 
-- ESP-IDF 6.0.2 managed through [EIM](https://github.com/espressif/idf-env).
+- ESP-IDF 6.0.2 managed through [EIM](https://github.com/espressif/esp-idf).
 - A Node.js version supported by the dependencies in `web/package-lock.json`.
 - npm.
 - An M5Stack CoreS3 for installation and hardware testing.
