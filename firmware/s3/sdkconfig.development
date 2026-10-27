@@ -1,0 +1,7 @@
+# Development-only profile for directly flashed, unsigned hardware builds.
+# Release artifacts continue to use sdkconfig.defaults and external signing.
+CONFIG_SECURE_SIGNED_APPS=n
+CONFIG_SECURE_SIGNED_APPS_NO_SECURE_BOOT=n
+CONFIG_SECURE_SIGNED_ON_UPDATE=n
+CONFIG_SECURE_SIGNED_ON_UPDATE_NO_SECURE_BOOT=n
+CONFIG_SECURE_SIGNED_APPS_RSA_SCHEME=n
