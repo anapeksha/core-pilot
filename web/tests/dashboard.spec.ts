@@ -1417,7 +1417,8 @@ test("covers AI chat, provider setup, encrypted memory, and tool permissions", a
     path: "/api/v1/ai/mcp/tool",
     body: { tool: "devices.list", enabled: false },
   });
-  await expect(page.getByLabel("Toggle ota.apply")).toHaveCount(0);
+  await expect(page.getByLabel("Toggle ota.apply")).toBeVisible();
+  await expect(page.getByLabel("Toggle ota.apply")).toBeDisabled();
 });
 
 test("confirms destructive MCP enables while keeping disable immediate", async ({
