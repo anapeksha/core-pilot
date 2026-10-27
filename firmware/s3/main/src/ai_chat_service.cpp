@@ -232,6 +232,7 @@ struct AiChatService::RequestSlot final {
 struct AiChatService::Runtime final {
   Snapshot snapshot{};
   Snapshot work{};
+  char prior_ids[kMaxActions][129]{};
   char prior_tools[kMaxActions][kMaxToolNameBytes + 1]{};
   char prior_arguments[kMaxActions][kMaxToolArgumentsBytes + 1]{};
   char result[kMaxResponseBytes + 1]{};
@@ -697,6 +698,8 @@ void AiChatService::process(std::uint64_t operation_id) {
 
       bool calls_valid =
           anthropic_results != nullptr || provider.backend == ai::ProviderBackend::OpenAiCompatible;
+      const std::size_t pending_start = prior_count;
+      std::size_t mutating_count = 0;
       const int candidate_count = cJSON_GetArraySize(calls);
       for (int index = 0; calls_valid && index < candidate_count; ++index) {
         const cJSON* call = cJSON_GetArrayItem(calls, index);
@@ -723,13 +726,17 @@ void AiChatService::process(std::uint64_t operation_id) {
                    print_bounded(raw_arguments, arguments_json, sizeof arguments_json)) {
           arguments = cJSON_Duplicate(raw_arguments, true);
         }
-        if (!cJSON_IsString(id) || std::strlen(id->valuestring) > 128 || !cJSON_IsString(name) ||
-            std::strlen(name->valuestring) > kMaxToolNameBytes || !cJSON_IsObject(arguments)) {
+        const std::size_t id_length = cJSON_IsString(id) ? std::strlen(id->valuestring) : 0;
+        const std::size_t name_length = cJSON_IsString(name) ? std::strlen(name->valuestring) : 0;
+        bool mutating = false;
+        if (id_length == 0 || id_length > 128 || name_length == 0 ||
+            name_length > kMaxToolNameBytes || !cJSON_IsObject(arguments) ||
+            McpService::preflight(name->valuestring, mutating) != ESP_OK) {
           cJSON_Delete(arguments);
           mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
           calls_valid = false;
-          failure_error = Error::invalid_response;
-          failure_detail = "provider tool call is malformed or oversized";
+          failure_error = Error::actions_unsupported;
+          failure_detail = "provider tool round contains an invalid or unauthorized call";
           break;
         }
         std::uint8_t identical = 0;
@@ -745,15 +752,30 @@ void AiChatService::process(std::uint64_t operation_id) {
           failure_detail = "repeated identical AI tool call blocked";
           break;
         }
+        if (mutating && ++mutating_count > 1) {
+          cJSON_Delete(arguments);
+          mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
+          calls_valid = false;
+          failure_error = Error::actions_unsupported;
+          failure_detail = "only one mutating AI tool call is allowed per round";
+          break;
+        }
+        std::snprintf(runtime_->prior_ids[prior_count], sizeof runtime_->prior_ids[prior_count],
+                      "%s", id->valuestring);
         std::snprintf(runtime_->prior_tools[prior_count], sizeof runtime_->prior_tools[prior_count],
                       "%s", name->valuestring);
         std::snprintf(runtime_->prior_arguments[prior_count],
                       sizeof runtime_->prior_arguments[prior_count], "%s", arguments_json);
         ++prior_count;
+        cJSON_Delete(arguments);
+        mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
+      }
 
+      for (std::size_t index = pending_start; calls_valid && index < prior_count; ++index) {
+        cJSON* arguments = cJSON_Parse(runtime_->prior_arguments[index]);
         cJSON* invocation = nullptr;
         const esp_err_t invoked =
-            McpService::invoke(*http_runtime_, name->valuestring, arguments, invocation);
+            McpService::invoke(*http_runtime_, runtime_->prior_tools[index], arguments, invocation);
         cJSON_Delete(arguments);
         if (invocation == nullptr) {
           invocation = cJSON_CreateObject();
@@ -761,10 +783,9 @@ void AiChatService::process(std::uint64_t operation_id) {
           cJSON_AddNumberToObject(invocation, "error", invoked);
         }
         Action& action = result.actions[result.action_count++];
-        std::snprintf(action.tool, sizeof action.tool, "%s", name->valuestring);
+        std::snprintf(action.tool, sizeof action.tool, "%s", runtime_->prior_tools[index]);
         if (!print_bounded(invocation, action.result_json, sizeof action.result_json)) {
           cJSON_Delete(invocation);
-          mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
           calls_valid = false;
           failure_error = Error::response_too_large;
           failure_detail = "MCP tool result exceeds the bounded action record";
@@ -773,18 +794,17 @@ void AiChatService::process(std::uint64_t operation_id) {
         if (provider.backend == ai::ProviderBackend::OpenAiCompatible) {
           cJSON* tool_message = cJSON_CreateObject();
           cJSON_AddStringToObject(tool_message, "role", "tool");
-          cJSON_AddStringToObject(tool_message, "tool_call_id", id->valuestring);
+          cJSON_AddStringToObject(tool_message, "tool_call_id", runtime_->prior_ids[index]);
           cJSON_AddStringToObject(tool_message, "content", action.result_json);
           cJSON_AddItemToArray(continuation_messages, tool_message);
         } else {
           cJSON* tool_result = cJSON_CreateObject();
           cJSON_AddStringToObject(tool_result, "type", "tool_result");
-          cJSON_AddStringToObject(tool_result, "tool_use_id", id->valuestring);
+          cJSON_AddStringToObject(tool_result, "tool_use_id", runtime_->prior_ids[index]);
           cJSON_AddStringToObject(tool_result, "content", action.result_json);
           cJSON_AddItemToArray(anthropic_results, tool_result);
         }
         cJSON_Delete(invocation);
-        mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
       }
       if (calls_valid && provider.backend == ai::ProviderBackend::AnthropicCompatible) {
         cJSON* user = cJSON_CreateObject();

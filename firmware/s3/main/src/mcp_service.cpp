@@ -684,13 +684,21 @@ cJSON* McpService::context(const HttpRuntime& runtime) {
   return response;
 }
 
+esp_err_t McpService::preflight(const char* tool_name, bool& mutating) {
+  mutating = false;
+  const Tool* tool = findTool(tool_name);
+  if (tool == nullptr || !tool->available || !toolEnabled(*tool))
+    return ESP_ERR_NOT_SUPPORTED;
+  mutating = !readOnlyDefault(*tool);
+  return ESP_OK;
+}
+
 esp_err_t McpService::invoke(const HttpRuntime& runtime, const char* tool_name,
                              const cJSON* arguments, cJSON*& result) {
   result = nullptr;
   const Tool* tool = findTool(tool_name);
-  if (tool == nullptr || !tool->available || arguments == nullptr || !cJSON_IsObject(arguments))
-    return ESP_ERR_NOT_SUPPORTED;
-  if (!toolEnabled(*tool))
+  if (tool == nullptr || !tool->available || arguments == nullptr || !cJSON_IsObject(arguments) ||
+      !toolEnabled(*tool))
     return ESP_ERR_NOT_SUPPORTED;
 
   if (std::strcmp(tool->name, "GetHubStatus") == 0) {

@@ -15,6 +15,8 @@ public:
   static esp_err_t setPermission(const HttpRuntime& runtime, const char* tool, bool enabled);
   static cJSON* tools();
   static cJSON* context(const HttpRuntime& runtime);
+  // Checks availability and the persisted permission before an AI round executes any call.
+  static esp_err_t preflight(const char* tool, bool& mutating);
   static esp_err_t invoke(const HttpRuntime& runtime, const char* tool, const cJSON* arguments,
                           cJSON*& result);
   // A null response with has_response=false is a valid JSON-RPC notification.
