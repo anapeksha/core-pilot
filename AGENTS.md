@@ -34,8 +34,7 @@ Component names retain the `core_` prefix to avoid collisions with ESP-IDF and t
 - CoreS3 LCD and TF share SPI2: SCLK GPIO36, MOSI GPIO37, MISO/LCD D-C GPIO35, LCD CS GPIO3, TF CS GPIO4.
 - LCD CS and TF CS must never be active together. Restore GPIO35 to SPI2 MISO/input after LCD traffic.
 - CoreS3 has 16 MiB flash and 8 MiB quad PSRAM.
-- CoreS3 serial is `/dev/cu.usbmodem1201`; its tested LAN address was `192.168.0.107`, but discover or confirm the current DHCP address before relying on it.
-- Nesso is `/dev/cu.usbmodem1301`. Never flash or erase Nesso while working on Core Pilot. A serial reset for an explicitly requested hardware test is permitted, but setup payloads must remain redacted.
+- Discover or confirm the current CoreS3 DHCP address before relying on it.
 - If there are other serial devices, identify the CoreS3 positively before any flash command.
 - Gateway H2 uses CoreS3 RX GPIO10, TX GPIO17, EN GPIO7, BOOT GPIO18, at 460800 baud.
 
