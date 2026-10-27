@@ -4,7 +4,7 @@ Diagnostics:
   UnusedIncludes: None
 ---
 If:
-  PathMatch: .*firmware/s3/components/.*/test/.*\.cpp
+  PathMatch: .*firmware/s3/(components/.*/test|main/test)/.*\.cpp
 CompileFlags:
   CompilationDatabase: firmware/s3/build-tests-clang
 ---
