@@ -1,5 +1,11 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { accessToken, authHeaders, clearAccess, unlockAccess } from "./auth";
+import {
+  accessToken,
+  authHeaders,
+  clearAccess,
+  initializeAccess,
+  unlockAccess,
+} from "./auth";
 
 afterEach(() => {
   clearAccess();
@@ -22,6 +28,42 @@ it("keeps a bounded bearer in RAM and expires it", async () => {
   vi.advanceTimersByTime(28800000);
   expect(accessToken()).toBeNull();
 });
+it("restores a valid tab session after a reload", async () => {
+  const token = "b".repeat(64);
+  sessionStorage.setItem("core-pilot-access-token", token);
+  sessionStorage.setItem(
+    "core-pilot-access-expiry",
+    String(Date.now() + 60_000),
+  );
+  const fetcher = vi.fn();
+  vi.stubGlobal("fetch", fetcher);
+
+  await expect(initializeAccess()).resolves.toBe("consumed");
+  expect(authHeaders()).toEqual({ Authorization: `Bearer ${token}` });
+  expect(fetcher).not.toHaveBeenCalled();
+});
+
+it("discards an expired tab session and checks bootstrap state", async () => {
+  sessionStorage.setItem("core-pilot-access-token", "c".repeat(64));
+  sessionStorage.setItem("core-pilot-access-expiry", String(Date.now() - 1));
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          authentication_required: true,
+          bootstrap_state: "consumed",
+        }),
+      ),
+    ),
+  );
+
+  await expect(initializeAccess()).resolves.toBe("consumed");
+  expect(authHeaders()).toEqual({});
+  expect(sessionStorage.getItem("core-pilot-access-token")).toBeNull();
+  expect(sessionStorage.getItem("core-pilot-access-expiry")).toBeNull();
+});
+
 it.each([
   ["incorrect", "The access code is incorrect."],
   ["expired", "The access code has expired."],

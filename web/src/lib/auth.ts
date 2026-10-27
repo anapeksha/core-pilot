@@ -18,9 +18,42 @@ export class AccessError extends Error {
   }
 }
 
+const sessionTokenKey = "core-pilot-access-token";
+const sessionExpiryKey = "core-pilot-access-expiry";
+const sessionSeconds = 28800;
+const tokenPattern = /^[0-9a-f]{64}$/;
+
 const [token, setToken] = createSignal<string | null>(null);
 export const accessToken = token;
 let expiry: ReturnType<typeof setTimeout> | undefined;
+
+function sessionStore(): Storage | undefined {
+  try {
+    return globalThis.sessionStorage;
+  } catch {
+    return undefined;
+  }
+}
+
+function restoreAccess(): boolean {
+  const storage = sessionStore();
+  const storedToken = storage?.getItem(sessionTokenKey);
+  const storedExpiry = Number(storage?.getItem(sessionExpiryKey));
+  const remaining = storedExpiry - Date.now();
+  if (
+    !storedToken ||
+    !tokenPattern.test(storedToken) ||
+    !Number.isSafeInteger(storedExpiry) ||
+    remaining <= 0
+  ) {
+    clearAccess();
+    return false;
+  }
+  setToken(storedToken);
+  clearTimeout(expiry);
+  expiry = setTimeout(clearAccess, remaining);
+  return true;
+}
 
 function isBootstrapState(value: unknown): value is BootstrapState {
   return (
@@ -33,6 +66,8 @@ function isBootstrapState(value: unknown): value is BootstrapState {
 }
 
 export async function initializeAccess(): Promise<BootstrapState> {
+  if (restoreAccess()) return "consumed";
+
   const response = await fetch("/api/v1/auth", {
     credentials: "omit",
     headers: { Accept: "application/json" },
@@ -60,7 +95,11 @@ export async function initializeAccess(): Promise<BootstrapState> {
 
 export function clearAccess() {
   clearTimeout(expiry);
+  expiry = undefined;
   setToken(null);
+  const storage = sessionStore();
+  storage?.removeItem(sessionTokenKey);
+  storage?.removeItem(sessionExpiryKey);
 }
 
 export function authHeaders(): Record<string, string> {
@@ -110,12 +149,16 @@ export async function unlockAccess(code: string): Promise<void> {
     typeof value !== "object" ||
     !("token" in value) ||
     typeof value.token !== "string" ||
-    !/^[0-9a-f]{64}$/.test(value.token) ||
+    !tokenPattern.test(value.token) ||
     !("expires_in" in value) ||
-    value.expires_in !== 28800
+    value.expires_in !== sessionSeconds
   )
     throw new AccessError("unavailable", accessMessages.unavailable);
   clearAccess();
+  const expiresAt = Date.now() + sessionSeconds * 1000;
+  const storage = sessionStore();
+  storage?.setItem(sessionTokenKey, value.token);
+  storage?.setItem(sessionExpiryKey, String(expiresAt));
   setToken(value.token);
-  expiry = setTimeout(clearAccess, 28800 * 1000);
+  expiry = setTimeout(clearAccess, sessionSeconds * 1000);
 }
