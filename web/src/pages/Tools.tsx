@@ -54,15 +54,12 @@ const Tools: Component = () => {
   const [toolAwaitingConfirmation, setToolAwaitingConfirmation] =
     createSignal<McpToolDescriptor | null>(null);
   const tools = createMemo(() => toolsQuery.data?.tools ?? []);
-  const executableTools = createMemo(() =>
-    tools().filter((tool) => tool.available),
-  );
 
   const isInitialToolsLoad = () =>
     toolsQuery.isFetching && toolsQuery.data === undefined;
   const groupedTools = createMemo(() => {
     const groups: Record<string, McpToolDescriptor[]> = {};
-    for (const tool of executableTools()) {
+    for (const tool of tools()) {
       const category = tool.category?.trim() || "Capabilities";
       (groups[category] ??= []).push(tool);
     }
@@ -217,7 +214,7 @@ const Tools: Component = () => {
                 }
               >
                 <Show
-                  when={executableTools().length > 0}
+                  when={tools().length > 0}
                   fallback={
                     <Flex
                       flexDirection="col"
@@ -266,8 +263,16 @@ const Tools: Component = () => {
                                             destructive
                                           </Badge>
                                         </Show>
-                                        <Badge variant="success">
-                                          available
+                                        <Badge
+                                          variant={
+                                            tool.available
+                                              ? "success"
+                                              : "secondary"
+                                          }
+                                        >
+                                          {tool.available
+                                            ? "available"
+                                            : "not implemented"}
                                         </Badge>
                                         <Show when={tool.enabled}>
                                           <Badge variant="outline">
@@ -284,6 +289,7 @@ const Tools: Component = () => {
                                         <Switch
                                           checked={tool.enabled}
                                           disabled={
+                                            !tool.available ||
                                             permissionMutation.isPending
                                           }
                                           onChange={(checked) =>
@@ -303,7 +309,9 @@ const Tools: Component = () => {
                                         </Switch>
                                       </TooltipTrigger>
                                       <TooltipContent>
-                                        Toggle this assistant tool
+                                        {tool.available
+                                          ? `Allow or deny ${tool.title} for the assistant`
+                                          : `${tool.title} is registered but not implemented in firmware`}
                                       </TooltipContent>
                                     </Tooltip>
                                   </CardHeader>
