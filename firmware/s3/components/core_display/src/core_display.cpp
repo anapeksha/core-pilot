@@ -242,6 +242,8 @@ void CoreDisplay::drawBattery(M5Canvas& target, int x, int y) {
   if (fill)
     target.fillRect(x + 4, y + 4, fill, 6, color);
   if (external_power_) {
+    target.fillTriangle(x + 19, y + 3, x + 14, y + 9, x + 18, y + 9, kBlack);
+    target.fillTriangle(x + 17, y + 7, x + 21, y + 7, x + 15, y + 13, kBlack);
     target.fillTriangle(x + 18, y + 2, x + 13, y + 8, x + 17, y + 8, kCharge);
     target.fillTriangle(x + 16, y + 6, x + 20, y + 6, x + 14, y + 12, kCharge);
   }
