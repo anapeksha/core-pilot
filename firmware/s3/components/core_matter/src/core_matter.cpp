@@ -312,6 +312,76 @@ private:
   }
 };
 
+esp_err_t findCommissionablePeer(const chip::SetupPayload& payload, std::uint8_t address_type,
+                                 chip::Inet::IPAddress& peer_ip, std::uint16_t& peer_port) {
+  mdns_result_t* results = nullptr;
+  const esp_err_t query_result = mdns_query_ptr("_matterc", "_udp", 5000, 16, &results);
+  if (query_result != ESP_OK)
+    return query_result;
+
+  bool found = false;
+  for (const mdns_result_t* result = results; result != nullptr && !found; result = result->next) {
+    std::uint32_t discriminator = 0;
+    std::uint32_t commissioning_mode = 0;
+    if (result->port == 0 || !txtNumber(*result, "D", discriminator) ||
+        !txtNumber(*result, "CM", commissioning_mode) || commissioning_mode == 0 ||
+        (discriminator >> 8U) != payload.discriminator.GetShortValue()) {
+      continue;
+    }
+    for (const mdns_ip_addr_t* address = result->addr; address != nullptr;
+         address = address->next) {
+      if (address->addr.type != address_type)
+        continue;
+      char text[40]{};
+      if (address_type == ESP_IPADDR_TYPE_V4) {
+        if (esp_ip4addr_ntoa(&address->addr.u_addr.ip4, text, sizeof(text)) == nullptr)
+          continue;
+      } else {
+        if (address->addr.u_addr.ip6.zone != 0)
+          continue;
+        std::snprintf(text, sizeof(text), IPV6STR, IPV62STR(address->addr.u_addr.ip6));
+      }
+      if (chip::Inet::IPAddress::FromString(text, peer_ip)) {
+        peer_port = result->port;
+        found = true;
+        break;
+      }
+    }
+  }
+  mdns_query_results_free(results);
+  return found ? ESP_OK : ESP_ERR_NOT_FOUND;
+}
+
+esp_err_t pairThreadOnNetwork(chip::NodeId node_id, const char* setup_payload) {
+  chip::SetupPayload payload;
+  if (chip::ManualSetupPayloadParser(setup_payload).populatePayload(payload) != CHIP_NO_ERROR)
+    return ESP_ERR_INVALID_ARG;
+
+  chip::Inet::IPAddress peer_ip;
+  std::uint16_t peer_port = 0;
+  const esp_err_t discovery =
+      findCommissionablePeer(payload, ESP_IPADDR_TYPE_V6, peer_ip, peer_port);
+  if (discovery != ESP_OK)
+    return discovery;
+
+  chip::RendezvousParameters rendezvous =
+      chip::RendezvousParameters()
+          .SetSetupPINCode(payload.setUpPINCode)
+          .SetPeerAddress(chip::Transport::PeerAddress::UDP(peer_ip, peer_port));
+  chip::Controller::CommissioningParameters parameters;
+
+  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+  auto* commissioner =
+      esp_matter::controller::matter_controller_client::get_instance().get_commissioner();
+  commissioner->RegisterPairingDelegate(&PairingDelegate::instance());
+  const CHIP_ERROR error = commissioner->PairDevice(node_id, rendezvous, parameters);
+  if (error != CHIP_NO_ERROR) {
+    commissioner->RegisterPairingDelegate(nullptr);
+    return error == CHIP_ERROR_NO_MEMORY ? ESP_ERR_NO_MEM : ESP_FAIL;
+  }
+  return ESP_OK;
+}
+
 esp_err_t pairThreadOverBle(chip::NodeId node_id, const char* setup_payload, std::uint8_t* dataset,
                             std::uint8_t dataset_length) {
   chip::SetupPayload payload;
@@ -346,41 +416,12 @@ esp_err_t pairWifiOnNetwork(chip::NodeId node_id, const char* ssid, const char* 
     return ESP_ERR_INVALID_ARG;
   }
 
-  mdns_result_t* results = nullptr;
-  const esp_err_t query_result = mdns_query_ptr("_matterc", "_udp", 5000, 16, &results);
-  if (query_result != ESP_OK) {
-    return query_result;
-  }
-
   chip::Inet::IPAddress peer_ip;
   std::uint16_t peer_port = 0;
-  bool found = false;
-  for (const mdns_result_t* result = results; result != nullptr && !found; result = result->next) {
-    std::uint32_t discriminator = 0;
-    std::uint32_t commissioning_mode = 0;
-    if (result->port == 0 || !txtNumber(*result, "D", discriminator) ||
-        !txtNumber(*result, "CM", commissioning_mode) || commissioning_mode == 0 ||
-        (discriminator >> 8U) != payload.discriminator.GetShortValue()) {
-      continue;
-    }
-    for (const mdns_ip_addr_t* address = result->addr; address != nullptr;
-         address = address->next) {
-      if (address->addr.type != ESP_IPADDR_TYPE_V4) {
-        continue;
-      }
-      char text[IP4ADDR_STRLEN_MAX]{};
-      if (esp_ip4addr_ntoa(&address->addr.u_addr.ip4, text, sizeof(text)) != nullptr &&
-          chip::Inet::IPAddress::FromString(text, peer_ip)) {
-        peer_port = result->port;
-        found = true;
-        break;
-      }
-    }
-  }
-  mdns_query_results_free(results);
-  if (!found) {
-    return ESP_ERR_NOT_FOUND;
-  }
+  const esp_err_t discovery =
+      findCommissionablePeer(payload, ESP_IPADDR_TYPE_V4, peer_ip, peer_port);
+  if (discovery != ESP_OK)
+    return discovery;
 
   chip::ByteSpan ssid_span(reinterpret_cast<const std::uint8_t*>(ssid), std::strlen(ssid));
   chip::ByteSpan password_span(reinterpret_cast<const std::uint8_t*>(password),
@@ -1308,8 +1349,11 @@ void CoreMatter::run() {
       active_node_id_ = node_id;
       esp_err_t result = ESP_OK;
       if (command.transport == CommissioningTransport::thread) {
-        result = pairThreadOverBle(node_id, command.setup_payload, command.dataset,
-                                   command.dataset_length);
+        result = pairThreadOnNetwork(node_id, command.setup_payload);
+        if (result == ESP_ERR_NOT_FOUND) {
+          result = pairThreadOverBle(node_id, command.setup_payload, command.dataset,
+                                     command.dataset_length);
+        }
       } else {
         result =
             pairWifiOnNetwork(node_id, reinterpret_cast<const char*>(wifi_ssid_),
