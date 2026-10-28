@@ -83,7 +83,7 @@ esp_err_t CoreDisplay::begin() {
     return ESP_ERR_INVALID_STATE;
   auto config = M5.config();
   config.clear_display = true;
-  config.output_power = true;
+  config.output_power = false;
   M5.begin(config);
   if (M5.Display.width() != 320 || M5.Display.height() != 240)
     return ESP_ERR_NOT_SUPPORTED;
@@ -436,7 +436,8 @@ void CoreDisplay::updateBattery() {
   const int vbus_mv = M5.Power.getVBUSVoltage();
   const float base_input_volts = M5.Power.Axp2101.getTSVoltage();
   const bool charging = M5.Power.isCharging() == m5::Power_Class::is_charging;
-  const bool plugged = charging || vbus_mv >= 4000 || base_input_volts >= 2.0f;
+  const bool base_power = !M5.Power.getExtOutput() && base_input_volts >= 2.0f;
+  const bool plugged = charging || vbus_mv >= 4000 || base_power;
   if (next == battery_percent_ && plugged == external_power_)
     return;
   battery_percent_ = next;
