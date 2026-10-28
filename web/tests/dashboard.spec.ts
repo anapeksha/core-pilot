@@ -1633,6 +1633,9 @@ test("covers system Wi‑Fi, time settings, and firmware upload validation", asy
       hostname: "corepilot",
     },
   });
+  await expect(
+    page.getByRole("dialog", { name: "Wi‑Fi network" }),
+  ).toBeHidden();
 
   await page.getByRole("button", { name: "Edit time settings" }).click();
   await expect(page.getByRole("combobox", { name: "NTP server" })).toHaveValue(
@@ -1641,10 +1644,12 @@ test("covers system Wi‑Fi, time settings, and firmware upload validation", asy
   await expect(page.getByRole("combobox", { name: "Timezone" })).toHaveValue(
     "UTC · UTC+00:00",
   );
-  await page.getByRole("combobox", { name: "NTP server" }).fill("Google");
+  const timeDialog = page.getByRole("dialog", { name: "Time source" });
+  await timeDialog
+    .getByRole("button", { name: "Open options" })
+    .first()
+    .click();
   await page.getByRole("option", { name: "Google time.google.com" }).click();
-  await page.getByRole("combobox", { name: "Timezone" }).fill("UTC");
-  await page.getByRole("option", { name: /^UTC · UTC\+00:00$/ }).click();
   await page.getByRole("button", { name: "Save time settings" }).click();
   await expect(page.getByText("Time settings saved.")).toBeVisible();
   expect(state.posts.at(-1)).toMatchObject({
