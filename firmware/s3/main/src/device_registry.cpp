@@ -101,6 +101,23 @@ core_security::Status DeviceRegistry::add(std::uint64_t node_id, std::uint16_t e
   return persist(candidate);
 }
 
+core_security::Status DeviceRegistry::addPending(std::uint64_t node_id) {
+  if (node_id == 0 || !writable_)
+    return core_security::Status::Invalid;
+  SemaphoreLock mutation(mutation_mutex_);
+  if (!mutation.held())
+    return core_security::Status::IoError;
+  auto candidate = snapshot();
+  for (std::size_t index = 0; index < candidate.count; ++index) {
+    if (candidate.entries[index].node_id == node_id)
+      return core_security::Status::Ok;
+  }
+  if (candidate.count == core_storage::kMaxMatterDevices)
+    return core_security::Status::TooLarge;
+  candidate.entries[candidate.count++] = {node_id, 0, 0, false, {}};
+  return persist(candidate);
+}
+
 core_security::Status DeviceRegistry::replaceNode(std::uint64_t node_id,
                                                   const core_storage::MatterDevice* endpoints,
                                                   std::size_t count) {

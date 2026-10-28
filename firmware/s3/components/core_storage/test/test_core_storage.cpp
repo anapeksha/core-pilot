@@ -109,7 +109,7 @@ TEST_CASE("Matter device codec round trips names and rejects malformed records",
   TEST_ASSERT_EQUAL_STRING("Kitchen light", decoded.entries[0].name);
   TEST_ASSERT_EQUAL_UINT32(kMaxMatterDeviceNameBytes, std::strlen(decoded.entries[1].name));
   TEST_ASSERT_EQUAL(static_cast<int>(Status::UnsupportedFormat),
-                    static_cast<int>(decode_matter_devices(4, encoded, written, decoded)));
+                    static_cast<int>(decode_matter_devices(5, encoded, written, decoded)));
   TEST_ASSERT_EQUAL(
       static_cast<int>(Status::Invalid),
       static_cast<int>(decode_matter_devices(kMatterDevicesSchema, encoded, written - 1, decoded)));
@@ -144,6 +144,27 @@ TEST_CASE("Matter device codec round trips names and rejects malformed records",
                                                       2, legacy_v2, sizeof(legacy_v2), decoded)));
   TEST_ASSERT_EQUAL_HEX32(6, decoded.entries[0].capabilities);
   TEST_ASSERT_EQUAL_STRING("", decoded.entries[0].name);
+}
+
+TEST_CASE("Matter device codec preserves pending endpoint discovery", "[core_storage]") {
+  MatterDevices source{};
+  source.entries[0] = {0x0002000000000001ULL, 0, 0, false, {}};
+  source.count = 1;
+  uint8_t encoded[kMaxMatterDevicesPayload]{};
+  size_t written = 0;
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok), static_cast<int>(encode_matter_devices(
+                                                      source, encoded, sizeof(encoded), written)));
+  MatterDevices decoded{};
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Ok),
+      static_cast<int>(decode_matter_devices(kMatterDevicesSchema, encoded, written, decoded)));
+  TEST_ASSERT_EQUAL_UINT16(0, decoded.entries[0].endpoint_id);
+  TEST_ASSERT_FALSE(decoded.entries[0].reachable);
+
+  source.entries[0].reachable = true;
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Invalid),
+      static_cast<int>(encode_matter_devices(source, encoded, sizeof(encoded), written)));
 }
 
 TEST_CASE("models codec round trips and rejects malformed records", "[core_storage]") {

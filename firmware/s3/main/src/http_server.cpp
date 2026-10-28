@@ -1295,6 +1295,9 @@ esp_err_t devicesHandler(httpd_req_t* request, const HttpRuntime& runtime) {
                   static_cast<unsigned>(device.endpoint_id));
     if (device.name[0] != '\0')
       std::snprintf(name, sizeof(name), "%s", device.name);
+    else if (device.endpoint_id == 0)
+      std::snprintf(name, sizeof(name), "Matter device %u · discovering endpoints",
+                    static_cast<unsigned>(index + 1));
     else
       std::snprintf(name, sizeof(name), "Matter device %u endpoint %u",
                     static_cast<unsigned>(index + 1), static_cast<unsigned>(device.endpoint_id));

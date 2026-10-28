@@ -16,6 +16,7 @@ public:
   core_security::Status load();
   core_security::Status add(std::uint64_t node_id, std::uint16_t endpoint_id,
                             std::uint32_t capabilities = 0);
+  core_security::Status addPending(std::uint64_t node_id);
   core_security::Status replaceNode(std::uint64_t node_id,
                                     const core_storage::MatterDevice* endpoints, std::size_t count);
   core_security::Status removeNode(std::uint64_t node_id);

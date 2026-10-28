@@ -446,12 +446,34 @@ void Application::run() {
         matter_status.commissioned_node_id != 0 &&
         matter_status.commissioned_node_id != recorded_node_id) {
       recorded_node_id = matter_status.commissioned_node_id;
-      bool known = false;
-      for (std::size_t index = 0; index < discovery_node_count; ++index) {
-        known = known || discovery_nodes[index] == recorded_node_id;
+      const auto pending_result = devices.addPending(recorded_node_id);
+      if (pending_result != core_security::Status::Ok)
+        ESP_LOGE(kTag, "failed to persist commissioned Matter node: %d",
+                 static_cast<int>(pending_result));
+      const std::size_t next_discovery =
+          std::min(discovery_node_index + (discovery_in_flight ? 1U : 0U), discovery_node_count);
+      std::size_t existing_index = next_discovery;
+      bool already_queued = false;
+      for (std::size_t index = next_discovery; index < discovery_node_count; ++index) {
+        if (discovery_nodes[index] == recorded_node_id) {
+          existing_index = index;
+          already_queued = true;
+          break;
+        }
       }
-      if (!known && discovery_node_count < core_storage::kMaxMatterDevices) {
+      if (!already_queued && next_discovery == discovery_node_count &&
+          discovery_node_count < core_storage::kMaxMatterDevices) {
         discovery_nodes[discovery_node_count++] = recorded_node_id;
+      } else if ((!already_queued || existing_index > next_discovery) &&
+                 next_discovery < core_storage::kMaxMatterDevices) {
+        const std::size_t shift_end =
+            already_queued ? existing_index
+                           : std::min(discovery_node_count, core_storage::kMaxMatterDevices - 1);
+        for (std::size_t index = shift_end; index > next_discovery; --index)
+          discovery_nodes[index] = discovery_nodes[index - 1];
+        discovery_nodes[next_discovery] = recorded_node_id;
+        if (!already_queued && discovery_node_count < core_storage::kMaxMatterDevices)
+          ++discovery_node_count;
       }
     }
 

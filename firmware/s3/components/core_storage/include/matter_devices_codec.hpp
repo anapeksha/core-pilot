@@ -7,7 +7,7 @@
 
 namespace core_storage {
 
-constexpr std::uint16_t kMatterDevicesSchema = 3;
+constexpr std::uint16_t kMatterDevicesSchema = 4;
 constexpr std::size_t kMaxMatterDevices = 16;
 constexpr std::size_t kMaxMatterDeviceNameBytes = 64;
 constexpr std::size_t kMaxMatterDevicesPayload =

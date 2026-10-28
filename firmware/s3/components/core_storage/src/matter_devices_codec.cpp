@@ -44,10 +44,12 @@ core_security::Status encode_matter_devices(const MatterDevices& devices, std::u
   std::size_t required = 1 + devices.count * 16;
   for (std::size_t index = 0; index < devices.count; ++index) {
     const auto& device = devices.entries[index];
-    if (device.node_id == 0 || device.endpoint_id == 0)
+    if (device.node_id == 0)
       return core_security::Status::Invalid;
     const std::size_t name_length = strnlen(device.name, sizeof device.name);
-    if (name_length > kMaxMatterDeviceNameBytes)
+    if (name_length > kMaxMatterDeviceNameBytes ||
+        (device.endpoint_id == 0 &&
+         (device.capabilities != 0 || device.reachable || name_length != 0)))
       return core_security::Status::Invalid;
     required += name_length;
   }
@@ -76,7 +78,7 @@ core_security::Status encode_matter_devices(const MatterDevices& devices, std::u
 core_security::Status decode_matter_devices(std::uint16_t schema, const std::uint8_t* input,
                                             std::size_t length, MatterDevices& devices) {
   devices = {};
-  if (schema != 1 && schema != 2 && schema != kMatterDevicesSchema) {
+  if (schema != 1 && schema != 2 && schema != 3 && schema != kMatterDevicesSchema) {
     return core_security::Status::UnsupportedFormat;
   }
   if (input == nullptr || length == 0 || length > kMaxMatterDevicesPayload) {
@@ -85,14 +87,14 @@ core_security::Status decode_matter_devices(std::uint16_t schema, const std::uin
   const std::size_t count = input[0];
   if (count > kMaxMatterDevices)
     return core_security::Status::Invalid;
-  if (schema < kMatterDevicesSchema) {
+  if (schema <= 2) {
     const std::size_t entry_size = schema == 1 ? 11 : 15;
     if (length != 1 + count * entry_size)
       return core_security::Status::Invalid;
   }
   std::size_t position = 1;
   for (std::size_t index = 0; index < count; ++index) {
-    if (schema == kMatterDevicesSchema && length - position < 16)
+    if (schema >= 3 && length - position < 16)
       return core_security::Status::Invalid;
     auto& device = devices.entries[index];
     device.node_id = readU64(input + position);
@@ -105,11 +107,11 @@ core_security::Status decode_matter_devices(std::uint16_t schema, const std::uin
       position += 4;
     }
     if (position >= length || input[position] > 1 || device.node_id == 0 ||
-        device.endpoint_id == 0) {
+        (schema < 4 && device.endpoint_id == 0)) {
       return core_security::Status::Invalid;
     }
     device.reachable = input[position++] == 1;
-    if (schema == kMatterDevicesSchema) {
+    if (schema >= 3) {
       if (position >= length)
         return core_security::Status::Invalid;
       const std::size_t name_length = input[position++];
@@ -120,6 +122,9 @@ core_security::Status decode_matter_devices(std::uint16_t schema, const std::uin
       device.name[name_length] = '\0';
       position += name_length;
     }
+    if (device.endpoint_id == 0 &&
+        (device.capabilities != 0 || device.reachable || device.name[0] != '\0'))
+      return core_security::Status::Invalid;
   }
   if (position != length)
     return core_security::Status::Invalid;
