@@ -2,9 +2,11 @@ import { createMutation, useQueryClient } from "@tanstack/solid-query";
 import {
   cancelMatterCommission,
   commissionMatter,
+  forgetMatterDevice,
   removeMatterDevice,
   requireAccepted,
   type MatterCommissionRequest,
+  type MatterDeviceForgetRequest,
   type MatterDeviceMutationRequest,
   type MatterDeviceRemoveRequest,
   type ThreadDatasetUpdateRequest,
@@ -63,6 +65,20 @@ export function matterDeviceRemoveMutation() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["matter"] });
       void queryClient.invalidateQueries({ queryKey: ["devices"] });
+    },
+  }));
+}
+
+export function matterDeviceForgetMutation() {
+  const queryClient = useQueryClient();
+  return createMutation(() => ({
+    mutationKey: ["matter", "devices", "forget"],
+    mutationFn: async (request: MatterDeviceForgetRequest) =>
+      requireAccepted(await forgetMatterDevice(request)),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["matter"] });
+      void queryClient.invalidateQueries({ queryKey: ["devices"] });
+      void queryClient.invalidateQueries({ queryKey: ["activity"] });
     },
   }));
 }

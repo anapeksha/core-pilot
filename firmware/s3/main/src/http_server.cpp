@@ -1867,6 +1867,61 @@ esp_err_t removeMatterDeviceHandler(httpd_req_t* request) {
   return sendJson(request, response);
 }
 
+esp_err_t forgetMatterDeviceHandler(httpd_req_t* request) {
+  auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
+  RequestBody body(256);
+  std::size_t received = 0;
+  if (runtime == nullptr || !body ||
+      readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
+
+  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  const cJSON* device_id =
+      document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "device_id");
+  const cJSON* confirmation =
+      document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "confirmation");
+  std::uint64_t node_id = 0;
+  const bool valid_node = parseMatterNodeId(device_id, node_id);
+  char expected_confirmation[64]{};
+  if (valid_node)
+    std::snprintf(expected_confirmation, sizeof(expected_confirmation), "FORGET MATTER DEVICE %s",
+                  device_id->valuestring);
+  const bool confirmed = cJSON_IsString(confirmation) &&
+                         std::strcmp(confirmation->valuestring, expected_confirmation) == 0;
+
+  bool registered = false;
+  if (valid_node) {
+    const auto devices = runtime->devices.snapshot();
+    for (std::size_t index = 0; index < devices.count; ++index)
+      registered = registered || devices.entries[index].node_id == node_id;
+  }
+  cJSON_Delete(document);
+
+  const auto result = valid_node && confirmed && registered ? runtime->devices.removeNode(node_id)
+                                                            : core_security::Status::Invalid;
+  if (result == core_security::Status::Ok) {
+    runtime->activity.append(
+        "matter_device_forgotten_locally",
+        "A Matter device was forgotten locally without confirming accessory fabric removal.");
+  }
+
+  cJSON* response = cJSON_CreateObject();
+  cJSON_AddBoolToObject(response, "accepted", result == core_security::Status::Ok);
+  cJSON_AddStringToObject(response, "status",
+                          result == core_security::Status::Ok ? "forgotten_locally" : "rejected");
+  const char* detail = "The local encrypted record could not be removed safely.";
+  if (result == core_security::Status::Ok) {
+    detail = "Only Core Pilot's local encrypted record was removed. The accessory may still "
+             "retain fabric credentials.";
+  } else if (!valid_node || !registered) {
+    detail = "The Matter device ID is invalid or is not in the local registry.";
+  } else if (!confirmed) {
+    detail = "Provide the exact device-specific forget confirmation.";
+  }
+  cJSON_AddStringToObject(response, "detail", detail);
+  return sendJson(request, response);
+}
+
 esp_err_t resetDeviceRegistryHandler(httpd_req_t* request) {
   auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
   RequestBody body(kMaxRequestBody + 1);
@@ -2726,6 +2781,10 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                                   .method = HTTP_POST,
                                   .handler = removeMatterDeviceHandler,
                                   .user_ctx = const_cast<HttpRuntime*>(&runtime)};
+  const httpd_uri_t device_forget{.uri = "/api/v1/matter/devices/forget",
+                                  .method = HTTP_POST,
+                                  .handler = forgetMatterDeviceHandler,
+                                  .user_ctx = const_cast<HttpRuntime*>(&runtime)};
   const httpd_uri_t registry_reset{.uri = "/api/v1/matter/devices/reset",
                                    .method = HTTP_POST,
                                    .handler = resetDeviceRegistryHandler,
@@ -2830,6 +2889,7 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
       registerHttpAccessRoute(server, &automation_run) != ESP_OK ||
       registerHttpAccessRoute(server, &device_mutation) != ESP_OK ||
       registerHttpAccessRoute(server, &device_remove) != ESP_OK ||
+      registerHttpAccessRoute(server, &device_forget) != ESP_OK ||
       registerHttpAccessRoute(server, &registry_reset) != ESP_OK ||
       registerHttpAccessRoute(server, &models_reset) != ESP_OK ||
       registerHttpAccessRoute(server, &commission_cancel) != ESP_OK ||

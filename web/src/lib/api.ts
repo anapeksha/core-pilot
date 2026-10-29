@@ -13,6 +13,7 @@ import {
   groupUpsertRequestSchema,
   matterCommissionCancelRequestSchema,
   matterCommissionRequestSchema,
+  matterDeviceForgetRequestSchema,
   matterDeviceMutationSchema,
   matterDeviceRemoveRequestSchema,
   mcpInvokeRequestSchema,
@@ -599,6 +600,11 @@ export type MatterDeviceMutationResponse = MutationResponse & {
 };
 
 export type MatterDeviceRemoveRequest = { device_id: string };
+export type MatterDeviceForgetRequest = {
+  device_id: string;
+  confirmation: string;
+};
+export type MatterDeviceForgetResponse = MutationResponse;
 export type MatterDeviceRemoveResponse = MutationResponse & {
   operation_id?: number;
 };
@@ -979,6 +985,7 @@ const requestSchemas: Readonly<Record<string, z.ZodType>> = {
   "/api/v1/matter/commission/cancel": matterCommissionCancelRequestSchema,
   "/api/v1/devices": matterDeviceMutationSchema,
   "/api/v1/matter/devices/remove": matterDeviceRemoveRequestSchema,
+  "/api/v1/matter/devices/forget": matterDeviceForgetRequestSchema,
   "/api/v1/matter/thread/dataset": threadDatasetUpdateRequestSchema,
   "/api/v1/ai/provider": aiProviderRequestSchema,
   "/api/v1/ai/chat": aiChatRequestSchema,
@@ -1202,6 +1209,15 @@ export function removeMatterDevice(
 ): Promise<MatterDeviceRemoveResponse> {
   return postJson<MatterDeviceRemoveResponse, MatterDeviceRemoveRequest>(
     "/api/v1/matter/devices/remove",
+    request,
+  );
+}
+
+export function forgetMatterDevice(
+  request: MatterDeviceForgetRequest,
+): Promise<MatterDeviceForgetResponse> {
+  return postJson<MatterDeviceForgetResponse, MatterDeviceForgetRequest>(
+    "/api/v1/matter/devices/forget",
     request,
   );
 }

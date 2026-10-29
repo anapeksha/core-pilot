@@ -277,6 +277,18 @@ export const matterDeviceRemoveRequestSchema = z
   .object({ device_id: matterNodeId })
   .strict();
 
+export const matterDeviceForgetRequestSchema = z
+  .object({
+    device_id: matterNodeId,
+    confirmation: z.string(),
+  })
+  .strict()
+  .refine(
+    ({ device_id, confirmation }) =>
+      confirmation === `FORGET MATTER DEVICE ${device_id}`,
+    { message: "Provide the exact device-specific forget confirmation." },
+  );
+
 export const threadDatasetUpdateRequestSchema = z
   .object({
     active_dataset_tlvs_hex: z

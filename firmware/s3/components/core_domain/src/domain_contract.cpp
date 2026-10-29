@@ -76,6 +76,8 @@ constexpr RouteContract routes[] = {
      "accepted:b operation_id:q? status:s detail:s"},
     {"POST", "/api/v1/matter/devices/remove", "device_id:s",
      "accepted:b operation_id:q? status:s detail:s"},
+    {"POST", "/api/v1/matter/devices/forget", "device_id:s confirmation:s",
+     "accepted:b status:s detail:s"},
     {"POST", "/api/v1/matter/thread/dataset", "active_dataset_tlvs_hex:s",
      "accepted:b status:s detail:s"},
     {"GET", "/api/v1/ai", nullptr,

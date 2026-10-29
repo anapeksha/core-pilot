@@ -41,6 +41,7 @@ import {
 import type { Device } from "~/lib/api";
 import { cn } from "~/lib/utils";
 import {
+  matterDeviceForgetMutation,
   matterDeviceMutation,
   matterDeviceRemoveMutation,
 } from "~/mutations/matter";
@@ -152,6 +153,7 @@ export default function Devices() {
   const devicesQuery = createDevicesQuery();
   const deviceMutation = matterDeviceMutation();
   const removeMutation = matterDeviceRemoveMutation();
+  const forgetMutation = matterDeviceForgetMutation();
   const [compact, setCompact] = createSignal(false);
   const [editingDeviceId, setEditingDeviceId] = createSignal<string | null>(
     null,
@@ -162,6 +164,9 @@ export default function Devices() {
   );
   const [contextDevice, setContextDevice] = createSignal<Device | null>(null);
   const [removalDevice, setRemovalDevice] = createSignal<Device | null>(null);
+  const [forgottenDevice, setForgottenDevice] = createSignal<Device | null>(
+    null,
+  );
   const [commandedOnOff, setCommandedOnOff] = createSignal<
     Record<string, boolean>
   >({});
@@ -174,6 +179,16 @@ export default function Devices() {
       throw new Error("Matter node identity is unavailable.");
     await removeMutation.mutateAsync({ device_id: device.node_id });
     toast.success("Matter device removal queued.");
+  };
+
+  const forgetDevice = async (device: Device) => {
+    if (!device.node_id)
+      throw new Error("Matter node identity is unavailable.");
+    await forgetMutation.mutateAsync({
+      device_id: device.node_id,
+      confirmation: `FORGET MATTER DEVICE ${device.node_id}`,
+    });
+    toast.success("Local Matter record removed.");
   };
 
   const renameDevice = async (device: Device) => {
@@ -486,12 +501,51 @@ export default function Devices() {
                             >
                               Remove device…
                             </ContextMenuItem>
+                            <ContextMenuItem
+                              class="text-error data-[highlighted]:text-error"
+                              aria-label={`Forget local record for ${device.name}`}
+                              disabled={
+                                forgetMutation.isPending || !device.node_id
+                              }
+                              title={
+                                forgetMutation.isPending
+                                  ? "Another local record removal is in progress."
+                                  : !device.node_id
+                                    ? "Forgetting requires a reported Matter node identity."
+                                    : undefined
+                              }
+                              onSelect={() => setForgottenDevice(device)}
+                            >
+                              Forget local record…
+                            </ContextMenuItem>
                           </Show>
                         </>
                       )}
                     </Show>
                   </ContextMenuContent>
                 </ContextMenu>
+                <Show when={forgottenDevice()} keyed>
+                  {(device) => (
+                    <ConfirmDestructiveAction
+                      hideTrigger
+                      open
+                      onOpenChange={(open) => !open && setForgottenDevice(null)}
+                      triggerLabel="Forget"
+                      triggerAriaLabel={`Forget local record for ${device.name}`}
+                      title={`Forget ${device.name} locally?`}
+                      description="Use this only when the accessory is permanently unreachable and normal removal cannot finish. Core Pilot will delete its encrypted local record, but the accessory may still retain fabric credentials."
+                      confirmLabel="Forget local record"
+                      onConfirm={() => forgetDevice(device)}
+                      onError={(error) =>
+                        toast.error(
+                          error instanceof Error
+                            ? error.message
+                            : "Could not forget the local Matter record.",
+                        )
+                      }
+                    />
+                  )}
+                </Show>
                 <Show when={removalDevice()} keyed>
                   {(device) => (
                     <ConfirmDestructiveAction

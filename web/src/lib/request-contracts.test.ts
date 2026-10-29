@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   automationUpsertRequestSchema,
   groupUpsertRequestSchema,
+  matterDeviceForgetRequestSchema,
   matterDeviceRemoveRequestSchema,
   mcpInvokeRequestSchema,
   mcpToolIds,
@@ -138,6 +139,22 @@ describe("persisted name limits", () => {
           enabled: true,
         }).success,
       ).toBe(false);
+  });
+
+  it("requires an exact node-specific confirmation before forgetting a Matter device", () => {
+    const device_id = "00029a12c059c064";
+    expect(
+      matterDeviceForgetRequestSchema.safeParse({
+        device_id,
+        confirmation: `FORGET MATTER DEVICE ${device_id}`,
+      }).success,
+    ).toBe(true);
+    expect(
+      matterDeviceForgetRequestSchema.safeParse({
+        device_id,
+        confirmation: "FORGET MATTER DEVICE",
+      }).success,
+    ).toBe(false);
   });
 
   it("accepts only nonzero 64-bit hexadecimal Matter node IDs", () => {
