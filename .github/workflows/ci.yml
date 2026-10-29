@@ -88,6 +88,8 @@ jobs:
             firmware/s3/build/partition_table/partition-table.bin
             firmware/s3/build/ota_data_initial.bin
             firmware/s3/build/core_pilot.bin
+            firmware/s3/build/core_pilot.elf
+            firmware/s3/build/core_pilot.map
             firmware/s3/build/flasher_args.json
           if-no-files-found: error
           retention-days: 7
