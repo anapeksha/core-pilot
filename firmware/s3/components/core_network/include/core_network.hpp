@@ -93,6 +93,8 @@ private:
   bool wifi_initialized_ = false;
   bool wifi_started_ = false;
   bool mdns_started_ = false;
+  bool reconnect_enabled_ = false;
+  bool transition_in_progress_ = false;
   char setup_password_[17]{};
 };
 

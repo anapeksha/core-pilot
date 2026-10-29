@@ -79,7 +79,8 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
     self.state_.has_ipv6 = false;
     self.state_.has_bssid = false;
     std::memset(self.state_.station_bssid, 0, sizeof(self.state_.station_bssid));
-    const bool reconnect = self.state_.mode == Mode::station;
+    const bool reconnect = self.state_.mode == Mode::station && self.reconnect_enabled_ &&
+                           !self.transition_in_progress_;
     portEXIT_CRITICAL(&self.lock_);
     xEventGroupSetBits(self.events_, kDisconnected);
     if (reconnect) {
@@ -92,14 +93,25 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
     wifi_ap_record_t access_point{};
     const bool has_access_point = esp_wifi_sta_get_ap_info(&access_point) == ESP_OK;
     portENTER_CRITICAL(&self.lock_);
-    self.state_.station_connected = true;
-    self.state_.has_ipv4 = true;
-    self.state_.ipv4 = event->ip_info.ip;
-    self.state_.has_bssid = has_access_point;
-    if (has_access_point)
+    const std::size_t expected_length =
+        strnlen(self.state_.station_ssid, sizeof(self.state_.station_ssid));
+    const std::size_t actual_length =
+        has_access_point
+            ? strnlen(reinterpret_cast<const char*>(access_point.ssid), sizeof(access_point.ssid))
+            : 0;
+    const bool expected_access_point =
+        has_access_point && expected_length == actual_length &&
+        std::memcmp(self.state_.station_ssid, access_point.ssid, expected_length) == 0;
+    if (expected_access_point) {
+      self.state_.station_connected = true;
+      self.state_.has_ipv4 = true;
+      self.state_.ipv4 = event->ip_info.ip;
+      self.state_.has_bssid = true;
       std::memcpy(self.state_.station_bssid, access_point.bssid, sizeof(self.state_.station_bssid));
+    }
     portEXIT_CRITICAL(&self.lock_);
-    xEventGroupSetBits(self.events_, kGotIpv4);
+    if (expected_access_point)
+      xEventGroupSetBits(self.events_, kGotIpv4);
     // IPv6 status is optional; this creates only a link-local address.
     esp_netif_create_ip6_linklocal(self.sta_);
   } else if (base == IP_EVENT && id == IP_EVENT_GOT_IP6) {
@@ -171,14 +183,26 @@ esp_err_t CoreNetwork::start_station(const network_policy::Profile& profile) {
     if (err != ESP_OK)
       return err;
   }
+  portENTER_CRITICAL(&lock_);
+  transition_in_progress_ = true;
+  reconnect_enabled_ = false;
+  portEXIT_CRITICAL(&lock_);
   xEventGroupClearBits(events_, kGotIpv4 | kDisconnected);
   err = esp_wifi_connect();
   if (err != ESP_OK) {
+    portENTER_CRITICAL(&lock_);
+    transition_in_progress_ = false;
+    portEXIT_CRITICAL(&lock_);
     return err;
   }
   const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4 | kDisconnected, pdTRUE, pdFALSE,
                                                pdMS_TO_TICKS(network_policy::kJoinTimeoutMs));
-  return (bits & kGotIpv4) != 0 && status().has_ipv4 ? ESP_OK : ESP_ERR_TIMEOUT;
+  const bool connected = (bits & kGotIpv4) != 0 && status().has_ipv4;
+  portENTER_CRITICAL(&lock_);
+  transition_in_progress_ = false;
+  reconnect_enabled_ = connected;
+  portEXIT_CRITICAL(&lock_);
+  return connected ? ESP_OK : ESP_ERR_TIMEOUT;
 }
 
 esp_err_t CoreNetwork::start_setup_ap() {
@@ -407,12 +431,20 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
   const Mode initial_mode = status().mode;
   if (initial_mode != Mode::station && initial_mode != Mode::setup_ap)
     return ESP_ERR_INVALID_STATE;
+  portENTER_CRITICAL(&lock_);
+  transition_in_progress_ = true;
+  reconnect_enabled_ = false;
+  portEXIT_CRITICAL(&lock_);
   esp_wifi_scan_stop();
   esp_wifi_disconnect();
   if (initial_mode == Mode::setup_ap) {
     const esp_err_t mode_result = esp_wifi_set_mode(WIFI_MODE_APSTA);
-    if (mode_result != ESP_OK)
+    if (mode_result != ESP_OK) {
+      portENTER_CRITICAL(&lock_);
+      transition_in_progress_ = false;
+      portEXIT_CRITICAL(&lock_);
       return mode_result;
+    }
   }
   wifi_config_t config{};
   std::memcpy(config.sta.ssid, profile.ssid, profile.ssid_length);
@@ -423,8 +455,12 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
   config.sta.pmf_cfg.capable = true;
   esp_err_t result = esp_wifi_set_config(WIFI_IF_STA, &config);
   erase(&config, sizeof(config));
-  if (result != ESP_OK)
+  if (result != ESP_OK) {
+    portENTER_CRITICAL(&lock_);
+    transition_in_progress_ = false;
+    portEXIT_CRITICAL(&lock_);
     return result;
+  }
 
   portENTER_CRITICAL(&lock_);
   state_.station_connected = false;
@@ -435,12 +471,21 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
   portEXIT_CRITICAL(&lock_);
   xEventGroupClearBits(events_, kGotIpv4 | kDisconnected);
   result = esp_wifi_connect();
-  if (result != ESP_OK)
+  if (result != ESP_OK) {
+    portENTER_CRITICAL(&lock_);
+    transition_in_progress_ = false;
+    portEXIT_CRITICAL(&lock_);
     return result;
+  }
   const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4 | kDisconnected, pdTRUE, pdFALSE,
                                                pdMS_TO_TICKS(network_policy::kJoinTimeoutMs));
-  if ((bits & kGotIpv4) != 0 && status().has_ipv4)
+  if ((bits & kGotIpv4) != 0 && status().has_ipv4) {
+    portENTER_CRITICAL(&lock_);
+    transition_in_progress_ = false;
+    reconnect_enabled_ = initial_mode == Mode::station;
+    portEXIT_CRITICAL(&lock_);
     return ESP_OK;
+  }
   esp_wifi_disconnect();
   if (initial_mode == Mode::setup_ap) {
     esp_wifi_disconnect();
@@ -457,6 +502,10 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
     if (mode_result != ESP_OK)
       return mode_result;
   }
+  portENTER_CRITICAL(&lock_);
+  transition_in_progress_ = false;
+  reconnect_enabled_ = false;
+  portEXIT_CRITICAL(&lock_);
   return ESP_ERR_TIMEOUT;
 }
 
@@ -473,6 +522,10 @@ esp_err_t CoreNetwork::commitProfile() {
   const esp_err_t result = esp_wifi_set_mode(WIFI_MODE_STA);
   if (result == ESP_OK) {
     set_mode_preserving_station(Mode::station);
+    portENTER_CRITICAL(&lock_);
+    reconnect_enabled_ = true;
+    transition_in_progress_ = false;
+    portEXIT_CRITICAL(&lock_);
     mbedtls_platform_zeroize(setup_password_, sizeof(setup_password_));
   }
   return result;
@@ -481,6 +534,10 @@ esp_err_t CoreNetwork::commitProfile() {
 esp_err_t CoreNetwork::restoreSetupAp() {
   if (!wifi_started_)
     return ESP_ERR_INVALID_STATE;
+  portENTER_CRITICAL(&lock_);
+  reconnect_enabled_ = false;
+  transition_in_progress_ = true;
+  portEXIT_CRITICAL(&lock_);
   esp_wifi_scan_stop();
   esp_wifi_disconnect();
   wifi_config_t cleared{};
@@ -500,6 +557,9 @@ esp_err_t CoreNetwork::restoreSetupAp() {
     state_.ipv6 = {};
     portEXIT_CRITICAL(&lock_);
   }
+  portENTER_CRITICAL(&lock_);
+  transition_in_progress_ = false;
+  portEXIT_CRITICAL(&lock_);
   return result;
 }
 
