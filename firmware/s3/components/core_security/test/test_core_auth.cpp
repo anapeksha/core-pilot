@@ -36,7 +36,7 @@ TEST_CASE("bootstrap is one-time and sessions expire", "[core_security]") {
   TEST_ASSERT_FALSE(auth.authorize(token, 11 + core_security::Auth::kSessionSeconds));
 }
 
-TEST_CASE("failed bootstrap guesses impose a bounded cooldown", "[core_security]") {
+TEST_CASE("failed bootstrap guesses require physical regeneration", "[core_security]") {
   Random random;
   core_security::Auth auth;
   char token[65]{};
@@ -49,26 +49,21 @@ TEST_CASE("failed bootstrap guesses impose a bounded cooldown", "[core_security]
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
                     static_cast<int>(auth.exchange("0000000000000000", random, 401, token)));
   TEST_ASSERT_EQUAL_STRING("", token);
-  TEST_ASSERT_EQUAL(
-      static_cast<int>(core_security::BootstrapState::attempts_exhausted),
-      static_cast<int>(auth.bootstrap_state(400 + core_security::Auth::kBootstrapCooldownSeconds)));
-  TEST_ASSERT_EQUAL(
-      static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
-      static_cast<int>(auth.exchange(physical_code, random,
-                                     400 + core_security::Auth::kBootstrapCooldownSeconds, token)));
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::attempts_exhausted),
+                    static_cast<int>(auth.bootstrap_state(450)));
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
+                    static_cast<int>(auth.exchange(physical_code, random, 450, token)));
   TEST_ASSERT_EQUAL_STRING("", token);
 
-  const uint64_t cooldown_end = 401 + core_security::Auth::kBootstrapCooldownSeconds;
-  TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::open),
-                    static_cast<int>(auth.bootstrap_state(cooldown_end)));
+  TEST_ASSERT_EQUAL(0, static_cast<int>(auth.regenerate(random, 460, capture)));
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
-                    static_cast<int>(auth.exchange(physical_code, random, cooldown_end, token)));
-  TEST_ASSERT_TRUE(auth.authorize(token, cooldown_end));
+                    static_cast<int>(auth.exchange(physical_code, random, 461, token)));
+  TEST_ASSERT_TRUE(auth.authorize(token, 461));
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::consumed),
-                    static_cast<int>(auth.bootstrap_state(cooldown_end)));
+                    static_cast<int>(auth.bootstrap_state(461)));
 }
 
-TEST_CASE("bootstrap expiry takes precedence over cooldown", "[core_security]") {
+TEST_CASE("bootstrap expiry closes an exhausted exchange", "[core_security]") {
   Random random;
   core_security::Auth auth;
   char token[65]{};

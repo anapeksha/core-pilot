@@ -38,7 +38,6 @@ Auth::~Auth() {
 void Auth::close_bootstrap(BootstrapState state) {
   mbedtls_platform_zeroize(code_, sizeof(code_));
   bootstrap_expires_ = 0;
-  cooldown_expires_ = 0;
   failed_attempts_ = 0;
   bootstrap_state_ = state;
 }
@@ -66,10 +65,6 @@ BootstrapState Auth::bootstrap_state(uint64_t now) {
        bootstrap_state_ == BootstrapState::attempts_exhausted) &&
       now >= bootstrap_expires_) {
     close_bootstrap(BootstrapState::expired);
-  } else if (bootstrap_state_ == BootstrapState::attempts_exhausted && now >= cooldown_expires_) {
-    cooldown_expires_ = 0;
-    failed_attempts_ = 0;
-    bootstrap_state_ = BootstrapState::open;
   }
   return bootstrap_state_;
 }
@@ -109,7 +104,6 @@ ExchangeResult Auth::exchange(const char* code, RandomSource& random, uint64_t n
   if (!equal(code, code_, 16)) {
     ++failed_attempts_;
     if (failed_attempts_ >= kBootstrapAttemptLimit) {
-      cooldown_expires_ = now + kBootstrapCooldownSeconds;
       bootstrap_state_ = BootstrapState::attempts_exhausted;
       return ExchangeResult::attempts_exhausted;
     }

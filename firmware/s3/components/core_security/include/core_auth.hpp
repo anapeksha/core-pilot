@@ -11,7 +11,7 @@ class Auth final {
 public:
   static constexpr uint64_t kBootstrapSeconds = 300;
   static constexpr uint8_t kBootstrapAttemptLimit = 8;
-  static constexpr uint64_t kBootstrapCooldownSeconds = 30;
+
   static constexpr uint64_t kSessionSeconds = 8ULL * 60 * 60;
   using BootstrapSink = void (*)(const char* code, uint64_t expires_at);
   ~Auth();
@@ -36,7 +36,7 @@ private:
 
   char code_[17]{};
   uint64_t bootstrap_expires_{};
-  uint64_t cooldown_expires_{};
+
   uint8_t failed_attempts_{};
 
   BootstrapState bootstrap_state_{BootstrapState::unavailable};

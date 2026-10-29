@@ -9,6 +9,7 @@ import {
 
 afterEach(() => {
   clearAccess();
+  sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -28,24 +29,10 @@ it("keeps a bounded bearer in RAM and expires it", async () => {
   vi.advanceTimersByTime(28800000);
   expect(accessToken()).toBeNull();
 });
-it("restores a valid tab session after a reload", async () => {
-  const token = "b".repeat(64);
-  sessionStorage.setItem("core-pilot-access-token", token);
-  sessionStorage.setItem(
-    "core-pilot-access-expiry",
-    String(Date.now() + 60_000),
-  );
-  const fetcher = vi.fn();
-  vi.stubGlobal("fetch", fetcher);
-
-  await expect(initializeAccess()).resolves.toBe("consumed");
-  expect(authHeaders()).toEqual({ Authorization: `Bearer ${token}` });
-  expect(fetcher).not.toHaveBeenCalled();
-});
-
-it("discards an expired tab session and checks bootstrap state", async () => {
-  sessionStorage.setItem("core-pilot-access-token", "c".repeat(64));
-  sessionStorage.setItem("core-pilot-access-expiry", String(Date.now() - 1));
+it("does not restore bearer material from browser storage", async () => {
+  sessionStorage.setItem("core-pilot-access-token", "b".repeat(64));
+  const storedExpiry = String(Date.now() + 60_000);
+  sessionStorage.setItem("core-pilot-access-expiry", storedExpiry);
   vi.stubGlobal(
     "fetch",
     vi.fn().mockResolvedValue(
@@ -60,8 +47,10 @@ it("discards an expired tab session and checks bootstrap state", async () => {
 
   await expect(initializeAccess()).resolves.toBe("consumed");
   expect(authHeaders()).toEqual({});
-  expect(sessionStorage.getItem("core-pilot-access-token")).toBeNull();
-  expect(sessionStorage.getItem("core-pilot-access-expiry")).toBeNull();
+  expect(sessionStorage.getItem("core-pilot-access-token")).toBe(
+    "b".repeat(64),
+  );
+  expect(sessionStorage.getItem("core-pilot-access-expiry")).toBe(storedExpiry);
 });
 
 it.each([
