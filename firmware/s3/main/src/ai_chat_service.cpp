@@ -135,11 +135,13 @@ cJSON* provider_tools(ai::ProviderBackend backend) {
     const cJSON* descriptor = cJSON_GetArrayItem(tools, index);
     const cJSON* enabled = cJSON_GetObjectItemCaseSensitive(descriptor, "enabled");
     const cJSON* available = cJSON_GetObjectItemCaseSensitive(descriptor, "available");
+    const cJSON* destructive = cJSON_GetObjectItemCaseSensitive(descriptor, "destructive");
     const cJSON* name = cJSON_GetObjectItemCaseSensitive(descriptor, "name");
     const cJSON* description = cJSON_GetObjectItemCaseSensitive(descriptor, "description");
     const cJSON* schema = cJSON_GetObjectItemCaseSensitive(descriptor, "inputSchema");
-    if (!cJSON_IsTrue(enabled) || !cJSON_IsTrue(available) || !cJSON_IsString(name) ||
-        std::strlen(name->valuestring) > kMaxToolNameBytes || !cJSON_IsObject(schema))
+    if (!cJSON_IsTrue(enabled) || !cJSON_IsTrue(available) || cJSON_IsTrue(destructive) ||
+        !cJSON_IsString(name) || std::strlen(name->valuestring) > kMaxToolNameBytes ||
+        !cJSON_IsObject(schema))
       continue;
     cJSON* item = cJSON_CreateObject();
     cJSON* schema_copy = cJSON_Duplicate(schema, true);
@@ -729,9 +731,11 @@ void AiChatService::process(std::uint64_t operation_id) {
         const std::size_t id_length = cJSON_IsString(id) ? std::strlen(id->valuestring) : 0;
         const std::size_t name_length = cJSON_IsString(name) ? std::strlen(name->valuestring) : 0;
         bool mutating = false;
+        bool destructive = false;
         if (id_length == 0 || id_length > 128 || name_length == 0 ||
             name_length > kMaxToolNameBytes || !cJSON_IsObject(arguments) ||
-            McpService::preflight(name->valuestring, mutating) != ESP_OK) {
+            McpService::preflight(name->valuestring, mutating, destructive) != ESP_OK ||
+            destructive) {
           cJSON_Delete(arguments);
           mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
           calls_valid = false;

@@ -684,12 +684,14 @@ cJSON* McpService::context(const HttpRuntime& runtime) {
   return response;
 }
 
-esp_err_t McpService::preflight(const char* tool_name, bool& mutating) {
+esp_err_t McpService::preflight(const char* tool_name, bool& mutating, bool& destructive) {
   mutating = false;
+  destructive = false;
   const Tool* tool = findTool(tool_name);
   if (tool == nullptr || !tool->available || !toolEnabled(*tool))
     return ESP_ERR_NOT_SUPPORTED;
   mutating = !readOnlyDefault(*tool);
+  destructive = tool->destructive;
   return ESP_OK;
 }
 
