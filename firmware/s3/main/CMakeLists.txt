@@ -41,6 +41,8 @@ idf_component_register(
         nvs_flash
     EMBED_FILES
         "../../../dist/index.html.gz"
+    EMBED_TXTFILES
+        "../../../dist/csp.txt"
 )
 
 target_compile_features(${COMPONENT_LIB} PRIVATE cxx_std_26)

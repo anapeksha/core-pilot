@@ -45,6 +45,28 @@ uint64_t now() {
   return esp_timer_get_time() / 1000000;
 }
 
+bool authority_matches(const char* host, const char* authority) {
+  if (host == nullptr || authority == nullptr)
+    return false;
+  if (std::strcmp(host, authority) == 0)
+    return true;
+  const std::size_t length = std::strlen(authority);
+  return std::strncmp(host, authority, length) == 0 && std::strcmp(host + length, ":80") == 0;
+}
+
+bool device_host_allowed(const char* host) {
+  if (authority_matches(host, "corepilot.local"))
+    return true;
+  if (network_service == nullptr)
+    return false;
+  const auto status = network_service->status();
+  if (status.mode == CoreNetwork::Mode::setup_ap && authority_matches(host, "192.168.4.1"))
+    return true;
+  char address[16]{};
+  return status.has_ipv4 && esp_ip4addr_ntoa(&status.ipv4, address, sizeof(address)) != nullptr &&
+         authority_matches(host, address);
+}
+
 esp_err_t reject(httpd_req_t* req, const char* status, const char* message) {
   httpd_resp_set_status(req, status);
   return httpd_resp_send(req, message, HTTPD_RESP_USE_STRLEN);
@@ -167,6 +189,7 @@ esp_err_t dispatch(httpd_req_t* req) {
   char site[32]{}, origin[160]{}, host[128]{};
   if (!header(req, "Sec-Fetch-Site", site, sizeof(site)) || !std::strcmp(site, "cross-site") ||
       !header(req, "Origin", origin, sizeof(origin)) || !header(req, "Host", host, sizeof(host)) ||
+      !device_host_allowed(host) ||
       core_domain::same_origin_mutation_allowed(origin[0] ? origin : nullptr, host) !=
           core_domain::ApiError::ok)
     return reject(req, "403 Forbidden", "Origin rejected");

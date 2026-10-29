@@ -42,6 +42,7 @@
 extern "C" {
 extern const std::uint8_t dashboard_gzip_start[] asm("_binary_index_html_gz_start");
 extern const std::uint8_t dashboard_gzip_end[] asm("_binary_index_html_gz_end");
+extern const char dashboard_csp_start[] asm("_binary_csp_txt_start");
 }
 
 namespace core_pilot {
@@ -156,14 +157,8 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
   const auto size = static_cast<std::size_t>(dashboard_gzip_end - dashboard_gzip_start);
   ESP_RETURN_ON_ERROR(httpd_resp_set_type(request, "text/html; charset=utf-8"), kTag, "type");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Content-Encoding", "gzip"), kTag, "encoding");
-  ESP_RETURN_ON_ERROR(
-      httpd_resp_set_hdr(request, "Content-Security-Policy",
-                         "default-src 'none'; script-src 'self' 'unsafe-inline'; "
-                         "style-src 'self' 'unsafe-inline'; "
-                         "img-src 'self' data:; connect-src 'self'; font-src 'self'; "
-                         "manifest-src 'self'; base-uri 'none'; form-action 'self'; "
-                         "frame-ancestors 'none'; object-src 'none'"),
-      kTag, "csp");
+  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Content-Security-Policy", dashboard_csp_start),
+                      kTag, "csp");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "X-Content-Type-Options", "nosniff"), kTag,
                       "nosniff");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Referrer-Policy", "no-referrer"), kTag,
