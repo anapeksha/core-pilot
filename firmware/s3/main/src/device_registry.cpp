@@ -1,5 +1,6 @@
 #include "device_registry.hpp"
 
+#include "esp_heap_caps.h"
 #include "mbedtls/platform_util.h"
 
 #include <cstring>
@@ -18,6 +19,42 @@ constexpr core_security::RecordSpec recordSpec(std::uint64_t generation) {
           core_storage::kMatterDevicesSchema,
           generation};
 }
+
+class PersistenceWorkspace final {
+public:
+  PersistenceWorkspace() {
+    plaintext_ = static_cast<std::uint8_t*>(heap_caps_calloc(
+        core_storage::kMaxMatterDevicesPayload, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+    encrypted_ = static_cast<std::uint8_t*>(
+        heap_caps_calloc(kEncryptedScratchBytes, 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  }
+  ~PersistenceWorkspace() {
+    if (plaintext_ != nullptr) {
+      mbedtls_platform_zeroize(plaintext_, core_storage::kMaxMatterDevicesPayload);
+      heap_caps_free(plaintext_);
+    }
+    if (encrypted_ != nullptr) {
+      mbedtls_platform_zeroize(encrypted_, kEncryptedScratchBytes);
+      heap_caps_free(encrypted_);
+    }
+  }
+  PersistenceWorkspace(const PersistenceWorkspace&) = delete;
+  PersistenceWorkspace& operator=(const PersistenceWorkspace&) = delete;
+
+  bool valid() const {
+    return plaintext_ != nullptr && encrypted_ != nullptr;
+  }
+  std::uint8_t* plaintext() const {
+    return plaintext_;
+  }
+  std::uint8_t* encrypted() const {
+    return encrypted_;
+  }
+
+private:
+  std::uint8_t* plaintext_{};
+  std::uint8_t* encrypted_{};
+};
 
 class SemaphoreLock final {
 public:
@@ -238,15 +275,15 @@ core_security::Status DeviceRegistry::persist(const core_storage::MatterDevices&
   taskENTER_CRITICAL(&lock_);
   generation = generation_ + 1;
   taskEXIT_CRITICAL(&lock_);
-  std::uint8_t plaintext[core_storage::kMaxMatterDevicesPayload]{};
-  std::uint8_t encrypted[kEncryptedScratchBytes]{};
+  PersistenceWorkspace workspace;
+  if (!workspace.valid())
+    return core_security::Status::IoError;
   std::size_t written = 0;
-  auto result =
-      core_storage::encode_matter_devices(candidate, plaintext, sizeof(plaintext), written);
+  auto result = core_storage::encode_matter_devices(
+      candidate, workspace.plaintext(), core_storage::kMaxMatterDevicesPayload, written);
   if (result == core_security::Status::Ok)
-    result = storage_.put(recordSpec(generation), plaintext, written, random_, encrypted,
-                          sizeof(encrypted));
-  mbedtls_platform_zeroize(plaintext, sizeof(plaintext));
+    result = storage_.put(recordSpec(generation), workspace.plaintext(), written, random_,
+                          workspace.encrypted(), kEncryptedScratchBytes);
   if (result == core_security::Status::Ok) {
     taskENTER_CRITICAL(&lock_);
     devices_ = candidate;
