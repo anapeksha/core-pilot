@@ -1582,7 +1582,7 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
                                                                                      : "wifi");
     cJSON_AddStringToObject(active, "phase", commissioningState(status.commissioning_state));
     cJSON_AddNumberToObject(active, "phase_retries", 0);
-    cJSON_AddNumberToObject(active, "phase_timeout_ms", 180000);
+    cJSON_AddNumberToObject(active, "phase_timeout_ms", CoreMatter::kCommissioningTimeoutMs);
     cJSON_AddNullToObject(active, "failure");
   } else {
     cJSON_AddNullToObject(operation, "active");
@@ -1599,7 +1599,7 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
                                                                                      : "wifi");
     cJSON_AddStringToObject(terminal, "phase", commissioningState(status.commissioning_state));
     cJSON_AddNumberToObject(terminal, "phase_retries", 0);
-    cJSON_AddNumberToObject(terminal, "phase_timeout_ms", 180000);
+    cJSON_AddNumberToObject(terminal, "phase_timeout_ms", CoreMatter::kCommissioningTimeoutMs);
     if (status.commissioning_state == CoreMatter::CommissioningState::failed) {
       cJSON* failure = cJSON_AddObjectToObject(terminal, "failure");
       cJSON_AddStringToObject(failure, "code", esp_err_to_name(status.last_error));

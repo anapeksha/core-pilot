@@ -23,6 +23,8 @@ public:
     failed,
   };
 
+  static constexpr std::uint32_t kCommissioningTimeoutMs = 180000;
+
   enum class CommissioningTransport : std::uint8_t {
     wifi,
     thread,

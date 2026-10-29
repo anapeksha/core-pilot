@@ -52,26 +52,42 @@ std::atomic<CoreMatter::CommissioningState> commissioning_state{
 std::atomic<std::uint64_t> commissioned_node_id{0};
 std::atomic<esp_err_t> commissioning_error{ESP_OK};
 std::atomic<std::int64_t> commissioning_started_us{0};
-std::atomic<std::uint8_t> cancellation_reason{0};
+enum class CancellationReason : std::uint8_t {
+  none,
+  requested,
+  timed_out,
+};
+
+std::atomic<CancellationReason> cancellation_reason{CancellationReason::none};
 std::atomic_bool on_off_subscription_active{false};
 std::atomic<std::uint64_t> reported_on_off_node_id{0};
 std::atomic<std::uint16_t> reported_on_off_endpoint_id{0};
 std::atomic_bool reported_on_off_known{false};
 std::atomic_bool reported_on_off_value{false};
-constexpr std::int64_t kCommissioningTimeoutUs = 120LL * 1000 * 1000;
+constexpr std::int64_t kCommissioningTimeoutUs =
+    static_cast<std::int64_t>(CoreMatter::kCommissioningTimeoutMs) * 1000;
 constexpr std::int64_t kDiscoveryTimeoutUs = 30LL * 1000 * 1000;
 
 void onPaseComplete(CHIP_ERROR error) {
   if (error != CHIP_NO_ERROR) {
-    const auto reason = cancellation_reason.exchange(0);
-    commissioning_error.store(reason == 1 ? ESP_OK : reason == 2 ? ESP_ERR_TIMEOUT : ESP_FAIL);
-    commissioning_state.store(reason == 1 ? CoreMatter::CommissioningState::cancelled
-                                          : CoreMatter::CommissioningState::failed);
+    const auto reason = cancellation_reason.exchange(CancellationReason::none);
+    commissioning_error.store(reason == CancellationReason::requested   ? ESP_OK
+                              : reason == CancellationReason::timed_out ? ESP_ERR_TIMEOUT
+                                                                        : ESP_FAIL);
+    commissioning_state.store(reason == CancellationReason::requested
+                                  ? CoreMatter::CommissioningState::cancelled
+                                  : CoreMatter::CommissioningState::failed);
   }
 }
 
 void onCommissioningSuccess(chip::ScopedNodeId peer_id) {
-  cancellation_reason.store(0);
+  const auto reason = cancellation_reason.exchange(CancellationReason::none);
+  if (reason == CancellationReason::requested) {
+    commissioning_error.store(ESP_OK);
+    commissioning_state.store(CoreMatter::CommissioningState::cancelled);
+    ESP_LOGW(kTag, "Ignoring commissioning success after explicit cancellation");
+    return;
+  }
   commissioned_node_id.store(peer_id.GetNodeId());
   commissioning_error.store(ESP_OK);
   commissioning_state.store(CoreMatter::CommissioningState::complete);
@@ -103,10 +119,13 @@ void onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t) {
 void onCommissioningFailure(chip::NodeId node_id, CHIP_ERROR error,
                             chip::Controller::CommissioningStage stage,
                             std::optional<chip::Credentials::AttestationVerificationResult>) {
-  const auto reason = cancellation_reason.exchange(0);
-  commissioning_error.store(reason == 1 ? ESP_OK : reason == 2 ? ESP_ERR_TIMEOUT : ESP_FAIL);
-  commissioning_state.store(reason == 1 ? CoreMatter::CommissioningState::cancelled
-                                        : CoreMatter::CommissioningState::failed);
+  const auto reason = cancellation_reason.exchange(CancellationReason::none);
+  commissioning_error.store(reason == CancellationReason::requested   ? ESP_OK
+                            : reason == CancellationReason::timed_out ? ESP_ERR_TIMEOUT
+                                                                      : ESP_FAIL);
+  commissioning_state.store(reason == CancellationReason::requested
+                                ? CoreMatter::CommissioningState::cancelled
+                                : CoreMatter::CommissioningState::failed);
   ESP_LOGE(kTag, "Matter commissioning failed for node 0x%016llx at stage %u: %s",
            static_cast<unsigned long long>(node_id), static_cast<unsigned>(stage),
            chip::ErrorStr(error));
@@ -1068,10 +1087,10 @@ void CoreMatter::run() {
         esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
         auto* commissioner =
             esp_matter::controller::matter_controller_client::get_instance().get_commissioner();
-        cancellation_reason.store(2);
+        cancellation_reason.store(CancellationReason::timed_out);
         const CHIP_ERROR result = commissioner->StopPairing(active_node_id_);
         if (result != CHIP_NO_ERROR) {
-          cancellation_reason.store(0);
+          cancellation_reason.store(CancellationReason::none);
           commissioner->RegisterPairingDelegate(nullptr);
           commissioner->RegisterDeviceDiscoveryDelegate(nullptr);
           commissioning_error.store(ESP_FAIL);
@@ -1102,12 +1121,12 @@ void CoreMatter::run() {
       esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
       auto* commissioner =
           esp_matter::controller::matter_controller_client::get_instance().get_commissioner();
-      cancellation_reason.store(1);
+      cancellation_reason.store(CancellationReason::requested);
       const CHIP_ERROR result = commissioner->StopPairing(active_node_id_);
       if (result == CHIP_NO_ERROR) {
         commissioning_state.store(CommissioningState::cancelling);
       } else {
-        cancellation_reason.store(0);
+        cancellation_reason.store(CancellationReason::none);
         commissioner->RegisterPairingDelegate(nullptr);
         commissioner->RegisterDeviceDiscoveryDelegate(nullptr);
         commissioning_error.store(ESP_FAIL);
