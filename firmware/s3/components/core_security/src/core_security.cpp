@@ -26,6 +26,11 @@ struct ClearOnExit {
   }
 };
 
+bool cryptoReady() {
+  static const bool ready = psa_crypto_init() == PSA_SUCCESS;
+  return ready;
+}
+
 struct PsaKey final {
   psa_key_id_t id{0};
   ~PsaKey() {
@@ -36,9 +41,8 @@ struct PsaKey final {
 };
 
 bool import_aead_key(const uint8_t (&key)[32], psa_key_usage_t usage, PsaKey& imported) {
-  if (psa_crypto_init() != PSA_SUCCESS) {
+  if (!cryptoReady())
     return false;
-  }
   psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
   psa_set_key_type(&attributes, PSA_KEY_TYPE_CHACHA20);
   psa_set_key_bits(&attributes, 256);
@@ -97,9 +101,8 @@ bool read_varint(const uint8_t* input, size_t size, size_t& pos, uint64_t& value
   return false;
 }
 Status derive(const DeviceSeed& seed, Namespace ns, uint8_t (&key)[32]) {
-  if (psa_crypto_init() != PSA_SUCCESS) {
+  if (!cryptoReady())
     return Status::CryptoError;
-  }
   const char* label = kLabels[static_cast<unsigned>(ns)];
   psa_key_derivation_operation_t operation = PSA_KEY_DERIVATION_OPERATION_INIT;
   psa_status_t result = psa_key_derivation_setup(&operation, PSA_ALG_HKDF(PSA_ALG_SHA_256));
