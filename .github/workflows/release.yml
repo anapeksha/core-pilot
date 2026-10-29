@@ -108,7 +108,7 @@ jobs:
           initial="release/core-pilot-${VERSION}.bin"
           ota="release/core-pilot-${VERSION}-ota.bin"
           python -m esptool --chip esp32s3 merge-bin \
-            --flash-mode qio \
+            --flash-mode dio \
             --flash-freq 80m \
             --flash-size 16MB \
             --output "${initial}" \
