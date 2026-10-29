@@ -56,6 +56,11 @@ jobs:
         with:
           name: dashboard-dist
           path: dist
+      - name: Export ESP-IDF environment
+        run: |
+          . "$IDF_PATH/export.sh"
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+          echo "IDF_PYTHON_ENV_PATH=$IDF_PYTHON_ENV_PATH" >> "$GITHUB_ENV"
       - name: Derive version from release tag
         shell: bash
         env:
