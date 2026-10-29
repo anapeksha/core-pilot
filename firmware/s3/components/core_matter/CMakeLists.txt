@@ -1,5 +1,5 @@
 idf_component_register(
-    SRCS "src/core_matter.cpp" "src/passive_ble_scan.cpp"
+    SRCS "src/core_matter.cpp"
     INCLUDE_DIRS "include"
     REQUIRES
         bt
@@ -12,7 +12,3 @@ idf_component_register(
 
 target_compile_features(${COMPONENT_LIB} PRIVATE cxx_std_26)
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)
-# Keep commissioning discovery passive until the upstream BLE scan policy is adopted.
-target_link_libraries(
-    ${COMPONENT_LIB} INTERFACE "-Wl,--wrap=ble_gap_disc" "-Wl,--undefined=__wrap_ble_gap_disc"
-)
