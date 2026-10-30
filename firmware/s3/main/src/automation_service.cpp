@@ -3,6 +3,8 @@
 #include "core_activity.hpp"
 #include "core_matter.hpp"
 #include "device_registry.hpp"
+#include "esp_heap_caps.h"
+#include "mbedtls/platform_util.h"
 #include "model_repository.hpp"
 
 #include <cerrno>
@@ -38,21 +40,42 @@ esp_err_t AutomationService::start() {
   if (task_ != nullptr)
     return ESP_OK;
 
-  std::uint8_t encrypted[kCheckpointEncryptedBytes]{};
-  std::uint8_t plaintext[core_storage::kMaxAutomationScheduleCheckpointsPayload]{};
+  checkpoint_plaintext_ = static_cast<std::uint8_t*>(heap_caps_calloc(
+      1, core_storage::kMaxAutomationScheduleCheckpointsPayload, MALLOC_CAP_SPIRAM));
+  checkpoint_encrypted_ =
+      static_cast<std::uint8_t*>(heap_caps_calloc(1, kCheckpointEncryptedBytes, MALLOC_CAP_SPIRAM));
+  if (checkpoint_plaintext_ == nullptr || checkpoint_encrypted_ == nullptr) {
+    heap_caps_free(checkpoint_plaintext_);
+    heap_caps_free(checkpoint_encrypted_);
+    checkpoint_plaintext_ = nullptr;
+    checkpoint_encrypted_ = nullptr;
+    return ESP_ERR_NO_MEM;
+  }
   std::size_t size = 0;
   core_security::Metadata metadata{};
-  const auto loaded = storage_.get(checkpointSpec(0), encrypted, sizeof(encrypted), plaintext,
-                                   sizeof(plaintext), size, metadata);
+  const auto loaded = storage_.get(
+      checkpointSpec(0), checkpoint_encrypted_, kCheckpointEncryptedBytes, checkpoint_plaintext_,
+      core_storage::kMaxAutomationScheduleCheckpointsPayload, size, metadata);
   if (loaded == core_security::Status::Ok) {
     const auto decoded = core_storage::decode_automation_schedule_checkpoints(
-        metadata.schema_version, plaintext, size, checkpoints_);
-    if (decoded != core_security::Status::Ok)
+        metadata.schema_version, checkpoint_plaintext_, size, checkpoints_);
+    if (decoded != core_security::Status::Ok) {
+      mbedtls_platform_zeroize(checkpoint_plaintext_,
+                               core_storage::kMaxAutomationScheduleCheckpointsPayload);
+      mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
       return ESP_ERR_INVALID_STATE;
+    }
     checkpoint_generation_ = metadata.generation;
   } else if (loaded != core_security::Status::NotFound) {
+    mbedtls_platform_zeroize(checkpoint_plaintext_,
+                             core_storage::kMaxAutomationScheduleCheckpointsPayload);
+    mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
     return ESP_ERR_INVALID_STATE;
   }
+
+  mbedtls_platform_zeroize(checkpoint_plaintext_,
+                           core_storage::kMaxAutomationScheduleCheckpointsPayload);
+  mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
 
   queue_ = xQueueCreateStatic(kQueueDepth, sizeof(Work), queue_storage_, &queue_buffer_);
   if (queue_ == nullptr)
@@ -293,14 +316,21 @@ bool AutomationService::checkpoint(const core_domain::ModelUpsert& model,
   std::strncpy(entry.exact_trigger, model.trigger, core_storage::kMaxAutomationTriggerBytes);
   entry.last_utc_occurrence_minute = utc_minute;
 
-  std::uint8_t plaintext[core_storage::kMaxAutomationScheduleCheckpointsPayload]{};
-  std::uint8_t encrypted[kCheckpointEncryptedBytes]{};
+  mbedtls_platform_zeroize(checkpoint_plaintext_,
+                           core_storage::kMaxAutomationScheduleCheckpointsPayload);
+  mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
   std::size_t written = 0;
-  if (core_storage::encode_automation_schedule_checkpoints(
-          checkpoints_, plaintext, sizeof(plaintext), written) != core_security::Status::Ok)
+  const auto encoded = core_storage::encode_automation_schedule_checkpoints(
+      checkpoints_, checkpoint_plaintext_, core_storage::kMaxAutomationScheduleCheckpointsPayload,
+      written);
+  if (encoded != core_security::Status::Ok)
     return false;
-  const auto result = storage_.put(checkpointSpec(checkpoint_generation_ + 1), plaintext, written,
-                                   random_, encrypted, sizeof(encrypted));
+  const auto result =
+      storage_.put(checkpointSpec(checkpoint_generation_ + 1), checkpoint_plaintext_, written,
+                   random_, checkpoint_encrypted_, kCheckpointEncryptedBytes);
+  mbedtls_platform_zeroize(checkpoint_plaintext_,
+                           core_storage::kMaxAutomationScheduleCheckpointsPayload);
+  mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
   if (result != core_security::Status::Ok)
     return false;
   ++checkpoint_generation_;

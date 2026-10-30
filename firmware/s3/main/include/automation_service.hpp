@@ -106,6 +106,8 @@ private:
   core_security::StorageService& storage_;
   core_security::RandomSource& random_;
   core_storage::AutomationScheduleCheckpoints checkpoints_{};
+  std::uint8_t* checkpoint_plaintext_{nullptr};
+  std::uint8_t* checkpoint_encrypted_{nullptr};
   std::uint64_t checkpoint_generation_{};
   std::atomic<std::time_t> synchronized_time_{0};
   esp_timer_handle_t minute_timer_{nullptr};
