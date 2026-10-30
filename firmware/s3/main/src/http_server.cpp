@@ -159,18 +159,12 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Content-Encoding", "gzip"), kTag, "encoding");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Content-Security-Policy", dashboard_csp_start),
                       kTag, "csp");
-  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "X-Content-Type-Options", "nosniff"), kTag,
-                      "nosniff");
-  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Referrer-Policy", "no-referrer"), kTag,
-                      "referrer");
   ESP_RETURN_ON_ERROR(
       httpd_resp_set_hdr(request, "Permissions-Policy",
                          "accelerometer=(), ambient-light-sensor=(), autoplay=(), camera=(), "
                          "display-capture=(), geolocation=(), gyroscope=(), magnetometer=(), "
                          "microphone=(), payment=(), publickey-credentials-get=(), usb=()"),
       kTag, "permissions");
-  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Cache-Control", "no-store"), kTag, "cache");
-  ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Connection", "close"), kTag, "connection");
   constexpr std::size_t kDashboardChunkBytes = 4096;
   std::size_t offset = 0;
   while (offset < size) {
