@@ -36,16 +36,27 @@ esp_err_t WifiProvisionService::start() {
 }
 
 bool WifiProvisionService::enqueue(Request& request) {
-  const auto snapshot = status();
-  if (queue_ == nullptr || snapshot.state == State::queued || snapshot.state == State::connecting ||
-      snapshot.state == State::forgetting)
+  portENTER_CRITICAL(&lock_);
+  const bool busy = status_.state == State::queued || status_.state == State::connecting ||
+                    status_.state == State::forgetting || status_.state == State::scanning;
+  if (queue_ == nullptr || busy) {
+    portEXIT_CRITICAL(&lock_);
+    mbedtls_platform_zeroize(&request, sizeof(request));
     return false;
+  }
+  const Status previous = status_;
+  status_ = {State::queued, ESP_OK};
+  portEXIT_CRITICAL(&lock_);
+
   const BaseType_t queued = xQueueSend(queue_, &request, 0);
   mbedtls_platform_zeroize(&request, sizeof(request));
-  if (queued != pdTRUE)
-    return false;
-  setStatus(State::queued, ESP_OK);
-  return true;
+  if (queued == pdTRUE)
+    return true;
+  portENTER_CRITICAL(&lock_);
+  if (status_.state == State::queued)
+    status_ = previous;
+  portEXIT_CRITICAL(&lock_);
+  return false;
 }
 
 esp_err_t WifiProvisionService::submit(const char* ssid, std::size_t ssid_length,
@@ -60,6 +71,12 @@ esp_err_t WifiProvisionService::submit(const char* ssid, std::size_t ssid_length
   std::memcpy(request.ssid, ssid, ssid_length);
   if (password_length != 0)
     std::memcpy(request.password, password, password_length);
+  return enqueue(request) ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
+esp_err_t WifiProvisionService::requestScan() {
+  Request request{};
+  request.operation = Operation::scan;
   return enqueue(request) ? ESP_OK : ESP_ERR_INVALID_STATE;
 }
 
@@ -112,10 +129,18 @@ void WifiProvisionService::taskLoop() {
     mbedtls_platform_zeroize(queue_storage_, sizeof(queue_storage_));
     if (request.operation == Operation::provision)
       provision(request);
-    else
+    else if (request.operation == Operation::forget)
       forgetSaved(request);
+    else
+      scan();
     mbedtls_platform_zeroize(&request, sizeof(request));
   }
+}
+
+void WifiProvisionService::scan() {
+  setStatus(State::scanning, ESP_OK);
+  const esp_err_t result = network_.requestScan();
+  setStatus(result == ESP_OK ? State::committed : State::failed, result);
 }
 
 void WifiProvisionService::publishSaved(const SavedWifiNetworks& staged) {

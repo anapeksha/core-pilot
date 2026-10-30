@@ -498,6 +498,7 @@ export type McpToolDescriptor = {
 export type McpToolPermissionUpdateRequest = {
   tool: string;
   enabled: boolean;
+  confirmation?: string;
 };
 
 export type McpToolsResponse = {

@@ -12,7 +12,8 @@ struct HttpRuntime;
 class McpService final {
 public:
   static esp_err_t initialize(const HttpRuntime& runtime);
-  static esp_err_t setPermission(const HttpRuntime& runtime, const char* tool, bool enabled);
+  static esp_err_t setPermission(const HttpRuntime& runtime, const char* tool, bool enabled,
+                                 const char* confirmation);
   static cJSON* tools();
   static cJSON* context(const HttpRuntime& runtime);
   // Checks availability and the persisted permission before an AI round executes any call.

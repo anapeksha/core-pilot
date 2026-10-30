@@ -24,6 +24,7 @@ class DeviceRegistry;
 class ModelRepository;
 class OtaService;
 class SmtpService;
+class ThreadDatasetService;
 class WifiProvisionService;
 
 struct HttpRuntime final {
@@ -31,6 +32,7 @@ struct HttpRuntime final {
   ActivityService& activity;
   AutomationService& automations;
   CoreMatter& matter;
+  ThreadDatasetService& thread_dataset;
   DeviceRegistry& devices;
   ModelRepository& models;
   WifiProvisionService& wifi_provision;

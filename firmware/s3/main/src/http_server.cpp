@@ -288,6 +288,8 @@ const char* commandKind(CoreMatter::CommandKind kind) {
     return "set_level";
   case CoreMatter::CommandKind::set_color_temperature:
     return "set_color_temperature";
+  case CoreMatter::CommandKind::apply_thread_dataset:
+    return "apply_thread_dataset";
   case CoreMatter::CommandKind::unpair_device:
     return "unpair_device";
   }
@@ -753,7 +755,7 @@ esp_err_t wifiScanHandler(httpd_req_t* request) {
     cJSON_Delete(document);
     if (!valid)
       return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid scan request");
-    const esp_err_t result = runtime->network.requestScan();
+    const esp_err_t result = runtime->wifi_provision.requestScan();
     if (result != ESP_OK && result != ESP_ERR_INVALID_STATE) {
       httpd_resp_set_status(request, "503 Service Unavailable");
     }
@@ -1556,6 +1558,15 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   cJSON_AddBoolToObject(response, "wifi_commissioning_ready", status.commissioner_ready);
   cJSON_AddBoolToObject(response, "thread_commissioning_ready",
                         status.commissioner_ready && status.thread_dataset_configured);
+  const auto dataset_operation = runtime.thread_dataset.status();
+  cJSON* dataset_status = cJSON_AddObjectToObject(response, "thread_dataset_operation");
+  cJSON_AddNumberToObject(dataset_status, "id", dataset_operation.operation_id);
+  cJSON_AddStringToObject(dataset_status, "phase",
+                          threadDatasetOperationState(dataset_operation.state));
+  if (dataset_operation.state == ThreadDatasetService::State::failed)
+    cJSON_AddStringToObject(dataset_status, "error", esp_err_to_name(dataset_operation.last_error));
+  else
+    cJSON_AddNullToObject(dataset_status, "error");
   cJSON_AddStringToObject(response, "adapter_status", matterState(status.state));
   cJSON_AddBoolToObject(response, "parser_ready", true);
   cJSON_AddBoolToObject(response, "transport_adapter_ready", status.commissioner_ready);
@@ -1991,40 +2002,30 @@ esp_err_t threadDatasetHandler(httpd_req_t* request) {
           ? nullptr
           : cJSON_GetObjectItemCaseSensitive(document.get(), "active_dataset_tlvs_hex");
   ThreadDataset dataset;
-  bool valid = cJSON_IsString(encoded) && decodeThreadDatasetHex(encoded->valuestring, dataset);
-  if (valid) {
-    ThreadDataset current;
-    const auto load_result = loadThreadDataset(runtime->storage, current);
-    if (load_result == core_security::Status::Ok)
-      dataset.generation = current.generation;
-    else if (load_result != core_security::Status::NotFound &&
-             load_result != core_security::Status::Invalid)
-      valid = false;
-    current.clear();
-  }
-  const auto save_result = valid ? saveThreadDataset(runtime->storage, runtime->random, dataset)
-                                 : core_security::Status::Invalid;
-  const esp_err_t apply_result =
-      save_result == core_security::Status::Ok
-          ? runtime->matter.applyThreadDataset(dataset.tlvs, dataset.length)
-          : ESP_ERR_INVALID_STATE;
+  const bool valid =
+      cJSON_IsString(encoded) && decodeThreadDatasetHex(encoded->valuestring, dataset);
+  std::uint32_t operation_id = 0;
+  const esp_err_t result =
+      valid ? runtime->thread_dataset.submit(dataset, operation_id) : ESP_ERR_INVALID_ARG;
   dataset.clear();
 
   cJSON* response = cJSON_CreateObject();
-  const bool accepted = save_result == core_security::Status::Ok && apply_result == ESP_OK;
+  const bool accepted = result == ESP_OK;
   cJSON_AddBoolToObject(response, "accepted", accepted);
+  if (accepted)
+    cJSON_AddNumberToObject(response, "operation_id", operation_id);
+  else
+    cJSON_AddNullToObject(response, "operation_id");
   cJSON_AddStringToObject(response, "status",
-                          accepted                                   ? "queued"
-                          : !valid                                   ? "THREAD_DATASET_INVALID"
-                          : save_result != core_security::Status::Ok ? "STORAGE_WRITE_FAILED"
-                                                                     : "MATTER_QUEUE_FULL");
-  cJSON_AddStringToObject(response, "detail",
-                          accepted ? "Active Thread dataset encrypted and queued for application."
-                          : !valid ? "Active Thread dataset is missing, malformed, or unsupported."
-                          : save_result != core_security::Status::Ok
-                              ? "Active Thread dataset could not be saved to encrypted storage."
-                              : "Active Thread dataset was saved and will be applied after "
-                                "restart.");
+                          accepted ? "queued"
+                          : !valid ? "THREAD_DATASET_INVALID"
+                                   : "THREAD_DATASET_BUSY");
+  cJSON_AddStringToObject(
+      response, "detail",
+      accepted ? "Active Thread dataset operation accepted for encrypted persistence and "
+                 "application."
+      : !valid ? "Active Thread dataset is missing, malformed, or unsupported."
+               : "Another active Thread dataset operation already owns the bounded queue.");
   return sendJson(request, response);
 }
 
@@ -2575,9 +2576,14 @@ esp_err_t mcpPermissionHandler(httpd_req_t* request) {
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "tool");
   const cJSON* enabled =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "enabled");
+  const cJSON* confirmation =
+      document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "confirmation");
   const esp_err_t result =
-      cJSON_IsString(tool) && cJSON_IsBool(enabled)
-          ? McpService::setPermission(*runtime, tool->valuestring, cJSON_IsTrue(enabled))
+      cJSON_IsString(tool) && cJSON_IsBool(enabled) &&
+              (confirmation == nullptr || cJSON_IsString(confirmation))
+          ? McpService::setPermission(*runtime, tool->valuestring, cJSON_IsTrue(enabled),
+                                      cJSON_IsString(confirmation) ? confirmation->valuestring
+                                                                   : nullptr)
           : ESP_ERR_INVALID_ARG;
   cJSON_Delete(document);
   cJSON* response = cJSON_CreateObject();

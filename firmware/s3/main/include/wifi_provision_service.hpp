@@ -30,6 +30,7 @@ public:
     queued,
     connecting,
     forgetting,
+    scanning,
     committed,
     rolled_back,
     failed
@@ -55,12 +56,13 @@ public:
   esp_err_t submit(const char* ssid, std::size_t ssid_length, const char* password,
                    std::size_t password_length);
   esp_err_t forget(const char* ssid, std::size_t ssid_length);
+  esp_err_t requestScan();
   Status status() const;
   SavedSnapshot savedSnapshot() const;
 
 private:
   static constexpr std::uint32_t kTaskStackBytes = 6144;
-  enum class Operation : std::uint8_t { provision, forget };
+  enum class Operation : std::uint8_t { provision, forget, scan };
   struct Request final {
     Operation operation{Operation::provision};
     std::uint8_t ssid_length{};
@@ -74,6 +76,7 @@ private:
   void taskLoop();
   void provision(const Request& request);
   void forgetSaved(const Request& request);
+  void scan();
   bool enqueue(Request& request);
   bool connectFirstAvailable(const SavedWifiNetworks& candidates, const char* excluded_ssid,
                              std::size_t excluded_length);

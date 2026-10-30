@@ -1,5 +1,6 @@
 #include "thread_dataset.hpp"
 
+#include "core_matter.hpp"
 #include "lib/support/ThreadOperationalDataset.h"
 #include "mbedtls/platform_util.h"
 
@@ -104,6 +105,132 @@ core_security::Status saveThreadDataset(core_security::StorageService& storage,
   if (result == core_security::Status::Ok)
     dataset.generation = generation;
   return result;
+}
+
+ThreadDatasetService::ThreadDatasetService(core_security::StorageService& storage,
+                                           core_security::RandomSource& random, CoreMatter& matter)
+    : storage_(storage), random_(random), matter_(matter) {}
+
+esp_err_t ThreadDatasetService::start() {
+  if (queue_ != nullptr)
+    return ESP_ERR_INVALID_STATE;
+  queue_ = xQueueCreateStatic(1, sizeof(Request), queue_buffer_, &queue_storage_);
+  return queue_ == nullptr ? ESP_ERR_NO_MEM : ESP_OK;
+}
+
+esp_err_t ThreadDatasetService::submit(const ThreadDataset& dataset, std::uint32_t& operation_id) {
+  operation_id = 0;
+  if (queue_ == nullptr || !validateThreadDataset(dataset.tlvs, dataset.length))
+    return ESP_ERR_INVALID_ARG;
+
+  Request request{};
+  request.length = dataset.length;
+  std::memcpy(request.tlvs, dataset.tlvs, dataset.length);
+
+  portENTER_CRITICAL(&lock_);
+  if (status_.state == State::queued || status_.state == State::persisting ||
+      status_.state == State::submitting) {
+    portEXIT_CRITICAL(&lock_);
+    mbedtls_platform_zeroize(&request, sizeof(request));
+    return ESP_ERR_INVALID_STATE;
+  }
+  request.operation_id = next_operation_id_++;
+  if (next_operation_id_ == 0)
+    next_operation_id_ = 1;
+  status_ = {State::queued, request.operation_id, ESP_OK};
+  portEXIT_CRITICAL(&lock_);
+
+  if (xQueueSend(queue_, &request, 0) != pdTRUE) {
+    publish(State::failed, request.operation_id, ESP_ERR_TIMEOUT);
+    mbedtls_platform_zeroize(&request, sizeof(request));
+    return ESP_ERR_TIMEOUT;
+  }
+  operation_id = request.operation_id;
+  mbedtls_platform_zeroize(&request, sizeof(request));
+  return ESP_OK;
+}
+
+void ThreadDatasetService::reconcile() {
+  if (queue_ == nullptr)
+    return;
+  Request request{};
+  if (xQueueReceive(queue_, &request, 0) != pdTRUE)
+    return;
+  mbedtls_platform_zeroize(queue_buffer_, sizeof(queue_buffer_));
+
+  publish(State::persisting, request.operation_id, ESP_OK);
+  ThreadDataset dataset{};
+  dataset.length = request.length;
+  std::memcpy(dataset.tlvs, request.tlvs, request.length);
+  ThreadDataset current{};
+  const auto loaded = loadThreadDataset(storage_, current);
+  if (loaded == core_security::Status::Ok)
+    dataset.generation = current.generation;
+  current.clear();
+
+  if (loaded != core_security::Status::Ok && loaded != core_security::Status::NotFound &&
+      loaded != core_security::Status::Invalid) {
+    publish(State::failed, request.operation_id, ESP_ERR_INVALID_STATE);
+  } else if (saveThreadDataset(storage_, random_, dataset) != core_security::Status::Ok) {
+    publish(State::failed, request.operation_id, ESP_FAIL);
+  } else {
+    publish(State::submitting, request.operation_id, ESP_OK);
+    std::uint32_t matter_operation_id = 0;
+    const esp_err_t result =
+        matter_.applyThreadDataset(dataset.tlvs, dataset.length, matter_operation_id);
+    if (result == ESP_OK) {
+      portENTER_CRITICAL(&lock_);
+      matter_operation_id_ = matter_operation_id;
+      portEXIT_CRITICAL(&lock_);
+    } else {
+      publish(State::failed, request.operation_id, result);
+    }
+  }
+  dataset.clear();
+  mbedtls_platform_zeroize(&request, sizeof(request));
+}
+
+void ThreadDatasetService::reconcileMatterTerminal(std::uint32_t matter_operation_id,
+                                                   bool succeeded, esp_err_t error) {
+  portENTER_CRITICAL(&lock_);
+  if (status_.state == State::submitting && matter_operation_id != 0 &&
+      matter_operation_id == matter_operation_id_) {
+    status_.state = succeeded ? State::complete : State::failed;
+    status_.last_error = succeeded ? ESP_OK : error;
+    matter_operation_id_ = 0;
+  }
+  portEXIT_CRITICAL(&lock_);
+}
+
+ThreadDatasetService::Status ThreadDatasetService::status() const {
+  portENTER_CRITICAL(&lock_);
+  const Status snapshot = status_;
+  portEXIT_CRITICAL(&lock_);
+  return snapshot;
+}
+
+void ThreadDatasetService::publish(State state, std::uint32_t operation_id, esp_err_t error) {
+  portENTER_CRITICAL(&lock_);
+  status_ = {state, operation_id, error};
+  portEXIT_CRITICAL(&lock_);
+}
+
+const char* threadDatasetOperationState(ThreadDatasetService::State state) {
+  switch (state) {
+  case ThreadDatasetService::State::idle:
+    return "idle";
+  case ThreadDatasetService::State::queued:
+    return "queued";
+  case ThreadDatasetService::State::persisting:
+    return "persisting";
+  case ThreadDatasetService::State::submitting:
+    return "submitting";
+  case ThreadDatasetService::State::complete:
+    return "complete";
+  case ThreadDatasetService::State::failed:
+    return "failed";
+  }
+  return "failed";
 }
 
 } // namespace core_pilot

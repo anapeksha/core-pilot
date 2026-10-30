@@ -684,13 +684,16 @@ esp_err_t CoreMatter::commission(CommissioningTransport transport, const char* s
   return ESP_OK;
 }
 
-esp_err_t CoreMatter::applyThreadDataset(const std::uint8_t* dataset, std::size_t length) {
-  if (dataset == nullptr || length == 0 || length > sizeof(thread_dataset_) || queue_ == nullptr)
+esp_err_t CoreMatter::applyThreadDataset(const std::uint8_t* dataset, std::size_t length,
+                                         std::uint32_t& operation_id) {
+  if (dataset == nullptr || length == 0 || length > sizeof(thread_dataset_) || queue_ == nullptr) {
+    operation_id = 0;
     return ESP_ERR_INVALID_ARG;
+  }
   Command command{.type = CommandType::apply_thread_dataset,
                   .dataset_length = static_cast<std::uint8_t>(length)};
   std::memcpy(command.dataset, dataset, length);
-  const esp_err_t result = enqueueCommand(command);
+  const esp_err_t result = enqueueDeviceCommand(command, operation_id);
   mbedtls_platform_zeroize(&command, sizeof(command));
   return result;
 }
@@ -749,6 +752,9 @@ esp_err_t CoreMatter::enqueueDeviceCommand(Command command, std::uint32_t& opera
     break;
   case CommandType::set_color_temperature:
     kind = CommandKind::set_color_temperature;
+    break;
+  case CommandType::apply_thread_dataset:
+    kind = CommandKind::apply_thread_dataset;
     break;
   case CommandType::unpair_device:
     kind = CommandKind::unpair_device;
@@ -1136,7 +1142,17 @@ void CoreMatter::run() {
       continue;
     }
     if (command.type == CommandType::apply_thread_dataset) {
-      const esp_err_t result = applyThreadDatasetOnOwner(command.dataset, command.dataset_length);
+      taskENTER_CRITICAL(&status_lock_);
+      const bool current = command.operation_id == command_status_.operation_id &&
+                           command_status_.kind == CommandKind::apply_thread_dataset;
+      if (current)
+        command_status_.state = CommandState::invoking;
+      taskEXIT_CRITICAL(&status_lock_);
+      const esp_err_t result =
+          current ? applyThreadDatasetOnOwner(command.dataset, command.dataset_length)
+                  : ESP_ERR_INVALID_STATE;
+      finishCommand(command.operation_id,
+                    result == ESP_OK ? CommandState::complete : CommandState::failed, result);
       mbedtls_platform_zeroize(&command, sizeof(command));
       if (result != ESP_OK)
         ESP_LOGE(kTag, "failed to apply active Thread dataset: %s", esp_err_to_name(result));

@@ -66,7 +66,7 @@ constexpr RouteContract routes[] = {
      "thread_ready:b thread_dataset_configured:b wifi_commissioning_ready:b "
      "thread_commissioning_ready:b adapter_status:s parser_ready:b "
      "transport_adapter_ready:b fabric_credentials_ready:b pase_ready:b "
-     "case_ready:b subscriptions_ready:b operation:o detail:s"},
+     "case_ready:b subscriptions_ready:b thread_dataset_operation:o operation:o detail:s"},
     {"POST", "/api/v1/matter/commission", "transport:s setup_payload:s thread_dataset_id:s?",
      "accepted:b operation_id:q? transport:s status:s detail:s"},
     {"POST", "/api/v1/matter/commission/cancel", "operation_id:q", "accepted:b status:s detail:s"},
@@ -79,7 +79,7 @@ constexpr RouteContract routes[] = {
     {"POST", "/api/v1/matter/devices/forget", "device_id:s confirmation:s",
      "accepted:b status:s detail:s"},
     {"POST", "/api/v1/matter/thread/dataset", "active_dataset_tlvs_hex:s",
-     "accepted:b status:s detail:s"},
+     "accepted:b operation_id:q? status:s detail:s"},
     {"GET", "/api/v1/ai", nullptr,
      "enabled:b provider_configured:b mcp_enabled:b max_tool_rounds:t "
      "max_repeated_tool_calls:t max_actions:t destructive_confirmation:s "

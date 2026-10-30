@@ -45,6 +45,7 @@ public:
     set_on_off,
     set_level,
     set_color_temperature,
+    apply_thread_dataset,
     unpair_device,
   };
 
@@ -146,7 +147,8 @@ public:
                   std::size_t thread_dataset_length = 0);
   esp_err_t commission(CommissioningTransport transport, const char* setup_payload,
                        std::uint32_t& operation_id);
-  esp_err_t applyThreadDataset(const std::uint8_t* dataset, std::size_t length);
+  esp_err_t applyThreadDataset(const std::uint8_t* dataset, std::size_t length,
+                               std::uint32_t& operation_id);
   esp_err_t cancelCommissioning(std::uint32_t operation_id);
   esp_err_t setOnOff(std::uint64_t node_id, std::uint16_t endpoint_id, bool on,
                      std::uint32_t& operation_id, CommandRejection* rejection = nullptr);

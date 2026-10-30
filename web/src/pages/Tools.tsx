@@ -101,7 +101,11 @@ const Tools: Component = () => {
     const tool = toolAwaitingConfirmation();
     if (!tool || permissionMutation.isPending) return;
     permissionMutation.mutate(
-      { tool: tool.name, enabled: true },
+      {
+        tool: tool.name,
+        enabled: true,
+        confirmation: `ENABLE DESTRUCTIVE TOOL ${tool.name}`,
+      },
       { onSuccess: () => setToolAwaitingConfirmation(null) },
     );
   }

@@ -15,6 +15,7 @@
 #include "device_registry.hpp"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
 #include "http_access.hpp"
 #include "http_server.hpp"
 #include "lwip/ip4_addr.h"
@@ -37,6 +38,24 @@ namespace core_pilot {
 namespace {
 
 constexpr char kTag[] = "core_pilot";
+
+esp_err_t confirmPendingOta(bool& confirmed) {
+  confirmed = false;
+  const esp_partition_t* running = esp_ota_get_running_partition();
+  if (running == nullptr)
+    return ESP_ERR_NOT_FOUND;
+  esp_ota_img_states_t state{};
+  const esp_err_t state_result = esp_ota_get_state_partition(running, &state);
+  if (state_result == ESP_ERR_NOT_SUPPORTED || state == ESP_OTA_IMG_VALID)
+    return ESP_OK;
+  if (state_result != ESP_OK)
+    return state_result;
+  if (state != ESP_OTA_IMG_PENDING_VERIFY)
+    return ESP_OK;
+  const esp_err_t result = esp_ota_mark_app_valid_cancel_rollback();
+  confirmed = result == ESP_OK;
+  return result;
+}
 
 class EarlyEntropy final {
 public:
@@ -279,6 +298,11 @@ void Application::run() {
                                   : network_policy::Profile{};
 
   static CoreMatter matter;
+  static ThreadDatasetService thread_dataset_service(storage, random, matter);
+  const esp_err_t thread_dataset_service_result = thread_dataset_service.start();
+  if (thread_dataset_service_result != ESP_OK)
+    ESP_LOGE(kTag, "Thread dataset service startup failed: %s",
+             esp_err_to_name(thread_dataset_service_result));
   static WifiProvisionService wifi_provision(network, storage, random, activity, saved_wifi);
   const esp_err_t wifi_provision_result = wifi_provision.start();
   if (wifi_provision_result != ESP_OK)
@@ -310,9 +334,10 @@ void Application::run() {
     ESP_LOGE(kTag, "OTA service startup failed: %s", esp_err_to_name(ota_result));
 
   ESP_ERROR_CHECK(initializeHttpAccess(random, network));
-  static const HttpRuntime http_runtime{network, activity,       automations, matter,  devices,
-                                        models,  wifi_provision, ai_storage,  ai_chat, ota,
-                                        smtp,    storage,        random};
+  static const HttpRuntime http_runtime{
+      network, activity, automations,    matter,     thread_dataset_service,
+      devices, models,   wifi_provision, ai_storage, ai_chat,
+      ota,     smtp,     storage,        random};
   ai_chat.bindRuntime(http_runtime);
   const esp_err_t mcp_result = McpService::initialize(http_runtime);
   if (mcp_result != ESP_OK) {
@@ -365,6 +390,16 @@ void Application::run() {
     displayed_access_state = access_snapshot.state;
   }
   mbedtls_platform_zeroize(&access_snapshot, sizeof(access_snapshot));
+  bool ota_confirmed = false;
+  const esp_err_t ota_confirmation = confirmPendingOta(ota_confirmed);
+  if (ota_confirmation != ESP_OK) {
+    ESP_LOGE(kTag, "OTA boot confirmation failed: %s", esp_err_to_name(ota_confirmation));
+    stopAtFatal(display,
+                {"FIRMWARE RECOVERY", "Update validation failed",
+                 "The previous firmware will be restored after restart.", "Restart Core Pilot"});
+  }
+  if (ota_confirmed)
+    activity.append("firmware_boot_confirmed", "The running firmware passed startup validation.");
   TickType_t last_access_check = xTaskGetTickCount();
 
   std::uint64_t discovery_nodes[core_storage::kMaxMatterDevices]{};
@@ -391,6 +426,7 @@ void Application::run() {
   std::uint64_t last_removed_node_id = 0;
   while (true) {
     servicePendingTimeNetworkEvent();
+    thread_dataset_service.reconcile();
     std::time_t synchronized_time = 0;
     if (consumePendingTimeSync(synchronized_time)) {
       const bool updated = display.setRtcFromUnix(synchronized_time);
@@ -407,6 +443,12 @@ void Application::run() {
       const auto& terminal = terminals[terminal_index];
       reconciled_terminal_sequence = terminal.sequence;
       const auto& command_status = terminal.status;
+      if (command_status.kind == CoreMatter::CommandKind::apply_thread_dataset) {
+        thread_dataset_service.reconcileMatterTerminal(
+            command_status.operation_id, command_status.state == CoreMatter::CommandState::complete,
+            command_status.last_error);
+        continue;
+      }
       if (command_status.kind != CoreMatter::CommandKind::unpair_device)
         continue;
       if (command_status.state == CoreMatter::CommandState::complete) {

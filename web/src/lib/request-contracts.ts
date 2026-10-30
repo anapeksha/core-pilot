@@ -479,7 +479,11 @@ export const aiPromptRequestSchema = z
   })
   .strict();
 export const mcpToolPermissionRequestSchema = z
-  .object({ tool: mcpTool, enabled: z.boolean() })
+  .object({
+    tool: mcpTool,
+    enabled: z.boolean(),
+    confirmation: z.string().max(96).optional(),
+  })
   .strict();
 export const mcpInvokeRequestSchema = z
   .object({

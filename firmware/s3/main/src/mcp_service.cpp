@@ -599,11 +599,22 @@ esp_err_t McpService::initialize(const HttpRuntime& runtime) {
   return ESP_OK;
 }
 
-esp_err_t McpService::setPermission(const HttpRuntime& runtime, const char* tool, bool enabled) {
+esp_err_t McpService::setPermission(const HttpRuntime& runtime, const char* tool, bool enabled,
+                                    const char* confirmation) {
   const Tool* selected_tool = findTool(tool);
   const std::size_t index = toolIndex(selected_tool);
   if (selected_tool == nullptr || index >= 32 || !selected_tool->available)
     return ESP_ERR_NOT_SUPPORTED;
+  if (enabled && selected_tool->destructive) {
+    char expected[96]{};
+    const int written = std::snprintf(expected, sizeof(expected), "ENABLE DESTRUCTIVE TOOL %s",
+                                      selected_tool->name);
+    const bool confirmed = written > 0 && static_cast<std::size_t>(written) < sizeof(expected) &&
+                           confirmation != nullptr && std::strcmp(confirmation, expected) == 0;
+    mbedtls_platform_zeroize(expected, sizeof(expected));
+    if (!confirmed)
+      return ESP_ERR_INVALID_ARG;
+  }
   if (permission_write_mutex == nullptr ||
       xSemaphoreTake(permission_write_mutex, pdMS_TO_TICKS(5000)) != pdTRUE)
     return ESP_ERR_TIMEOUT;
