@@ -27,7 +27,7 @@ Dashboard access starts with physical possession of the CoreS3:
 1. Connect your phone or computer to the same local network as Core Pilot.
 2. Open the address shown on the CoreS3 display.
 3. Enter the one-time access code displayed on the touchscreen.
-4. After authorization, that browser remains signed in for up to eight hours.
+4. After authorization, that browser remains signed in for up to 30 minutes.
 
 The one-time code disappears after it is used. Core Pilot does not provide a network command for revealing or regenerating it.
 
@@ -38,7 +38,7 @@ Authorizing a second browser does not sign out the first one:
 1. On the CoreS3, tap **Authorize another browser**.
 2. A fresh one-time code appears for five minutes.
 3. Open the dashboard in the new browser or browser profile and enter that code.
-4. Each browser receives its own independent eight-hour session.
+4. Each browser receives its own independent 30-minute session.
 
 Use the same process after changing browsers, clearing browser data, using a private window, or letting a session expire. Never share dashboard access codes or session tokens.
 
@@ -104,8 +104,10 @@ eim run 'idf.py -B build -p /dev/cu.usbmodem1201 flash' v6.0.2
 Replace `/dev/cu.usbmodem1201` with the positively identified CoreS3 port. If automatic reset into the ROM downloader is unavailable, use the built-in USB-JTAG path:
 
 ```sh
-eim run 'python ../../tools/flash_jtag.py build' v6.0.2
+eim run 'python ../../tools/flash_jtag.py build --adapter-serial <core-s3-usb-jtag-serial>' v6.0.2
 ```
+
+Replace `<core-s3-usb-jtag-serial>` with the positively identified CoreS3 USB-JTAG adapter serial.
 
 ## Run the dashboard during development
 

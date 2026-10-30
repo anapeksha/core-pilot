@@ -90,11 +90,11 @@ python tools/test.py both <core-s3-ip> --duration-hours 8 --sample-interval 30 -
 
 Do not start or claim a soak pass unless its initial sample has Matter, Thread, CASE, and subscriptions ready. Hardware claims require captured device evidence. Matter-over-Wi-Fi requires PASE, attestation, AddNOC, CASE, subscriptions, commands, and reboot recovery. Matter-over-Thread additionally requires H2 Spinel startup, an active dataset, attachment, routed IPv6, and DNS-SD.
 
-## Current hardware test state
+## Hardware validation hygiene
 
-- CoreS3 `0.1.0-ota-test3` passed 500/500 HTTP requests with three workers and recovered from a requested reboot with software reset reason `3`.
-- Nesso node `000296ea175bcd1f` was successfully unpaired and removed from the encrypted registry. Recommissioning then failed reproducibly in PASE after the 180-second timeout.
-- Nesso reports that CHIPoBLE commissioning is open but also reports failures advertising the commissionable node and finalizing DNS-SD service updates. Until that accessory-side advertising path is repaired and Nesso is recommissioned, CASE and subscription readiness are false and an eight-hour protocol-ready soak cannot pass.
-- Never weaken the soak readiness checks or claim success to hide this known hardware failure.
+- Treat attached Matter accessories, node IDs, serial ports, USB adapter serials, IP addresses, and prior test results as contributor-local and transient. Discover and verify them for the current test session; never infer them from repository history or documentation.
+- Positively identify every target before resetting, flashing, commissioning, unpairing, or changing its persisted state. Do not operate on unrelated attached devices.
+- Accessory-side commissioning, advertising, DNS-SD, CASE, or subscription failures are external evidence, not permission to weaken readiness checks. Record the observed failure without encoding contributor-specific hardware state in repository-wide instructions.
+- A soak is valid only when its own initial sample and captured device evidence satisfy all readiness requirements. Prior runs and another contributor's hardware results do not establish current readiness.
 
 Do not commit unless the user explicitly asks. When requested, use small Conventional Commits and never commit secrets or generated build trees.

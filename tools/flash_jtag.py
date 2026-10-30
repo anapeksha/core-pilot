@@ -12,7 +12,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIRMWARE = ROOT / "firmware"
-CORE_S3_ADAPTER_SERIAL = "80:45:6B:4D:54:94"
 ADAPTER_SERIAL_PATTERN = re.compile(r"(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}")
 
 
@@ -62,9 +61,9 @@ def main() -> int:
     parser.add_argument("build_directory", nargs="?", default="build")
     parser.add_argument(
         "--adapter-serial",
-        default=CORE_S3_ADAPTER_SERIAL,
+        required=True,
         type=adapter_serial,
-        help="CoreS3 USB-JTAG serial; never use the Nesso adapter",
+        help="positively identified CoreS3 USB-JTAG adapter serial",
     )
     args = parser.parse_args()
 
