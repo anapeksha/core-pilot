@@ -418,8 +418,11 @@ void Application::run() {
 
   std::uint64_t recorded_node_id = 0;
   std::size_t discovery_node_index = 0;
+  std::uint8_t discovery_attempts = 0;
   bool discovery_in_flight = false;
-  const TickType_t discovery_not_before = xTaskGetTickCount() + pdMS_TO_TICKS(15000);
+  TickType_t discovery_not_before = xTaskGetTickCount() + pdMS_TO_TICKS(15000);
+  constexpr std::uint8_t kMaxDiscoveryAttempts = 3;
+  constexpr TickType_t kDiscoveryRetryDelay = pdMS_TO_TICKS(15000);
   bool matter_ready_reported = false;
   bool ota_update_shown = false;
   std::uint64_t reconciled_terminal_sequence = 0;
@@ -547,12 +550,21 @@ void Application::run() {
             } else if (matter.subscribeOnOff(discovery_nodes[discovery_node_index]) != ESP_OK) {
               ESP_LOGW(kTag, "failed to queue Matter OnOff subscription");
             }
+            discovery_attempts = 0;
+            ++discovery_node_index;
           } else {
-            ESP_LOGW(kTag, "Matter endpoint discovery failed for node %016llx: %s",
+            ++discovery_attempts;
+            ESP_LOGW(kTag, "Matter endpoint discovery attempt %u failed for node %016llx: %s",
+                     static_cast<unsigned>(discovery_attempts),
                      static_cast<unsigned long long>(discovery_nodes[discovery_node_index]),
                      esp_err_to_name(discovery.last_error));
+            if (discovery_attempts >= kMaxDiscoveryAttempts) {
+              discovery_attempts = 0;
+              ++discovery_node_index;
+            } else {
+              discovery_not_before = xTaskGetTickCount() + kDiscoveryRetryDelay;
+            }
           }
-          ++discovery_node_index;
           discovery_in_flight = false;
         }
       }
