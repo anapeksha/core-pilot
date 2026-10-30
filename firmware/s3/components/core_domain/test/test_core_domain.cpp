@@ -97,12 +97,12 @@ TEST_CASE("model DTOs normalize and preserve ordered duplicate actions", "[core_
   cJSON_Delete(json);
   json = cJSON_Parse("{\"name\":\"Scheduled\",\"enabled\":true,\"trigger\":\"weekly|127|23:00|0\","
                      "\"actions\":[\"on|lamp|0\"]}");
-  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::invalid_detail),
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::ok),
                     static_cast<int>(parse_model_upsert(json, ModelKind::automation, model)));
   cJSON_Delete(json);
   json = cJSON_Parse("{\"name\":\"Scene action\",\"enabled\":true,"
                      "\"trigger\":\"manual\",\"actions\":[\"scene|night\"]}");
-  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::invalid_detail),
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::ok),
                     static_cast<int>(parse_model_upsert(json, ModelKind::automation, model)));
   cJSON_Delete(json);
   char id[max_id + 1]{};

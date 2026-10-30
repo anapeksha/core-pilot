@@ -308,7 +308,7 @@ void Application::run() {
   if (wifi_provision_result != ESP_OK)
     ESP_LOGE(kTag, "Wi-Fi provisioning startup failed: %s", esp_err_to_name(wifi_provision_result));
 
-  static AutomationService automations(models, devices, matter, activity);
+  static AutomationService automations(models, devices, matter, activity, storage, random);
   const esp_err_t automation_result = automations.start();
   if (automation_result != ESP_OK)
     ESP_LOGE(kTag, "automation service startup failed: %s", esp_err_to_name(automation_result));
@@ -432,6 +432,7 @@ void Application::run() {
     thread_dataset_service.reconcile();
     std::time_t synchronized_time = 0;
     if (consumePendingTimeSync(synchronized_time)) {
+      automations.timeSynchronized(synchronized_time);
       const bool updated = display.setRtcFromUnix(synchronized_time);
       publishRtcReady(updated);
       if (!updated)
@@ -536,24 +537,26 @@ void Application::run() {
             core_storage::MatterDevice endpoints[core_storage::kMaxMatterDevices]{};
             const auto count = std::min(discovery.count,
                                         static_cast<std::size_t>(core_storage::kMaxMatterDevices));
-            bool has_on_off = false;
+            std::uint16_t on_off_endpoints[core_storage::kMaxMatterDevices]{};
+            std::size_t on_off_count = 0;
             for (std::size_t index = 0; index < count; ++index) {
               endpoints[index] = {discovery.endpoints[index].node_id,
                                   discovery.endpoints[index].endpoint_id,
                                   discovery.endpoints[index].capabilities,
                                   true,
                                   {}};
-              has_on_off =
-                  has_on_off || (discovery.endpoints[index].capabilities & CoreMatter::on_off) != 0;
+              if ((discovery.endpoints[index].capabilities & CoreMatter::on_off) != 0)
+                on_off_endpoints[on_off_count++] = discovery.endpoints[index].endpoint_id;
             }
             const auto result =
                 devices.replaceNode(discovery_nodes[discovery_node_index], endpoints, count);
             if (result != core_security::Status::Ok) {
               ESP_LOGE(kTag, "failed to persist Matter endpoint discovery: %d",
                        static_cast<int>(result));
-            } else if (has_on_off &&
-                       matter.subscribeOnOff(discovery_nodes[discovery_node_index]) != ESP_OK) {
-              ESP_LOGW(kTag, "failed to queue Matter OnOff subscription");
+            } else if (on_off_count != 0 &&
+                       matter.configureSubscriptions(discovery_nodes[discovery_node_index],
+                                                     on_off_endpoints, on_off_count) != ESP_OK) {
+              ESP_LOGW(kTag, "failed to configure Matter OnOff subscriptions");
             }
             discovery_attempts = 0;
             ++discovery_node_index;

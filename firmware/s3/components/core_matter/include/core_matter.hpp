@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core_matter_lifecycle.hpp"
 #include "core_matter_terminal_history.hpp"
 #include "esp_err.h"
 #include "freertos/FreeRTOS.h"
@@ -11,6 +12,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
+
+namespace chip {
+namespace TLV {
+class TLVReader;
+}
+namespace app {
+struct ConcreteDataAttributePath;
+struct StatusIB;
+} // namespace app
+} // namespace chip
 
 namespace core_pilot {
 
@@ -24,6 +35,9 @@ public:
   };
 
   static constexpr std::uint32_t kCommissioningTimeoutMs = 180000;
+  static constexpr std::uint32_t kUnpairTimeoutMs = 30000;
+  static constexpr std::size_t kMaxLifecycleNodes = 8;
+  static constexpr std::size_t kMaxLifecycleEndpoints = 16;
 
   enum class CommissioningTransport : std::uint8_t {
     wifi,
@@ -119,6 +133,24 @@ public:
     bool on;
   };
 
+  struct EndpointSnapshot final {
+    std::uint64_t node_id;
+    std::uint16_t endpoint_id;
+    bool configured;
+    bool subscription_active;
+    bool report_known;
+    bool on;
+  };
+
+  struct NodeSnapshot final {
+    std::uint64_t node_id;
+    std::uint32_t generation;
+    std::uint16_t configured_endpoints;
+    std::uint16_t active_subscriptions;
+    bool case_ready;
+    bool recovery_pending;
+  };
+
   struct Status final {
     State state;
     bool commissioner_ready;
@@ -163,6 +195,14 @@ public:
                          CommandRejection* rejection = nullptr);
   esp_err_t discoverEndpoints(std::uint64_t node_id);
   esp_err_t subscribeOnOff(std::uint64_t node_id);
+  esp_err_t configureSubscriptions(std::uint64_t node_id, const std::uint16_t* endpoints,
+                                   std::size_t count);
+  bool nodeSnapshot(std::uint64_t node_id, NodeSnapshot& snapshot) const;
+  bool endpointSnapshot(std::uint64_t node_id, std::uint16_t endpoint_id,
+                        EndpointSnapshot& snapshot) const;
+  std::size_t lifecycleNodeCount() const;
+  std::size_t configuredEndpointCount() const;
+  static void onConnectivityRestored();
   Status status() const;
   CommandStatus commandStatus() const;
   bool terminalCommand(std::uint32_t operation_id, TerminalCommand& terminal) const;
@@ -184,6 +224,7 @@ private:
     unpair_device,
     discover_endpoints,
     subscribe_on_off,
+    connectivity_restored,
     stop
   };
   /** Bounded value copied across cores by the FreeRTOS request queue. */
@@ -197,6 +238,8 @@ private:
     std::uint16_t value;
     std::uint16_t transition_time_ds;
     bool on;
+    std::uint8_t endpoint_count;
+    std::uint16_t endpoints[kMaxLifecycleEndpoints];
     char setup_payload[22];
     std::uint8_t dataset[kMaxThreadDatasetBytes];
   };
@@ -208,6 +251,10 @@ private:
 
   static void taskEntry(void* context);
   static void onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error);
+  static void onOnOffReport(std::uint64_t node_id, const chip::app::ConcreteDataAttributePath& path,
+                            chip::TLV::TLVReader* data, const chip::app::StatusIB& status);
+  static void onSubscriptionEstablished(std::uint64_t node_id, std::uint32_t subscription_id);
+  static void onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t subscription_id);
   void run();
   esp_err_t startController();
   esp_err_t applyThreadDatasetOnOwner(const std::uint8_t* dataset, std::size_t length);
@@ -244,12 +291,16 @@ private:
   SemaphoreHandle_t terminal_signal_{nullptr};
   InvokeCallbackContext invoke_callback_context_{};
   std::uint32_t active_unpair_operation_id_{0};
+  std::uint32_t active_unpair_generation_{0};
+  std::int64_t active_unpair_started_us_{0};
+  detail::LifecycleTable<kMaxLifecycleNodes, kMaxLifecycleEndpoints> lifecycle_{};
   DiscoveryStatus discovery_status_{};
   std::uint32_t next_operation_id_{1};
   std::uint32_t next_command_operation_id_{1};
   std::uint32_t next_discovery_operation_id_{1};
   std::int64_t discovery_started_us_{0};
   std::uint64_t active_node_id_{0};
+  OnOffState last_on_off_state_{};
   static CoreMatter* callback_owner_;
   std::uint8_t wifi_ssid_[33]{};
   std::size_t wifi_ssid_length_{0};

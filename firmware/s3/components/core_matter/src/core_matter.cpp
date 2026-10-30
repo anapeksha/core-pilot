@@ -1,6 +1,7 @@
 #include "core_matter.hpp"
 
 #include "app-common/zap-generated/ids/Clusters.h"
+#include "app/InteractionModelEngine.h"
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_heap_caps.h"
@@ -59,12 +60,6 @@ enum class CancellationReason : std::uint8_t {
 };
 
 std::atomic<CancellationReason> cancellation_reason{CancellationReason::none};
-std::atomic_bool operational_case_active{false};
-std::atomic_bool on_off_subscription_active{false};
-std::atomic<std::uint64_t> reported_on_off_node_id{0};
-std::atomic<std::uint16_t> reported_on_off_endpoint_id{0};
-std::atomic_bool reported_on_off_known{false};
-std::atomic_bool reported_on_off_value{false};
 constexpr std::int64_t kCommissioningTimeoutUs =
     static_cast<std::int64_t>(CoreMatter::kCommissioningTimeoutMs) * 1000;
 constexpr std::int64_t kDiscoveryTimeoutUs = 30LL * 1000 * 1000;
@@ -94,28 +89,6 @@ void onCommissioningSuccess(chip::ScopedNodeId peer_id) {
   commissioning_state.store(CoreMatter::CommissioningState::complete);
   ESP_LOGI(kTag, "Matter commissioning completed for node 0x%016llx",
            static_cast<unsigned long long>(peer_id.GetNodeId()));
-}
-
-void onOnOffReport(std::uint64_t node_id, const chip::app::ConcreteDataAttributePath& path,
-                   chip::TLV::TLVReader* data, const chip::app::StatusIB& status) {
-  bool value = false;
-  if (data == nullptr || !status.IsSuccess() || data->Get(value) != CHIP_NO_ERROR)
-    return;
-  reported_on_off_node_id.store(node_id);
-  reported_on_off_endpoint_id.store(path.mEndpointId);
-  reported_on_off_value.store(value);
-  reported_on_off_known.store(true);
-}
-
-void onSubscriptionEstablished(std::uint64_t, std::uint32_t) {
-  on_off_subscription_active.store(true);
-}
-
-void onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t) {
-  operational_case_active.store(false);
-  on_off_subscription_active.store(false);
-  if (reported_on_off_node_id.load() == node_id)
-    reported_on_off_known.store(false);
 }
 
 void onCommissioningFailure(chip::NodeId node_id, CHIP_ERROR error,
@@ -505,17 +478,23 @@ esp_err_t initializeBorderRouter() {
 }
 
 void matterEvent(const ChipDeviceEvent* event, intptr_t) {
-  if (event == nullptr || border_router_initialized.load() || controller_initializing.load() ||
+  if (event == nullptr)
+    return;
+  if ((event->Type == chip::DeviceLayer::DeviceEventType::kWiFiConnectivityChange &&
+       event->WiFiConnectivityChange.Result == chip::DeviceLayer::kConnectivity_Established) ||
+      (event->Type == chip::DeviceLayer::DeviceEventType::kThreadConnectivityChange &&
+       event->ThreadConnectivityChange.Result == chip::DeviceLayer::kConnectivity_Established)) {
+    CoreMatter::onConnectivityRestored();
+  }
+  if (border_router_initialized.load() || controller_initializing.load() ||
       event->Type != chip::DeviceLayer::DeviceEventType::kESPSystemEvent ||
       event->Platform.ESPSystemEvent.Base != IP_EVENT ||
-      event->Platform.ESPSystemEvent.Id != IP_EVENT_STA_GOT_IP) {
+      event->Platform.ESPSystemEvent.Id != IP_EVENT_STA_GOT_IP)
     return;
-  }
 
   const esp_err_t result = initializeBorderRouter();
-  if (result != ESP_OK) {
+  if (result != ESP_OK)
     ESP_LOGE(kTag, "Thread border router init failed: %s", esp_err_to_name(result));
-  }
 }
 
 } // namespace
@@ -871,10 +850,24 @@ esp_err_t CoreMatter::discoverEndpoints(std::uint64_t node_id) {
 }
 
 esp_err_t CoreMatter::subscribeOnOff(std::uint64_t node_id) {
-  if (node_id == 0 || queue_ == nullptr) {
+  const std::uint16_t endpoint = 1;
+  return configureSubscriptions(node_id, &endpoint, 1);
+}
+
+esp_err_t CoreMatter::configureSubscriptions(std::uint64_t node_id, const std::uint16_t* endpoints,
+                                             std::size_t count) {
+  if (node_id == 0 || endpoints == nullptr || count == 0 || count > kMaxLifecycleEndpoints ||
+      queue_ == nullptr)
     return ESP_ERR_INVALID_ARG;
-  }
-  const Command command{.type = CommandType::subscribe_on_off, .node_id = node_id};
+  taskENTER_CRITICAL(&status_lock_);
+  const bool configured = lifecycle_.configure(node_id, endpoints, count);
+  taskEXIT_CRITICAL(&status_lock_);
+  if (!configured)
+    return ESP_ERR_NO_MEM;
+  Command command{.type = CommandType::subscribe_on_off,
+                  .node_id = node_id,
+                  .endpoint_count = static_cast<std::uint8_t>(count)};
+  std::memcpy(command.endpoints, endpoints, count * sizeof(endpoints[0]));
   return enqueueCommand(command);
 }
 
@@ -886,11 +879,60 @@ CoreMatter::DiscoveryStatus CoreMatter::discoveryStatus() const {
 }
 
 CoreMatter::OnOffState CoreMatter::onOffState() const {
-  const bool known = reported_on_off_known.load();
-  return {.node_id = known ? reported_on_off_node_id.load() : 0,
-          .endpoint_id = static_cast<std::uint16_t>(known ? reported_on_off_endpoint_id.load() : 0),
-          .known = known,
-          .on = known && reported_on_off_value.load()};
+  taskENTER_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  const OnOffState snapshot = last_on_off_state_;
+  taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  return snapshot;
+}
+
+bool CoreMatter::nodeSnapshot(std::uint64_t node_id, NodeSnapshot& snapshot) const {
+  taskENTER_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  const auto* node = lifecycle_.snapshot(node_id);
+  if (node == nullptr) {
+    taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+    return false;
+  }
+  snapshot = {.node_id = node->node_id,
+              .generation = node->generation,
+              .case_ready = node->case_ready,
+              .recovery_pending = node->recovery_pending};
+  for (const auto& endpoint : node->endpoints)
+    snapshot.configured_endpoints += endpoint.configured ? 1U : 0U;
+  snapshot.active_subscriptions = node->phase == detail::SubscriptionPhase::active ? 1U : 0U;
+  taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  return true;
+}
+
+bool CoreMatter::endpointSnapshot(std::uint64_t node_id, std::uint16_t endpoint_id,
+                                  EndpointSnapshot& snapshot) const {
+  taskENTER_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  const auto* endpoint = lifecycle_.endpointSnapshot(node_id, endpoint_id);
+  if (endpoint == nullptr) {
+    taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+    return false;
+  }
+  snapshot = {.node_id = node_id,
+              .endpoint_id = endpoint->endpoint_id,
+              .configured = endpoint->configured,
+              .subscription_active = endpoint->active,
+              .report_known = endpoint->report_known,
+              .on = endpoint->on};
+  taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  return true;
+}
+
+std::size_t CoreMatter::lifecycleNodeCount() const {
+  taskENTER_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  const std::size_t count = lifecycle_.nodeCount();
+  taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  return count;
+}
+
+std::size_t CoreMatter::configuredEndpointCount() const {
+  taskENTER_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  const std::size_t count = lifecycle_.configuredEndpointCount();
+  taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
+  return count;
 }
 
 CoreMatter::CommandStatus CoreMatter::commandStatus() const {
@@ -959,6 +1001,8 @@ bool CoreMatter::finishCommand(std::uint32_t operation_id, CommandState state, e
     }
     if (active_unpair_operation_id_ == operation_id) {
       active_unpair_operation_id_ = 0;
+      active_unpair_generation_ = 0;
+      active_unpair_started_us_ = 0;
     }
   }
   taskEXIT_CRITICAL(&status_lock_);
@@ -972,9 +1016,9 @@ CoreMatter::Status CoreMatter::status() const {
   taskENTER_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
   Status snapshot = status_;
   snapshot.border_router_ready = border_router_initialized.load();
+  snapshot.subscriptions_active = static_cast<std::uint16_t>(lifecycle_.activeSubscriptionCount());
+  snapshot.case_ready = lifecycle_.anyCaseReady();
   taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
-  snapshot.subscriptions_active = on_off_subscription_active.load() ? 1 : 0;
-  snapshot.case_ready = operational_case_active.load();
   const auto callback_state = commissioning_state.load();
   if (callback_state != CommissioningState::idle) {
     snapshot.commissioning_state = callback_state;
@@ -988,6 +1032,55 @@ void CoreMatter::taskEntry(void* context) {
   static_cast<CoreMatter*>(context)->run();
 }
 
+void CoreMatter::onConnectivityRestored() {
+  CoreMatter* matter = callback_owner_;
+  if (matter != nullptr)
+    static_cast<void>(matter->enqueueCommand(Command{.type = CommandType::connectivity_restored}));
+}
+
+void CoreMatter::onOnOffReport(std::uint64_t node_id,
+                               const chip::app::ConcreteDataAttributePath& path,
+                               chip::TLV::TLVReader* data,
+                               const chip::app::StatusIB& response_status) {
+  CoreMatter* matter = callback_owner_;
+  bool value = false;
+  if (matter == nullptr || data == nullptr || !response_status.IsSuccess() ||
+      data->Get(value) != CHIP_NO_ERROR)
+    return;
+  taskENTER_CRITICAL(&matter->status_lock_);
+  const auto* node = matter->lifecycle_.snapshot(node_id);
+  const bool accepted = node != nullptr && matter->lifecycle_.report(node_id, node->generation,
+                                                                     path.mEndpointId, value);
+  if (accepted)
+    matter->last_on_off_state_ = {node_id, path.mEndpointId, true, value};
+  taskEXIT_CRITICAL(&matter->status_lock_);
+}
+
+void CoreMatter::onSubscriptionEstablished(std::uint64_t node_id, std::uint32_t) {
+  CoreMatter* matter = callback_owner_;
+  if (matter == nullptr)
+    return;
+  taskENTER_CRITICAL(&matter->status_lock_);
+  const auto* node = matter->lifecycle_.snapshot(node_id);
+  if (node != nullptr)
+    static_cast<void>(matter->lifecycle_.established(node_id, node->generation));
+  taskEXIT_CRITICAL(&matter->status_lock_);
+}
+
+void CoreMatter::onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t) {
+  CoreMatter* matter = callback_owner_;
+  if (matter == nullptr)
+    return;
+  taskENTER_CRITICAL(&matter->status_lock_);
+  const auto* node = matter->lifecycle_.snapshot(node_id);
+  if (node != nullptr) {
+    static_cast<void>(matter->lifecycle_.terminated(node_id, node->generation, true));
+    if (matter->last_on_off_state_.node_id == node_id)
+      matter->last_on_off_state_.known = false;
+  }
+  taskEXIT_CRITICAL(&matter->status_lock_);
+}
+
 void CoreMatter::onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error) {
   CoreMatter* matter = callback_owner_;
   if (matter == nullptr) {
@@ -995,16 +1088,21 @@ void CoreMatter::onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error) {
   }
   taskENTER_CRITICAL(&matter->status_lock_);
   const std::uint32_t operation_id = matter->active_unpair_operation_id_;
-  const bool current = operation_id != 0 && matter->command_status_.operation_id == operation_id &&
+  const std::uint32_t generation = matter->active_unpair_generation_;
+  const auto* node = matter->lifecycle_.snapshot(node_id);
+  const bool current = operation_id != 0 && generation != 0 && node != nullptr &&
+                       node->generation == generation &&
+                       matter->command_status_.operation_id == operation_id &&
                        matter->command_status_.kind == CommandKind::unpair_device &&
                        matter->command_status_.state == CommandState::invoking &&
                        matter->command_status_.node_id == node_id;
+  if (current && error == CHIP_NO_ERROR)
+    static_cast<void>(matter->lifecycle_.erase(node_id, generation));
   taskEXIT_CRITICAL(&matter->status_lock_);
-  if (current) {
+  if (current)
     matter->finishCommand(operation_id,
                           error == CHIP_NO_ERROR ? CommandState::complete : CommandState::failed,
                           error == CHIP_NO_ERROR ? ESP_OK : ESP_FAIL);
-  }
 }
 
 esp_err_t CoreMatter::applyThreadDatasetOnOwner(const std::uint8_t* dataset, std::size_t length) {
@@ -1090,6 +1188,19 @@ void CoreMatter::run() {
     mbedtls_platform_zeroize(&command, sizeof(command));
     if (!receiveCommand(command, pdMS_TO_TICKS(250))) {
       refreshThreadStatus();
+      taskENTER_CRITICAL(&status_lock_);
+      const bool unpair_timed_out = active_unpair_operation_id_ != 0 &&
+                                    active_unpair_started_us_ != 0 &&
+                                    esp_timer_get_time() - active_unpair_started_us_ >
+                                        static_cast<std::int64_t>(kUnpairTimeoutMs) * 1000;
+      const std::uint32_t timed_out_operation_id = active_unpair_operation_id_;
+      if (unpair_timed_out) {
+        static_cast<void>(
+            lifecycle_.abandonShutdown(command_status_.node_id, active_unpair_generation_));
+      }
+      taskEXIT_CRITICAL(&status_lock_);
+      if (unpair_timed_out)
+        finishCommand(timed_out_operation_id, CommandState::failed, ESP_ERR_TIMEOUT);
       if (commissioning_state.load() == CommissioningState::pase && active_node_id_ != 0 &&
           esp_timer_get_time() - commissioning_started_us.load() > kCommissioningTimeoutUs) {
         esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
@@ -1109,7 +1220,6 @@ void CoreMatter::run() {
       taskENTER_CRITICAL(&status_lock_);
       if (discovery_status_.active &&
           esp_timer_get_time() - discovery_started_us_ > kDiscoveryTimeoutUs) {
-        operational_case_active.store(false);
         discovery_status_.active = false;
         discovery_status_.complete = false;
         discovery_status_.last_error = ESP_ERR_TIMEOUT;
@@ -1217,7 +1327,6 @@ void CoreMatter::run() {
               const chip::Platform::ScopedMemoryBufferWithSize<chip::app::EventPathParams>&) {
             taskENTER_CRITICAL(&status_lock_);
             if (discovery_status_.active && discovery_status_.operation_id == operation_id) {
-              operational_case_active.store(true);
               discovery_status_.active = false;
               discovery_status_.complete = true;
               discovery_status_.last_error = ESP_OK;
@@ -1227,7 +1336,6 @@ void CoreMatter::run() {
       const auto error_callback = [this, operation_id](std::uint64_t, CHIP_ERROR error) {
         taskENTER_CRITICAL(&status_lock_);
         if (discovery_status_.active && discovery_status_.operation_id == operation_id) {
-          operational_case_active.store(false);
           discovery_status_.active = false;
           discovery_status_.complete = false;
           discovery_status_.last_error = error == CHIP_ERROR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL;
@@ -1238,7 +1346,6 @@ void CoreMatter::run() {
                                                         CHIP_ERROR error) {
         taskENTER_CRITICAL(&status_lock_);
         if (discovery_status_.active && discovery_status_.operation_id == operation_id) {
-          operational_case_active.store(false);
           discovery_status_.active = false;
           discovery_status_.complete = false;
           discovery_status_.last_error = error == CHIP_ERROR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL;
@@ -1258,8 +1365,27 @@ void CoreMatter::run() {
       }
       continue;
     }
+    if (command.type == CommandType::connectivity_restored) {
+      taskENTER_CRITICAL(&status_lock_);
+      lifecycle_.connectivityRestored();
+      std::uint64_t recovery_node = 0;
+      while (lifecycle_.takeRecovery(recovery_node)) {
+        taskEXIT_CRITICAL(&status_lock_);
+        static_cast<void>(enqueueCommand(
+            Command{.type = CommandType::subscribe_on_off, .node_id = recovery_node}));
+        taskENTER_CRITICAL(&status_lock_);
+      }
+      taskEXIT_CRITICAL(&status_lock_);
+      continue;
+    }
     if (command.type == CommandType::subscribe_on_off) {
-      reported_on_off_known.store(false);
+      taskENTER_CRITICAL(&status_lock_);
+      const std::uint32_t generation = lifecycle_.beginSubscribe(command.node_id);
+      if (last_on_off_state_.node_id == command.node_id)
+        last_on_off_state_.known = false;
+      taskEXIT_CRITICAL(&status_lock_);
+      if (generation == 0)
+        continue;
       esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
       auto* subscription = chip::Platform::New<esp_matter::controller::subscribe_command>(
           command.node_id, 0xffff, 0x0006, 0x0000, esp_matter::controller::SUBSCRIBE_ATTRIBUTE, 1,
@@ -1268,7 +1394,9 @@ void CoreMatter::run() {
       const esp_err_t result =
           subscription == nullptr ? ESP_ERR_NO_MEM : subscription->send_command();
       if (result != ESP_OK) {
-        on_off_subscription_active.store(false);
+        taskENTER_CRITICAL(&status_lock_);
+        static_cast<void>(lifecycle_.terminated(command.node_id, generation, true));
+        taskEXIT_CRITICAL(&status_lock_);
         ESP_LOGE(kTag, "failed to subscribe to Matter OnOff state: %s", esp_err_to_name(result));
       }
       continue;
@@ -1280,16 +1408,26 @@ void CoreMatter::run() {
       if (current) {
         command_status_.state = CommandState::invoking;
         active_unpair_operation_id_ = command.operation_id;
+        active_unpair_generation_ = lifecycle_.beginShutdown(command.node_id);
+        active_unpair_started_us_ = esp_timer_get_time();
       }
       taskEXIT_CRITICAL(&status_lock_);
-      if (!current) {
+      if (!current || active_unpair_generation_ == 0) {
+        finishCommand(command.operation_id, CommandState::failed, ESP_ERR_NOT_FOUND);
         continue;
       }
       esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+      auto* commissioner =
+          esp_matter::controller::matter_controller_client::get_instance().get_commissioner();
+      chip::app::InteractionModelEngine::GetInstance()->ShutdownSubscriptions(
+          commissioner->GetFabricIndex(), command.node_id);
       const esp_err_t result =
           esp_matter::controller::matter_controller_client::get_instance().unpair(command.node_id,
                                                                                   onUnpairComplete);
       if (result != ESP_OK) {
+        taskENTER_CRITICAL(&status_lock_);
+        static_cast<void>(lifecycle_.abandonShutdown(command.node_id, active_unpair_generation_));
+        taskEXIT_CRITICAL(&status_lock_);
         finishCommand(command.operation_id, CommandState::failed, result);
         ESP_LOGE(kTag, "failed to unpair Matter device: %s", esp_err_to_name(result));
       }

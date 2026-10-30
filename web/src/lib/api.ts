@@ -698,6 +698,15 @@ export type AutomationsResponse = {
 
 export type AutomationMutationResponse = MutationResponse & {
   automation?: Automation | null;
+  operation_id?: number;
+};
+
+export type AutomationOperationStatus = {
+  operation_id: number;
+  state: "queued" | "running" | "complete" | "failed";
+  action_index: number;
+  action_count: number;
+  error: string | null;
 };
 
 export const fallbackHealth: Health = {
@@ -1319,6 +1328,15 @@ export function runAutomation(
   return postJson<AutomationMutationResponse, ModelDeleteRequest>(
     "/api/v1/automations/run",
     request,
+  );
+}
+
+export function loadAutomationOperation(
+  operationId: number,
+): Promise<AutomationOperationStatus> {
+  return postJson<AutomationOperationStatus, { operation_id: number }>(
+    "/api/v1/automations/operations/status",
+    { operation_id: operationId },
   );
 }
 

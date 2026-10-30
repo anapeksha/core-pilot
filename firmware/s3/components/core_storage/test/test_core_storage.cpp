@@ -1,3 +1,4 @@
+#include "automation_schedule_codec.hpp"
 #include "core_storage.hpp"
 #include "matter_devices_codec.hpp"
 #include "models_codec.hpp"
@@ -36,6 +37,7 @@ constexpr Expected kExpected[] = {
     {"/core-pilot/thread/settings.enc", "OTSET.ENC", "OTSET.TMP"},
     {"/core-pilot/models/database.enc", "MODELS.ENC", "MODELS.TMP"},
     {"/core-pilot/models/database-unreadable.enc", "MODBAD.ENC", "MODBAD.TMP"},
+    {"/core-pilot/automations/schedule-checkpoints.enc", "AUTOSCH.ENC", "AUTOSCH.TMP"},
     {"/core-pilot/diagnostics/activity-history.enc", "ACTIVITY.ENC", "ACTIVITY.TMP"},
     {"/core-pilot/config/system.enc", "SYSTEM.ENC", "SYSTEM.TMP"},
     {"/core-pilot/config/ui.enc", "UI.ENC", "UI.TMP"},
@@ -202,6 +204,69 @@ TEST_CASE("models codec round trips and rejects malformed records", "[core_stora
   encoded[0] = 'X';
   TEST_ASSERT_EQUAL(static_cast<int>(Status::Invalid),
                     static_cast<int>(decode_models(kModelsSchema, encoded, written, decoded)));
+}
+
+TEST_CASE("automation schedule checkpoint codec strictly validates records", "[core_storage]") {
+  AutomationScheduleCheckpoints source{};
+  source.count = 2;
+  std::strcpy(source.entries[0].automation_id, "morning-lights");
+  std::strcpy(source.entries[0].exact_trigger, "weekly|62|07:30|-300");
+  source.entries[0].last_utc_occurrence_minute = 0x0102030405060708ULL;
+  std::strcpy(source.entries[1].automation_id, "one-time");
+  std::strcpy(source.entries[1].exact_trigger, "once|2028-02-29|23:59|+840");
+  source.entries[1].last_utc_occurrence_minute = UINT64_MAX;
+
+  uint8_t encoded[kMaxAutomationScheduleCheckpointsPayload]{};
+  size_t written = 0;
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::BufferTooSmall),
+      static_cast<int>(encode_automation_schedule_checkpoints(source, encoded, 1, written)));
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok),
+                    static_cast<int>(encode_automation_schedule_checkpoints(
+                        source, encoded, sizeof(encoded), written)));
+  AutomationScheduleCheckpoints decoded{};
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok),
+                    static_cast<int>(decode_automation_schedule_checkpoints(
+                        kAutomationScheduleCheckpointsSchema, encoded, written, decoded)));
+  TEST_ASSERT_EQUAL_UINT32(2, decoded.count);
+  TEST_ASSERT_EQUAL_STRING(source.entries[0].automation_id, decoded.entries[0].automation_id);
+  TEST_ASSERT_EQUAL_STRING(source.entries[1].exact_trigger, decoded.entries[1].exact_trigger);
+  TEST_ASSERT_EQUAL_UINT64(source.entries[0].last_utc_occurrence_minute,
+                           decoded.entries[0].last_utc_occurrence_minute);
+  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, decoded.entries[1].last_utc_occurrence_minute);
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::UnsupportedFormat),
+      static_cast<int>(decode_automation_schedule_checkpoints(2, encoded, written, decoded)));
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Invalid),
+                    static_cast<int>(decode_automation_schedule_checkpoints(
+                        kAutomationScheduleCheckpointsSchema, encoded, written - 1, decoded)));
+  encoded[written] = 0;
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Invalid),
+                    static_cast<int>(decode_automation_schedule_checkpoints(
+                        kAutomationScheduleCheckpointsSchema, encoded, written + 1, decoded)));
+
+  std::strcpy(source.entries[1].automation_id, source.entries[0].automation_id);
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Invalid),
+                    static_cast<int>(encode_automation_schedule_checkpoints(
+                        source, encoded, sizeof(encoded), written)));
+  std::strcpy(source.entries[1].automation_id, "one-time");
+  std::strcpy(source.entries[1].exact_trigger, "manual");
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Invalid),
+                    static_cast<int>(encode_automation_schedule_checkpoints(
+                        source, encoded, sizeof(encoded), written)));
+  std::strcpy(source.entries[1].exact_trigger, "weekly|128|07:30|+0");
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Invalid),
+                    static_cast<int>(encode_automation_schedule_checkpoints(
+                        source, encoded, sizeof(encoded), written)));
+
+  const uint8_t duplicate[] = {2,   1,   'a', 17,  'w', 'e', 'e', 'k', 'l', 'y', '|', '1', '|', '0',
+                               '0', ':', '0', '0', '|', '+', '0', 0,   0,   0,   0,   0,   0,   0,
+                               1,   'a', 17,  'w', 'e', 'e', 'k', 'l', 'y', '|', '2', '|', '0', '0',
+                               ':', '0', '0', '|', '+', '0', 1,   0,   0,   0,   0,   0,   0,   0};
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(Status::Invalid),
+      static_cast<int>(decode_automation_schedule_checkpoints(
+          kAutomationScheduleCheckpointsSchema, duplicate, sizeof(duplicate), decoded)));
 }
 
 TEST_CASE("Wi-Fi schema 1 postcard codec validates lengths and option", "[core_storage]") {

@@ -63,7 +63,8 @@ enum class RecordType : uint8_t {
   MatterPaaAnchors,
   MatterTrustedProducts,
   OpenThreadSettings,
-  MatterCommissioningBoot
+  MatterCommissioningBoot,
+  AutomationScheduleCheckpoints
 };
 
 // Only the internal-flash backend may persist these bytes. The owner is

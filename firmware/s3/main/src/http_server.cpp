@@ -1496,7 +1496,8 @@ esp_err_t automationRunHandler(httpd_req_t* request) {
   if (!valid)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid automation request");
 
-  const auto result = runtime->automations.submit(id);
+  std::uint32_t operation_id = 0;
+  const auto result = runtime->automations.submit(id, operation_id);
   const bool accepted = result == AutomationService::SubmitResult::queued;
   const char* status = "AUTOMATION_QUEUE_FULL";
   const char* detail = "The automation queue is full.";
@@ -1525,6 +1526,19 @@ esp_err_t automationRunHandler(httpd_req_t* request) {
     status = "AUTOMATION_TARGET_UNAVAILABLE";
     detail = "A Matter target is unavailable.";
     break;
+  case AutomationService::SubmitResult::scene_not_found:
+    status = "AUTOMATION_SCENE_NOT_FOUND";
+    detail = "A referenced scene does not exist.";
+    break;
+  case AutomationService::SubmitResult::scene_cycle:
+    status = "AUTOMATION_SCENE_CYCLE";
+    detail = "The automation contains a scene cycle.";
+    break;
+  case AutomationService::SubmitResult::scene_depth_exceeded:
+  case AutomationService::SubmitResult::too_many_actions:
+    status = "AUTOMATION_EXPANSION_TOO_LARGE";
+    detail = "The expanded automation exceeds the execution limit.";
+    break;
   case AutomationService::SubmitResult::queue_full:
     break;
   }
@@ -1532,6 +1546,61 @@ esp_err_t automationRunHandler(httpd_req_t* request) {
   cJSON_AddBoolToObject(response, "accepted", accepted);
   cJSON_AddStringToObject(response, "status", status);
   cJSON_AddStringToObject(response, "detail", detail);
+  if (accepted)
+    cJSON_AddNumberToObject(response, "operation_id", operation_id);
+  return sendJson(request, response);
+}
+
+esp_err_t automationOperationStatusHandler(httpd_req_t* request) {
+  auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
+  RequestBody body(128);
+  std::size_t received = 0;
+  if (runtime == nullptr || !body ||
+      readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
+  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  const cJSON* id = document ? cJSON_GetObjectItemCaseSensitive(document, "operation_id") : nullptr;
+  const bool valid =
+      cJSON_IsObject(document) && cJSON_GetArraySize(document) == 1 && cJSON_IsNumber(id) &&
+      id->valuedouble >= 1 && id->valuedouble <= UINT32_MAX &&
+      static_cast<double>(static_cast<std::uint32_t>(id->valuedouble)) == id->valuedouble;
+  const auto operation_id = valid ? static_cast<std::uint32_t>(id->valuedouble) : 0;
+  cJSON_Delete(document);
+  if (!valid)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid operation request");
+
+  AutomationService::Status operation{};
+  if (!runtime->automations.status(operation_id, operation)) {
+    cJSON* response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "accepted", false);
+    cJSON_AddStringToObject(response, "status", "AUTOMATION_OPERATION_NOT_FOUND");
+    cJSON_AddStringToObject(response, "detail",
+                            "The automation operation is unknown or no longer retained.");
+    return sendJson(request, response);
+  }
+  const char* state = "queued";
+  switch (operation.state) {
+  case AutomationService::State::queued:
+    break;
+  case AutomationService::State::running:
+    state = "running";
+    break;
+  case AutomationService::State::complete:
+    state = "complete";
+    break;
+  case AutomationService::State::failed:
+    state = "failed";
+    break;
+  }
+  cJSON* response = cJSON_CreateObject();
+  cJSON_AddNumberToObject(response, "operation_id", operation.operation_id);
+  cJSON_AddStringToObject(response, "state", state);
+  cJSON_AddNumberToObject(response, "action_index", operation.action_index);
+  cJSON_AddNumberToObject(response, "action_count", operation.action_count);
+  if (operation.failure == AutomationService::Failure::none)
+    cJSON_AddNullToObject(response, "error");
+  else
+    cJSON_AddStringToObject(response, "error", esp_err_to_name(operation.last_error));
   return sendJson(request, response);
 }
 
@@ -2726,7 +2795,7 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.max_open_sockets = kMaxHttpConnections;
   config.max_resp_headers = 12;
-  config.max_uri_handlers = 64;
+  config.max_uri_handlers = 65;
   config.uri_match_fn = httpd_uri_match_wildcard;
   config.lru_purge_enable = true;
   config.stack_size = 12288;
@@ -2768,6 +2837,10 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                                    .method = HTTP_POST,
                                    .handler = automationRunHandler,
                                    .user_ctx = const_cast<HttpRuntime*>(&runtime)};
+  const httpd_uri_t automation_operation{.uri = "/api/v1/automations/operations/status",
+                                         .method = HTTP_POST,
+                                         .handler = automationOperationStatusHandler,
+                                         .user_ctx = const_cast<HttpRuntime*>(&runtime)};
   const httpd_uri_t device_mutation{.uri = "/api/v1/devices",
                                     .method = HTTP_PATCH,
                                     .handler = deviceMutationHandler,
@@ -2882,6 +2955,7 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
       registerHttpAccessRoute(server, &commission) != ESP_OK ||
       registerHttpAccessRoute(server, &thread_dataset) != ESP_OK ||
       registerHttpAccessRoute(server, &automation_run) != ESP_OK ||
+      registerHttpAccessRoute(server, &automation_operation) != ESP_OK ||
       registerHttpAccessRoute(server, &device_mutation) != ESP_OK ||
       registerHttpAccessRoute(server, &device_remove) != ESP_OK ||
       registerHttpAccessRoute(server, &device_forget) != ESP_OK ||

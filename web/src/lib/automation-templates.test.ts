@@ -11,8 +11,8 @@ describe("automation template catalog", () => {
     expect(
       automationTemplates.map(({ id, available }) => ({ id, available })),
     ).toEqual([
-      { id: "turn-everything-off-at-night", available: false },
-      { id: "weekday-morning-scene", available: false },
+      { id: "turn-everything-off-at-night", available: true },
+      { id: "weekday-morning-scene", available: true },
       { id: "motion-lighting", available: false },
       { id: "device-left-on", available: false },
       { id: "offline-notification", available: false },

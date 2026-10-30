@@ -465,13 +465,15 @@ esp_err_t runAutomation(const HttpRuntime& runtime, const cJSON* arguments, cJSO
   if (!hasOnlyKeys(arguments, allowed, std::size(allowed)) ||
       core_domain::parse_model_delete(arguments, id) != core_domain::ModelError::ok)
     return ESP_ERR_INVALID_ARG;
-  const auto submitted = runtime.automations.submit(id);
+  std::uint32_t operation_id = 0;
+  const auto submitted = runtime.automations.submit(id, operation_id);
   result = cJSON_CreateObject();
   cJSON_AddStringToObject(result, "id", id);
   switch (submitted) {
   case AutomationService::SubmitResult::queued:
     cJSON_AddStringToObject(result, "status", "queued");
     cJSON_AddStringToObject(result, "detail", "Manual automation queued.");
+    cJSON_AddNumberToObject(result, "operation_id", operation_id);
     return ESP_OK;
   case AutomationService::SubmitResult::not_found:
     cJSON_AddStringToObject(result, "status", "AUTOMATION_NOT_FOUND");
@@ -493,6 +495,19 @@ esp_err_t runAutomation(const HttpRuntime& runtime, const cJSON* arguments, cJSO
     cJSON_AddStringToObject(result, "status", "AUTOMATION_TARGET_UNAVAILABLE");
     cJSON_AddStringToObject(result, "detail", "An automation target is unavailable.");
     return ESP_ERR_NOT_FOUND;
+  case AutomationService::SubmitResult::scene_not_found:
+    cJSON_AddStringToObject(result, "status", "AUTOMATION_SCENE_NOT_FOUND");
+    cJSON_AddStringToObject(result, "detail", "A referenced scene does not exist.");
+    return ESP_ERR_NOT_FOUND;
+  case AutomationService::SubmitResult::scene_cycle:
+    cJSON_AddStringToObject(result, "status", "AUTOMATION_SCENE_CYCLE");
+    cJSON_AddStringToObject(result, "detail", "The automation contains a scene cycle.");
+    return ESP_ERR_INVALID_STATE;
+  case AutomationService::SubmitResult::scene_depth_exceeded:
+  case AutomationService::SubmitResult::too_many_actions:
+    cJSON_AddStringToObject(result, "status", "AUTOMATION_EXPANSION_TOO_LARGE");
+    cJSON_AddStringToObject(result, "detail", "The expanded automation exceeds the limit.");
+    return ESP_ERR_INVALID_SIZE;
   case AutomationService::SubmitResult::queue_full:
     cJSON_AddStringToObject(result, "status", "AUTOMATION_QUEUE_FULL");
     cJSON_AddStringToObject(result, "detail", "The automation queue is full.");

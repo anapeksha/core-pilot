@@ -225,7 +225,7 @@ ModelError parse_model_upsert(const cJSON* object, ModelKind kind, ModelUpsert& 
     TriggerSpec parsed{};
     if (!cJSON_IsBool(enabled) || !cJSON_IsString(trigger) ||
         normalize_detail(trigger->valuestring, temp.trigger) != ModelError::ok ||
-        !parse_trigger_spec(temp.trigger, parsed) || parsed.kind != TriggerSpec::Kind::manual)
+        !parse_trigger_spec(temp.trigger, parsed))
       return ModelError::invalid_detail;
     temp.enabled = cJSON_IsTrue(enabled);
   }
@@ -260,9 +260,7 @@ ModelError parse_model_upsert(const cJSON* object, ModelKind kind, ModelUpsert& 
         return ModelError::invalid_detail;
       for (size_t i = 0; i < temp.detail_count; ++i) {
         ActionSpec action{};
-        if (!parse_action_spec(temp.details[i], action) ||
-            (kind == ModelKind::automation && action.kind != ActionSpec::Kind::on &&
-             action.kind != ActionSpec::Kind::delay))
+        if (!parse_action_spec(temp.details[i], action))
           return ModelError::invalid_detail;
       }
     }

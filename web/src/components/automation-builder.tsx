@@ -100,6 +100,9 @@ const actionDefinitions: ActionDefinition[] = [
 
 const runtimeAutomationActionTypes = new Set<ActionType>([
   "set_on_off",
+  "set_level",
+  "activate_scene",
+  "local_notification",
   "delay",
 ]);
 

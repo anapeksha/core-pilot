@@ -59,7 +59,10 @@ constexpr RouteContract routes[] = {
     {"POST", "/api/v1/automations/upsert", "id:s? name:s enabled:b trigger:s actions:a",
      "accepted:b status:s detail:s automation:o?"},
     {"POST", "/api/v1/automations/delete", "id:s", "accepted:b status:s detail:s"},
-    {"POST", "/api/v1/automations/run", "id:s", "accepted:b status:s detail:s"},
+    {"POST", "/api/v1/automations/run", "id:s", "accepted:b status:s detail:s operation_id:q?"},
+    {"POST", "/api/v1/automations/operations/status", "operation_id:q",
+     "accepted:b? status:s? detail:s? operation_id:q? state:s? action_index:t? action_count:t? "
+     "error:s?"},
     {"GET", "/api/v1/matter", nullptr,
      "implementation:s commissioned:b fabric_configured:b "
      "subscriptions_active:h ipv6_ready:b mdns_ready:b dns_sd_ready:b "
@@ -365,6 +368,12 @@ bool request_bounds(const RouteContract& route, const cJSON* object) {
                            : std::strstr(p, "/scenes/") ? ModelKind::scene
                                                         : ModelKind::automation;
     return parse_model_upsert(object, kind, dto) == ModelError::ok;
+  }
+  if (std::strcmp(p, "/api/v1/automations/operations/status") == 0) {
+    const cJSON* operation = cJSON_GetObjectItemCaseSensitive(object, "operation_id");
+    return cJSON_IsNumber(operation) && operation->valuedouble >= 1 &&
+           operation->valuedouble <= 4294967295.0 &&
+           std::floor(operation->valuedouble) == operation->valuedouble;
   }
   if (std::strstr(p, "/delete") || std::strcmp(p, "/api/v1/automations/run") == 0) {
     char id[max_id + 1]{};
