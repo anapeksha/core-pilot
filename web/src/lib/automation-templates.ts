@@ -44,13 +44,16 @@ export const automationTemplates: readonly AutomationTemplate[] = [
     id: "turn-everything-off-at-night",
     title: "Turn everything off at night",
     description: "Turn selected devices off every night at 11:00 PM.",
-    available: true,
+    available: false,
+    prerequisite: "Requires the device-side scheduled automation runner.",
   },
   {
     id: "weekday-morning-scene",
     title: "Weekday morning scene",
     description: "Activate a selected scene on weekdays at 7:00 AM.",
-    available: true,
+    available: false,
+    prerequisite:
+      "Requires scheduled triggers and device-side scene execution.",
   },
   {
     id: "motion-lighting",

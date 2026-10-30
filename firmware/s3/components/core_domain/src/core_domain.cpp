@@ -225,7 +225,7 @@ ModelError parse_model_upsert(const cJSON* object, ModelKind kind, ModelUpsert& 
     TriggerSpec parsed{};
     if (!cJSON_IsBool(enabled) || !cJSON_IsString(trigger) ||
         normalize_detail(trigger->valuestring, temp.trigger) != ModelError::ok ||
-        !parse_trigger_spec(temp.trigger, parsed))
+        !parse_trigger_spec(temp.trigger, parsed) || parsed.kind != TriggerSpec::Kind::manual)
       return ModelError::invalid_detail;
     temp.enabled = cJSON_IsTrue(enabled);
   }
@@ -247,9 +247,11 @@ ModelError parse_model_upsert(const cJSON* object, ModelKind kind, ModelUpsert& 
       if (!cJSON_IsString(item) || normalize_detail(item->valuestring, detail) != ModelError::ok)
         return ModelError::invalid_detail;
       bool duplicate = false;
-      for (size_t j = 0; j < temp.detail_count; ++j)
-        if (std::strcmp(detail, temp.details[j]) == 0)
-          duplicate = true;
+      if (group) {
+        for (size_t j = 0; j < temp.detail_count; ++j)
+          if (std::strcmp(detail, temp.details[j]) == 0)
+            duplicate = true;
+      }
       if (*detail && !duplicate)
         copy(detail, temp.details[temp.detail_count++]);
     }
@@ -258,7 +260,9 @@ ModelError parse_model_upsert(const cJSON* object, ModelKind kind, ModelUpsert& 
         return ModelError::invalid_detail;
       for (size_t i = 0; i < temp.detail_count; ++i) {
         ActionSpec action{};
-        if (!parse_action_spec(temp.details[i], action))
+        if (!parse_action_spec(temp.details[i], action) ||
+            (kind == ModelKind::automation && action.kind != ActionSpec::Kind::on &&
+             action.kind != ActionSpec::Kind::delay))
           return ModelError::invalid_detail;
       }
     }

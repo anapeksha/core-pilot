@@ -1102,7 +1102,7 @@ test("exercises local model CRUD pages for rooms, groups, scenes, and automation
   });
 });
 
-test("prefills editable automation templates without enabling unsupported triggers", async ({
+test("disables automation templates without complete device-side execution", async ({
   page,
 }) => {
   await mockFirmwareApi(page);
@@ -1113,16 +1113,15 @@ test("prefills editable automation templates without enabling unsupported trigge
   await expect(
     sheet.getByRole("button", { name: /Motion lighting/ }),
   ).toBeDisabled();
-  await sheet
-    .getByRole("button", { name: /Turn everything off at night/ })
-    .click();
-  await expect(sheet.getByPlaceholder("Wind-down routine")).toHaveValue(
-    "Turn everything off at night",
-  );
-  await sheet.getByRole("button", { name: "Continue" }).click();
-  await expect(sheet.getByLabel("Time")).toHaveValue("23:00");
-  await sheet.getByRole("button", { name: "Continue" }).click();
-  await expect(sheet.getByText("Turn off a device")).toBeVisible();
+  await expect(
+    sheet.getByRole("button", { name: /Turn everything off at night/ }),
+  ).toBeDisabled();
+  await expect(
+    sheet.getByRole("button", { name: /Weekday morning scene/ }),
+  ).toBeDisabled();
+  await expect(
+    sheet.getByText("Requires the device-side scheduled automation runner."),
+  ).toBeVisible();
 });
 
 test("shows reported room assignments and blocks deletion of referenced scenes", async ({

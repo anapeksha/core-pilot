@@ -67,7 +67,7 @@ TEST_CASE("connection slots release on scope exit and cannot exceed three", "[co
   TEST_ASSERT_EQUAL_UINT8(0, active.load());
 }
 
-TEST_CASE("model DTOs normalize, deduplicate and enforce action bounds", "[core_domain]") {
+TEST_CASE("model DTOs normalize and preserve ordered duplicate actions", "[core_domain]") {
   cJSON* json = cJSON_Parse("{\"id\":\" room_1 \",\"name\":\" Kitchen "
                             "\",\"actions\":[\"on|lamp|1\",\"on|lamp|1\"]}");
   ModelUpsert model{};
@@ -75,10 +75,10 @@ TEST_CASE("model DTOs normalize, deduplicate and enforce action bounds", "[core_
                     static_cast<int>(parse_model_upsert(json, ModelKind::scene, model)));
   TEST_ASSERT_EQUAL_STRING("room_1", model.id);
   TEST_ASSERT_EQUAL_STRING("Kitchen", model.name);
-  TEST_ASSERT_EQUAL_UINT32(1, model.detail_count);
+  TEST_ASSERT_EQUAL_UINT32(2, model.detail_count);
   char serialized[256]{};
   TEST_ASSERT_TRUE(serialize_model(model, ModelKind::scene, serialized, sizeof serialized));
-  TEST_ASSERT_NOT_NULL(std::strstr(serialized, "\"actions\":[\"on|lamp|1\"]"));
+  TEST_ASSERT_NOT_NULL(std::strstr(serialized, "\"actions\":[\"on|lamp|1\",\"on|lamp|1\"]"));
   TEST_ASSERT_FALSE(serialize_model(model, ModelKind::scene, serialized, 4));
   TEST_ASSERT_EQUAL_CHAR('\0', serialized[0]);
   model.detail_count = max_members + 1;
@@ -94,6 +94,16 @@ TEST_CASE("model DTOs normalize, deduplicate and enforce action bounds", "[core_
                      "6\",\"delay|7\",\"delay|8\"]}");
   TEST_ASSERT_EQUAL(static_cast<int>(ModelError::too_many_actions),
                     static_cast<int>(parse_model_upsert(json, ModelKind::scene, model)));
+  cJSON_Delete(json);
+  json = cJSON_Parse("{\"name\":\"Scheduled\",\"enabled\":true,\"trigger\":\"weekly|127|23:00|0\","
+                     "\"actions\":[\"on|lamp|0\"]}");
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::invalid_detail),
+                    static_cast<int>(parse_model_upsert(json, ModelKind::automation, model)));
+  cJSON_Delete(json);
+  json = cJSON_Parse("{\"name\":\"Scene action\",\"enabled\":true,"
+                     "\"trigger\":\"manual\",\"actions\":[\"scene|night\"]}");
+  TEST_ASSERT_EQUAL(static_cast<int>(ModelError::invalid_detail),
+                    static_cast<int>(parse_model_upsert(json, ModelKind::automation, model)));
   cJSON_Delete(json);
   char id[max_id + 1]{};
   TEST_ASSERT_EQUAL(static_cast<int>(ModelError::invalid_id),
