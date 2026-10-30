@@ -115,8 +115,9 @@ esp_err_t authHandler(httpd_req_t* req) {
     char response[128]{};
     std::snprintf(response, sizeof(response),
                   "{\"authentication_required\":true,\"bootstrap_state\":\"%s\","
-                  "\"session_seconds\":28800}",
-                  stateName(auth.bootstrap_state(now())));
+                  "\"session_seconds\":%llu}",
+                  stateName(auth.bootstrap_state(now())),
+                  static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
     return httpd_resp_sendstr(req, response);
   }
 
@@ -174,18 +175,37 @@ esp_err_t authHandler(httpd_req_t* req) {
   }
 
   char response[128]{};
-  std::strcpy(response, "{\"token\":\"");
-  std::strcat(response, token);
-  std::strcat(response, "\",\"expires_in\":28800}");
+  std::snprintf(response, sizeof(response), "{\"token\":\"%s\",\"expires_in\":%llu}", token,
+                static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
   const auto sent = httpd_resp_sendstr(req, response);
   mbedtls_platform_zeroize(token, sizeof(token));
   mbedtls_platform_zeroize(response, sizeof(response));
   return sent;
 }
 
+esp_err_t logoutHandler(httpd_req_t* req) {
+  char bearer[80]{};
+  bool revoked = false;
+  {
+    AuthLock lock;
+    revoked = lock.held() && header(req, "Authorization", bearer, sizeof(bearer)) &&
+              !std::strncmp(bearer, "Bearer ", 7) && auth.revoke(bearer + 7);
+  }
+  mbedtls_platform_zeroize(bearer, sizeof(bearer));
+  if (!revoked)
+    return reject(req, "401 Unauthorized", "Access required");
+  httpd_resp_set_type(req, "application/json");
+  return httpd_resp_sendstr(
+      req, "{\"accepted\":true,\"status\":\"revoked\",\"detail\":\"Session revoked.\"}");
+}
+
 esp_err_t dispatch(httpd_req_t* req) {
   httpd_resp_set_hdr(req, "Cache-Control", "no-store");
   httpd_resp_set_hdr(req, "Connection", "close");
+  httpd_resp_set_hdr(req, "X-Content-Type-Options", "nosniff");
+  httpd_resp_set_hdr(req, "Referrer-Policy", "no-referrer");
+  httpd_resp_set_hdr(req, "Cross-Origin-Resource-Policy", "same-origin");
+  httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
   char site[32]{}, origin[160]{}, host[128]{};
   if (!header(req, "Sec-Fetch-Site", site, sizeof(site)) || !std::strcmp(site, "cross-site") ||
       !header(req, "Origin", origin, sizeof(origin)) || !header(req, "Host", host, sizeof(host)) ||
@@ -220,13 +240,15 @@ esp_err_t dispatch(httpd_req_t* req) {
         network_service->status().mode == CoreNetwork::Mode::setup_ap) {
       const bool network_status =
           req->method == HTTP_GET && !std::strcmp(route.uri, "/api/v1/network");
+      const bool auth_logout =
+          req->method == HTTP_POST && !std::strcmp(route.uri, "/api/v1/auth/logout");
       const bool wifi_provision =
           req->method == HTTP_POST && !std::strcmp(route.uri, "/api/v1/network/wifi");
       const bool wifi_saved = !std::strcmp(route.uri, "/api/v1/network/wifi/saved") ||
                               !std::strcmp(route.uri, "/api/v1/network/wifi/forget");
       const bool wifi_scan = !std::strcmp(route.uri, "/api/v1/network/wifi/scan") ||
                              !std::strcmp(route.uri, "/api/v1/network/wifi/scan/page");
-      if (!network_status && !wifi_provision && !wifi_saved && !wifi_scan)
+      if (!network_status && !auth_logout && !wifi_provision && !wifi_saved && !wifi_scan)
         return reject(req, "403 Forbidden", "Unavailable during setup");
     }
   }
@@ -286,8 +308,13 @@ esp_err_t registerHttpAuthRoutes(httpd_handle_t server) {
                             .method = HTTP_POST,
                             .handler = authHandler,
                             .user_ctx = nullptr};
-  if (registerHttpAccessRoute(server, &status) != ESP_OK)
+  const httpd_uri_t logout{.uri = "/api/v1/auth/logout",
+                           .method = HTTP_POST,
+                           .handler = logoutHandler,
+                           .user_ctx = nullptr};
+  if (registerHttpAccessRoute(server, &status) != ESP_OK ||
+      registerHttpAccessRoute(server, &session) != ESP_OK)
     return ESP_FAIL;
-  return registerHttpAccessRoute(server, &session);
+  return registerHttpAccessRoute(server, &logout);
 }
 } // namespace core_pilot

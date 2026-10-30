@@ -21,7 +21,7 @@ it("does not mount dashboard content before access and hides it on expiry", asyn
       )
       .mockResolvedValueOnce(
         new Response(
-          JSON.stringify({ token: "a".repeat(64), expires_in: 28800 }),
+          JSON.stringify({ token: "a".repeat(64), expires_in: 1800 }),
         ),
       ),
   );

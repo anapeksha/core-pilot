@@ -90,6 +90,27 @@ bool Auth::authorize(const char* token, uint64_t now) {
   return valid;
 }
 
+bool Auth::revoke(const char* token) {
+  char candidate[65]{};
+  const size_t length = token ? strnlen(token, sizeof(candidate)) : 0;
+  if (token && length < sizeof(candidate))
+    std::memcpy(candidate, token, length);
+
+  bool revoked = false;
+  for (auto& session : sessions_) {
+    unsigned diff = static_cast<unsigned>(length != 64);
+    for (size_t i = 0; i < 64; ++i)
+      diff |= static_cast<unsigned char>(candidate[i] ^ session.token[i]);
+    const bool match = session.expires != 0 && diff == 0;
+    if (match) {
+      mbedtls_platform_zeroize(&session, sizeof(session));
+      revoked = true;
+    }
+  }
+  mbedtls_platform_zeroize(candidate, sizeof(candidate));
+  return revoked;
+}
+
 ExchangeResult Auth::exchange(const char* code, RandomSource& random, uint64_t now,
                               char (&token)[65]) {
   mbedtls_platform_zeroize(token, sizeof(token));

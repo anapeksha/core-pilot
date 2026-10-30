@@ -36,6 +36,27 @@ TEST_CASE("bootstrap is one-time and sessions expire", "[core_security]") {
   TEST_ASSERT_FALSE(auth.authorize(token, 11 + core_security::Auth::kSessionSeconds));
 }
 
+TEST_CASE("session revocation immediately zeroizes the matching bearer", "[core_security]") {
+  Random random;
+  core_security::Auth auth;
+  TEST_ASSERT_EQUAL(0, static_cast<int>(auth.begin(random, 10, capture)));
+  char token[65]{};
+  TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
+                    static_cast<int>(auth.exchange(physical_code, random, 11, token)));
+  TEST_ASSERT_TRUE(auth.authorize(token, 12));
+
+  char unknown[65]{};
+  std::memset(unknown, 'f', 64);
+  TEST_ASSERT_FALSE(auth.revoke(unknown));
+  TEST_ASSERT_TRUE(auth.authorize(token, 12));
+  TEST_ASSERT_FALSE(auth.revoke("short"));
+  TEST_ASSERT_TRUE(auth.authorize(token, 12));
+
+  TEST_ASSERT_TRUE(auth.revoke(token));
+  TEST_ASSERT_FALSE(auth.authorize(token, 12));
+  TEST_ASSERT_FALSE(auth.revoke(token));
+}
+
 TEST_CASE("failed bootstrap guesses require physical regeneration", "[core_security]") {
   Random random;
   core_security::Auth auth;

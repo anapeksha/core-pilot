@@ -31,7 +31,7 @@ describe("api client", () => {
     const token = "b".repeat(64);
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ token, expires_in: 28800 }))
+      .mockResolvedValueOnce(jsonResponse({ token, expires_in: 1800 }))
       .mockResolvedValueOnce(jsonResponse({ mode: "station" }))
       .mockResolvedValueOnce(jsonResponse({}, { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);

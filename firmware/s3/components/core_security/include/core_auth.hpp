@@ -12,7 +12,7 @@ public:
   static constexpr uint64_t kBootstrapSeconds = 300;
   static constexpr uint8_t kBootstrapAttemptLimit = 8;
 
-  static constexpr uint64_t kSessionSeconds = 8ULL * 60 * 60;
+  static constexpr uint64_t kSessionSeconds = 30ULL * 60;
   using BootstrapSink = void (*)(const char* code, uint64_t expires_at);
   ~Auth();
   Auth() = default;
@@ -25,6 +25,7 @@ public:
   uint64_t bootstrap_expires() const;
   void copy_bootstrap(char (&code)[17]) const;
   bool authorize(const char* token, uint64_t now);
+  bool revoke(const char* token);
   ExchangeResult exchange(const char* code, RandomSource& random, uint64_t now, char (&token)[65]);
 
 private:

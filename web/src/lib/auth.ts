@@ -18,7 +18,7 @@ export class AccessError extends Error {
   }
 }
 
-const sessionSeconds = 28800;
+const sessionSeconds = 1800;
 const tokenPattern = /^[0-9a-f]{64}$/;
 
 const [token, setToken] = createSignal<string | null>(null);
@@ -70,6 +70,27 @@ export function clearAccess() {
 export function authHeaders(): Record<string, string> {
   const current = token();
   return current ? { Authorization: `Bearer ${current}` } : {};
+}
+
+export async function logoutAccess(): Promise<void> {
+  const current = token();
+  try {
+    if (current)
+      await fetch("/api/v1/auth/logout", {
+        method: "POST",
+        credentials: "omit",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${current}`,
+          "Content-Type": "application/json",
+        },
+        body: "{}",
+      });
+  } catch {
+    // Logout is best effort; local access must still be cleared.
+  } finally {
+    clearAccess();
+  }
 }
 
 const accessMessages: Record<AccessErrorCode, string> = {
