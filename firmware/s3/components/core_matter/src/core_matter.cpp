@@ -587,9 +587,19 @@ esp_err_t CoreMatter::begin(const char* wifi_ssid, std::size_t wifi_ssid_length,
   terminal_signal_ =
       xSemaphoreCreateCountingStatic(kTerminalCommandDepth, 0, &terminal_signal_storage_);
   queue_ = xQueueCreateStatic(kQueueDepth, sizeof(QueueMessage), queue_buffer_, &queue_storage_);
-  if (terminal_signal_ == nullptr || queue_ == nullptr) {
+  const esp_timer_create_args_t recovery_timer_args{.callback = recoveryTimerCallback,
+                                                    .arg = this,
+                                                    .dispatch_method = ESP_TIMER_TASK,
+                                                    .name = "matter-recovery",
+                                                    .skip_unhandled_events = true};
+  const esp_err_t recovery_timer_result = esp_timer_create(&recovery_timer_args, &recovery_timer_);
+  if (terminal_signal_ == nullptr || queue_ == nullptr || recovery_timer_result != ESP_OK) {
+    if (recovery_timer_ != nullptr) {
+      esp_timer_delete(recovery_timer_);
+      recovery_timer_ = nullptr;
+    }
     clearSecrets();
-    return ESP_ERR_NO_MEM;
+    return recovery_timer_result == ESP_OK ? ESP_ERR_NO_MEM : recovery_timer_result;
   }
   taskENTER_CRITICAL(&status_lock_);
   status_.state = State::starting;
@@ -599,6 +609,8 @@ esp_err_t CoreMatter::begin(const char* wifi_ssid, std::size_t wifi_ssid_length,
     status_.state = State::failed;
     status_.last_error = ESP_ERR_NO_MEM;
     taskEXIT_CRITICAL(&status_lock_);
+    esp_timer_delete(recovery_timer_);
+    recovery_timer_ = nullptr;
     clearSecrets();
     return ESP_ERR_NO_MEM;
   }
@@ -1032,6 +1044,12 @@ void CoreMatter::taskEntry(void* context) {
   static_cast<CoreMatter*>(context)->run();
 }
 
+void CoreMatter::recoveryTimerCallback(void* context) {
+  auto* matter = static_cast<CoreMatter*>(context);
+  if (matter != nullptr)
+    static_cast<void>(matter->enqueueCommand(Command{.type = CommandType::connectivity_restored}));
+}
+
 void CoreMatter::onConnectivityRestored() {
   CoreMatter* matter = callback_owner_;
   if (matter != nullptr)
@@ -1079,6 +1097,10 @@ void CoreMatter::onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t) 
       matter->last_on_off_state_.known = false;
   }
   taskEXIT_CRITICAL(&matter->status_lock_);
+  if (matter->recovery_timer_ != nullptr) {
+    static_cast<void>(esp_timer_stop(matter->recovery_timer_));
+    static_cast<void>(esp_timer_start_once(matter->recovery_timer_, 2000000));
+  }
 }
 
 void CoreMatter::onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error) {
@@ -1199,8 +1221,13 @@ void CoreMatter::run() {
             lifecycle_.abandonShutdown(command_status_.node_id, active_unpair_generation_));
       }
       taskEXIT_CRITICAL(&status_lock_);
-      if (unpair_timed_out)
+      if (unpair_timed_out) {
         finishCommand(timed_out_operation_id, CommandState::failed, ESP_ERR_TIMEOUT);
+        if (recovery_timer_ != nullptr) {
+          static_cast<void>(esp_timer_stop(recovery_timer_));
+          static_cast<void>(esp_timer_start_once(recovery_timer_, 2000000));
+        }
+      }
       if (commissioning_state.load() == CommissioningState::pase && active_node_id_ != 0 &&
           esp_timer_get_time() - commissioning_started_us.load() > kCommissioningTimeoutUs) {
         esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
@@ -1371,9 +1398,19 @@ void CoreMatter::run() {
       std::uint64_t recovery_node = 0;
       while (lifecycle_.takeRecovery(recovery_node)) {
         taskEXIT_CRITICAL(&status_lock_);
-        static_cast<void>(enqueueCommand(
-            Command{.type = CommandType::subscribe_on_off, .node_id = recovery_node}));
+        const esp_err_t queued = enqueueCommand(
+            Command{.type = CommandType::subscribe_on_off, .node_id = recovery_node});
         taskENTER_CRITICAL(&status_lock_);
+        if (queued != ESP_OK) {
+          static_cast<void>(lifecycle_.requeueRecovery(recovery_node));
+          taskEXIT_CRITICAL(&status_lock_);
+          if (recovery_timer_ != nullptr) {
+            static_cast<void>(esp_timer_stop(recovery_timer_));
+            static_cast<void>(esp_timer_start_once(recovery_timer_, 2000000));
+          }
+          taskENTER_CRITICAL(&status_lock_);
+          break;
+        }
       }
       taskEXIT_CRITICAL(&status_lock_);
       continue;
@@ -1397,6 +1434,10 @@ void CoreMatter::run() {
         taskENTER_CRITICAL(&status_lock_);
         static_cast<void>(lifecycle_.terminated(command.node_id, generation, true));
         taskEXIT_CRITICAL(&status_lock_);
+        if (recovery_timer_ != nullptr) {
+          static_cast<void>(esp_timer_stop(recovery_timer_));
+          static_cast<void>(esp_timer_start_once(recovery_timer_, 2000000));
+        }
         ESP_LOGE(kTag, "failed to subscribe to Matter OnOff state: %s", esp_err_to_name(result));
       }
       continue;
@@ -1429,6 +1470,10 @@ void CoreMatter::run() {
         static_cast<void>(lifecycle_.abandonShutdown(command.node_id, active_unpair_generation_));
         taskEXIT_CRITICAL(&status_lock_);
         finishCommand(command.operation_id, CommandState::failed, result);
+        if (recovery_timer_ != nullptr) {
+          static_cast<void>(esp_timer_stop(recovery_timer_));
+          static_cast<void>(esp_timer_start_once(recovery_timer_, 2000000));
+        }
         ESP_LOGE(kTag, "failed to unpair Matter device: %s", esp_err_to_name(result));
       }
       continue;

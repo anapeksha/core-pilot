@@ -83,4 +83,8 @@ TEST_CASE("recovery is event driven and bounded to configured nodes", "[core_mat
   TEST_ASSERT_TRUE(table.takeRecovery(node_id));
   TEST_ASSERT_EQUAL_HEX64(0x11, node_id);
   TEST_ASSERT_FALSE(table.takeRecovery(node_id));
+  TEST_ASSERT_TRUE(table.requeueRecovery(0x11));
+  TEST_ASSERT_TRUE(table.takeRecovery(node_id));
+  TEST_ASSERT_EQUAL_HEX64(0x11, node_id);
+  TEST_ASSERT_FALSE(table.requeueRecovery(0x22));
 }

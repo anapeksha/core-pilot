@@ -185,6 +185,14 @@ public:
     return false;
   }
 
+  bool requeueRecovery(std::uint64_t node_id) {
+    NodeLifecycle* node = find(node_id);
+    if (node == nullptr || node->phase != SubscriptionPhase::recovering)
+      return false;
+    node->recovery_pending = true;
+    return true;
+  }
+
   const NodeLifecycle* snapshot(std::uint64_t node_id) const {
     return find(node_id);
   }

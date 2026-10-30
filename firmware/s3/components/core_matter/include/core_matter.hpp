@@ -3,6 +3,7 @@
 #include "core_matter_lifecycle.hpp"
 #include "core_matter_terminal_history.hpp"
 #include "esp_err.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
@@ -250,6 +251,7 @@ private:
   static_assert(std::is_trivially_copyable_v<QueueMessage>);
 
   static void taskEntry(void* context);
+  static void recoveryTimerCallback(void* context);
   static void onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error);
   static void onOnOffReport(std::uint64_t node_id, const chip::app::ConcreteDataAttributePath& path,
                             chip::TLV::TLVReader* data, const chip::app::StatusIB& status);
@@ -290,6 +292,7 @@ private:
   StaticSemaphore_t terminal_signal_storage_{};
   SemaphoreHandle_t terminal_signal_{nullptr};
   InvokeCallbackContext invoke_callback_context_{};
+  esp_timer_handle_t recovery_timer_{nullptr};
   std::uint32_t active_unpair_operation_id_{0};
   std::uint32_t active_unpair_generation_{0};
   std::int64_t active_unpair_started_us_{0};
