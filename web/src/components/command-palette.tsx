@@ -100,13 +100,13 @@ export function CommandPalette() {
         const result = await runMutation.mutateAsync({
           id: command.automationId,
         });
-        toast.success(result.detail ?? "Automation queued.");
+        toast.success(result.detail ?? "Automation completed.");
         close();
       } catch (error) {
         toast.error(
           error instanceof Error
             ? error.message
-            : "Automation could not be queued.",
+            : "Automation could not be completed.",
         );
       }
     }

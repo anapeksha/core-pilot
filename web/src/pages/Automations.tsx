@@ -815,15 +815,15 @@ export default function Automations() {
             <OperationStatus
               title={
                 runMutation.isPending
-                  ? "Requesting automation run"
+                  ? "Automation running"
                   : runMutation.isError
-                    ? "Automation run was not queued"
-                    : "Automation run queued"
+                    ? "Automation run failed"
+                    : "Automation run complete"
               }
               description={
                 runMutation.error?.message ??
                 runMutation.data?.detail ??
-                "The request is entering the bounded local automation queue."
+                "Waiting for the correlated automation operation to complete."
               }
               active={runMutation.isPending}
             />

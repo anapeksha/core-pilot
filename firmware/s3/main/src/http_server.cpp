@@ -1592,15 +1592,41 @@ esp_err_t automationOperationStatusHandler(httpd_req_t* request) {
     state = "failed";
     break;
   }
+  const char* failure = nullptr;
+  switch (operation.failure) {
+  case AutomationService::Failure::none:
+    break;
+  case AutomationService::Failure::invalid_action:
+    failure = "AUTOMATION_INVALID_ACTION";
+    break;
+  case AutomationService::Failure::target_unavailable:
+    failure = "AUTOMATION_TARGET_UNAVAILABLE";
+    break;
+  case AutomationService::Failure::matter_rejected:
+    failure = "AUTOMATION_MATTER_REJECTED";
+    break;
+  case AutomationService::Failure::matter_timeout:
+    failure = "AUTOMATION_MATTER_TIMEOUT";
+    break;
+  case AutomationService::Failure::matter_failed:
+    failure = "AUTOMATION_MATTER_FAILED";
+    break;
+  case AutomationService::Failure::notification_rejected:
+    failure = "AUTOMATION_NOTIFICATION_REJECTED";
+    break;
+  }
   cJSON* response = cJSON_CreateObject();
   cJSON_AddNumberToObject(response, "operation_id", operation.operation_id);
   cJSON_AddStringToObject(response, "state", state);
   cJSON_AddNumberToObject(response, "action_index", operation.action_index);
   cJSON_AddNumberToObject(response, "action_count", operation.action_count);
-  if (operation.failure == AutomationService::Failure::none)
+  if (failure == nullptr) {
+    cJSON_AddNullToObject(response, "failure");
     cJSON_AddNullToObject(response, "error");
-  else
+  } else {
+    cJSON_AddStringToObject(response, "failure", failure);
     cJSON_AddStringToObject(response, "error", esp_err_to_name(operation.last_error));
+  }
   return sendJson(request, response);
 }
 

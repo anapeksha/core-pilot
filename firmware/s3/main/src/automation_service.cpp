@@ -44,11 +44,26 @@ esp_err_t AutomationService::start() {
       1, core_storage::kMaxAutomationScheduleCheckpointsPayload, MALLOC_CAP_SPIRAM));
   checkpoint_encrypted_ =
       static_cast<std::uint8_t*>(heap_caps_calloc(1, kCheckpointEncryptedBytes, MALLOC_CAP_SPIRAM));
-  if (checkpoint_plaintext_ == nullptr || checkpoint_encrypted_ == nullptr) {
+  checkpoint_staging_ = static_cast<core_storage::AutomationScheduleCheckpoints*>(
+      heap_caps_calloc(1, sizeof(*checkpoint_staging_), MALLOC_CAP_SPIRAM));
+  schedule_candidates_ = static_cast<core_storage::AutomationScheduleCheckpoints*>(
+      heap_caps_calloc(1, sizeof(*schedule_candidates_), MALLOC_CAP_SPIRAM));
+  work_slots_ = static_cast<Work*>(heap_caps_calloc(kQueueDepth, sizeof(Work), MALLOC_CAP_SPIRAM));
+  const auto release_buffers = [this]() {
     heap_caps_free(checkpoint_plaintext_);
     heap_caps_free(checkpoint_encrypted_);
+    heap_caps_free(checkpoint_staging_);
+    heap_caps_free(schedule_candidates_);
+    heap_caps_free(work_slots_);
     checkpoint_plaintext_ = nullptr;
     checkpoint_encrypted_ = nullptr;
+    checkpoint_staging_ = nullptr;
+    schedule_candidates_ = nullptr;
+    work_slots_ = nullptr;
+  };
+  if (checkpoint_plaintext_ == nullptr || checkpoint_encrypted_ == nullptr ||
+      checkpoint_staging_ == nullptr || schedule_candidates_ == nullptr || work_slots_ == nullptr) {
+    release_buffers();
     return ESP_ERR_NO_MEM;
   }
   std::size_t size = 0;
@@ -63,6 +78,7 @@ esp_err_t AutomationService::start() {
       mbedtls_platform_zeroize(checkpoint_plaintext_,
                                core_storage::kMaxAutomationScheduleCheckpointsPayload);
       mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
+      release_buffers();
       return ESP_ERR_INVALID_STATE;
     }
     checkpoint_generation_ = metadata.generation;
@@ -70,6 +86,7 @@ esp_err_t AutomationService::start() {
     mbedtls_platform_zeroize(checkpoint_plaintext_,
                              core_storage::kMaxAutomationScheduleCheckpointsPayload);
     mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
+    release_buffers();
     return ESP_ERR_INVALID_STATE;
   }
 
@@ -77,20 +94,35 @@ esp_err_t AutomationService::start() {
                            core_storage::kMaxAutomationScheduleCheckpointsPayload);
   mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
 
-  queue_ = xQueueCreateStatic(kQueueDepth, sizeof(Work), queue_storage_, &queue_buffer_);
-  if (queue_ == nullptr)
+  queue_ = xQueueCreateStatic(kQueueDepth, sizeof(WorkSlot), queue_storage_, &queue_buffer_);
+  if (queue_ == nullptr) {
+    release_buffers();
     return ESP_ERR_NO_MEM;
-  task_ =
-      xTaskCreateStaticPinnedToCore(taskEntry, "automation", kTaskStackBytes / sizeof(StackType_t),
-                                    this, 3, task_stack_, &task_buffer_, 0);
-  if (task_ == nullptr)
-    return ESP_ERR_NO_MEM;
+  }
   const esp_timer_create_args_t timer_args{.callback = minuteTimerCallback,
                                            .arg = this,
                                            .dispatch_method = ESP_TIMER_TASK,
                                            .name = "automation-minute",
                                            .skip_unhandled_events = true};
-  return esp_timer_create(&timer_args, &minute_timer_);
+  const esp_err_t timer_result = esp_timer_create(&timer_args, &minute_timer_);
+  if (timer_result != ESP_OK) {
+    vQueueDelete(queue_);
+    queue_ = nullptr;
+    release_buffers();
+    return timer_result;
+  }
+  task_ =
+      xTaskCreateStaticPinnedToCore(taskEntry, "automation", kTaskStackBytes / sizeof(StackType_t),
+                                    this, 3, task_stack_, &task_buffer_, 0);
+  if (task_ == nullptr) {
+    esp_timer_delete(minute_timer_);
+    minute_timer_ = nullptr;
+    vQueueDelete(queue_);
+    queue_ = nullptr;
+    release_buffers();
+    return ESP_ERR_NO_MEM;
+  }
+  return ESP_OK;
 }
 
 void AutomationService::timeSynchronized(std::time_t timestamp) {
@@ -120,28 +152,49 @@ AutomationService::SubmitResult AutomationService::submit(const char* id,
 
 AutomationService::SubmitResult
 AutomationService::submitModel(const core_domain::ModelUpsert& automation, bool scheduled,
-                               std::uint32_t& operation_id) {
+                               std::uint32_t& operation_id, std::uint64_t utc_minute) {
   operation_id = 0;
   if (!automation.enabled)
     return SubmitResult::disabled;
-  Work work{};
+  WorkSlot slot = 0;
+  if (!acquireWorkSlot(slot))
+    return SubmitResult::queue_full;
+  Work& work = work_slots_[slot];
   work.scheduled = scheduled;
   char scene_stack[kMaxSceneDepth][core_domain::max_id + 1]{};
   const auto flattened = flatten(automation, work, scene_stack, 0);
-  if (flattened != SubmitResult::queued)
+  if (flattened != SubmitResult::queued) {
+    releaseWorkSlot(slot);
     return flattened;
+  }
 
   std::uint32_t candidate = next_operation_id_.fetch_add(1, std::memory_order_relaxed);
   if (candidate == 0)
     candidate = next_operation_id_.fetch_add(1, std::memory_order_relaxed);
   work.operation_id = candidate;
-  retain(Status{.operation_id = candidate,
-                .state = State::queued,
-                .failure = Failure::none,
-                .action_index = 0,
-                .action_count = work.action_count,
-                .last_error = ESP_OK});
-  if (xQueueSend(queue_, &work, 0) != pdTRUE) {
+  if (!retain(Status{.operation_id = candidate,
+                     .state = State::queued,
+                     .failure = Failure::none,
+                     .action_index = 0,
+                     .action_count = work.action_count,
+                     .last_error = ESP_OK})) {
+    releaseWorkSlot(slot);
+    return SubmitResult::queue_full;
+  }
+  if (scheduled && (utc_minute == 0 || !checkpoint(automation, utc_minute))) {
+    releaseWorkSlot(slot);
+    taskENTER_CRITICAL(&status_lock_);
+    for (auto& retained : statuses_) {
+      if (retained.operation_id == candidate) {
+        retained = {};
+        break;
+      }
+    }
+    taskEXIT_CRITICAL(&status_lock_);
+    return SubmitResult::queue_full;
+  }
+  if (xQueueSend(queue_, &slot, 0) != pdTRUE) {
+    releaseWorkSlot(slot);
     taskENTER_CRITICAL(&status_lock_);
     for (auto& retained : statuses_) {
       if (retained.operation_id == candidate) {
@@ -248,9 +301,12 @@ void AutomationService::taskLoop() {
     const std::time_t timestamp = synchronized_time_.exchange(0, std::memory_order_acq_rel);
     if (timestamp >= 1704067200)
       evaluateSchedules(timestamp);
-    Work work{};
-    while (xQueueReceive(queue_, &work, 0) == pdTRUE)
-      run(work);
+    WorkSlot slot = 0;
+    while (xQueueReceive(queue_, &slot, 0) == pdTRUE) {
+      if (slot < kQueueDepth && work_slot_used_[slot])
+        run(work_slots_[slot]);
+      releaseWorkSlot(slot);
+    }
   }
 }
 
@@ -265,12 +321,13 @@ bool AutomationService::armMinuteTimer(std::time_t timestamp) {
 void AutomationService::evaluateSchedules(std::time_t timestamp) {
   armMinuteTimer(timestamp);
   const std::uint64_t utc_minute = static_cast<std::uint64_t>(timestamp) / 60;
-  core_storage::AutomationScheduleCheckpoints candidates{};
+  mbedtls_platform_zeroize(schedule_candidates_, sizeof(*schedule_candidates_));
   std::size_t visited = 0;
-  if (!models_.visit(core_domain::ModelKind::automation, collectScheduled, &candidates, visited))
+  if (!models_.visit(core_domain::ModelKind::automation, collectScheduled, schedule_candidates_,
+                     visited))
     return;
-  for (std::size_t index = 0; index < candidates.count; ++index) {
-    const auto& candidate = candidates.entries[index];
+  for (std::size_t index = 0; index < schedule_candidates_->count; ++index) {
+    const auto& candidate = schedule_candidates_->entries[index];
     core_domain::TriggerSpec trigger{};
     if (!core_domain::parse_trigger_spec(candidate.exact_trigger, trigger))
       continue;
@@ -289,29 +346,30 @@ void AutomationService::evaluateSchedules(std::time_t timestamp) {
       continue;
     core_domain::ModelUpsert model{};
     if (!models_.find(core_domain::ModelKind::automation, candidate.automation_id, model) ||
-        std::strcmp(model.trigger, candidate.exact_trigger) != 0 || !checkpoint(model, utc_minute))
+        std::strcmp(model.trigger, candidate.exact_trigger) != 0)
       continue;
     std::uint32_t operation_id = 0;
-    submitModel(model, true, operation_id);
+    static_cast<void>(submitModel(model, true, operation_id, utc_minute));
   }
 }
 
 bool AutomationService::checkpoint(const core_domain::ModelUpsert& model,
                                    std::uint64_t utc_minute) {
+  *checkpoint_staging_ = checkpoints_;
   std::size_t index = 0;
-  while (index < checkpoints_.count &&
-         (std::strcmp(checkpoints_.entries[index].automation_id, model.id) != 0 ||
-          std::strcmp(checkpoints_.entries[index].exact_trigger, model.trigger) != 0))
+  while (index < checkpoint_staging_->count &&
+         (std::strcmp(checkpoint_staging_->entries[index].automation_id, model.id) != 0 ||
+          std::strcmp(checkpoint_staging_->entries[index].exact_trigger, model.trigger) != 0))
     ++index;
-  if (index < checkpoints_.count &&
-      checkpoints_.entries[index].last_utc_occurrence_minute == utc_minute)
+  if (index < checkpoint_staging_->count &&
+      checkpoint_staging_->entries[index].last_utc_occurrence_minute == utc_minute)
     return false;
-  if (index == checkpoints_.count) {
-    if (checkpoints_.count == core_storage::kMaxAutomationScheduleCheckpoints)
+  if (index == checkpoint_staging_->count) {
+    if (checkpoint_staging_->count == core_storage::kMaxAutomationScheduleCheckpoints)
       return false;
-    ++checkpoints_.count;
+    ++checkpoint_staging_->count;
   }
-  auto& entry = checkpoints_.entries[index];
+  auto& entry = checkpoint_staging_->entries[index];
   std::strncpy(entry.automation_id, model.id, core_storage::kMaxAutomationIdBytes);
   std::strncpy(entry.exact_trigger, model.trigger, core_storage::kMaxAutomationTriggerBytes);
   entry.last_utc_occurrence_minute = utc_minute;
@@ -321,8 +379,8 @@ bool AutomationService::checkpoint(const core_domain::ModelUpsert& model,
   mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
   std::size_t written = 0;
   const auto encoded = core_storage::encode_automation_schedule_checkpoints(
-      checkpoints_, checkpoint_plaintext_, core_storage::kMaxAutomationScheduleCheckpointsPayload,
-      written);
+      *checkpoint_staging_, checkpoint_plaintext_,
+      core_storage::kMaxAutomationScheduleCheckpointsPayload, written);
   if (encoded != core_security::Status::Ok)
     return false;
   const auto result =
@@ -333,8 +391,33 @@ bool AutomationService::checkpoint(const core_domain::ModelUpsert& model,
   mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
   if (result != core_security::Status::Ok)
     return false;
+  checkpoints_ = *checkpoint_staging_;
   ++checkpoint_generation_;
   return true;
+}
+
+bool AutomationService::acquireWorkSlot(WorkSlot& slot) {
+  taskENTER_CRITICAL(&status_lock_);
+  for (WorkSlot index = 0; index < kQueueDepth; ++index) {
+    if (!work_slot_used_[index]) {
+      work_slot_used_[index] = true;
+      slot = index;
+      taskEXIT_CRITICAL(&status_lock_);
+      mbedtls_platform_zeroize(&work_slots_[index], sizeof(Work));
+      return true;
+    }
+  }
+  taskEXIT_CRITICAL(&status_lock_);
+  return false;
+}
+
+void AutomationService::releaseWorkSlot(WorkSlot slot) {
+  if (slot >= kQueueDepth)
+    return;
+  mbedtls_platform_zeroize(&work_slots_[slot], sizeof(Work));
+  taskENTER_CRITICAL(&status_lock_);
+  work_slot_used_[slot] = false;
+  taskEXIT_CRITICAL(&status_lock_);
 }
 
 void AutomationService::run(const Work& work) {
@@ -396,11 +479,20 @@ void AutomationService::run(const Work& work) {
                                               : "A manual automation completed successfully.");
 }
 
-void AutomationService::retain(const Status& status_value) {
+bool AutomationService::retain(const Status& status_value) {
   taskENTER_CRITICAL(&status_lock_);
-  statuses_[next_status_] = status_value;
-  next_status_ = (next_status_ + 1) % kRetainedStatuses;
+  for (std::size_t offset = 0; offset < kRetainedStatuses; ++offset) {
+    const std::size_t index = (next_status_ + offset) % kRetainedStatuses;
+    const auto state = statuses_[index].state;
+    if (statuses_[index].operation_id == 0 || state == State::complete || state == State::failed) {
+      statuses_[index] = status_value;
+      next_status_ = (index + 1) % kRetainedStatuses;
+      taskEXIT_CRITICAL(&status_lock_);
+      return true;
+    }
+  }
   taskEXIT_CRITICAL(&status_lock_);
+  return false;
 }
 
 void AutomationService::update(std::uint32_t operation_id, State state, Failure failure,

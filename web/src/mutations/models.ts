@@ -4,6 +4,7 @@ import {
   deleteGroup,
   deleteRoom,
   deleteScene,
+  loadAutomationOperation,
   runAutomation,
   requireAccepted,
   upsertAutomation,
@@ -99,11 +100,43 @@ export function automationUpsertMutation() {
   }));
 }
 
+const automationPollIntervalMs = 500;
+const automationPollLimit = 1200;
+
+async function runAutomationToTerminal(request: ModelDeleteRequest) {
+  const accepted = requireAccepted(await runAutomation(request));
+  if (
+    !Number.isInteger(accepted.operation_id) ||
+    (accepted.operation_id ?? 0) <= 0
+  )
+    throw new Error(
+      "The device accepted the automation without an operation ID.",
+    );
+
+  for (let attempt = 0; attempt < automationPollLimit; attempt += 1) {
+    const operation = await loadAutomationOperation(accepted.operation_id!);
+    if (operation.state === "complete")
+      return {
+        ...accepted,
+        detail: "The automation completed successfully.",
+      };
+    if (operation.state === "failed")
+      throw new Error(
+        operation.failure ??
+          operation.error ??
+          "The automation operation failed.",
+      );
+    await new Promise<void>((resolve) =>
+      window.setTimeout(resolve, automationPollIntervalMs),
+    );
+  }
+  throw new Error("The automation did not complete within ten minutes.");
+}
+
 export function automationRunMutation() {
   return createMutation(() => ({
     mutationKey: ["automations", "run"],
-    mutationFn: async (request: ModelDeleteRequest) =>
-      requireAccepted(await runAutomation(request)),
+    mutationFn: runAutomationToTerminal,
   }));
 }
 

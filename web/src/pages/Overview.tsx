@@ -409,12 +409,12 @@ export default function Overview() {
   const runAutomation = async (id: string) => {
     try {
       const result = await runMutation.mutateAsync({ id });
-      toast.success(result.detail ?? "Automation queued.");
+      toast.success(result.detail ?? "Automation completed.");
     } catch (error) {
       const detail =
         error instanceof Error
           ? error.message
-          : "Automation could not be queued.";
+          : "Automation could not be completed.";
       toast.error(detail);
     }
   };

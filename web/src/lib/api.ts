@@ -706,6 +706,7 @@ export type AutomationOperationStatus = {
   state: "queued" | "running" | "complete" | "failed";
   action_index: number;
   action_count: number;
+  failure: string | null;
   error: string | null;
 };
 
