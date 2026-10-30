@@ -688,6 +688,7 @@ describe("api client", () => {
       actions: ["notify|Morning automation"],
     });
     await api.runAutomation(sampleDelete);
+    await api.loadAutomationOperation(101);
     await api.deleteAutomation(sampleDelete);
     await api.loadMatter();
     await api.commissionMatter({
@@ -749,6 +750,7 @@ describe("api client", () => {
       "/api/v1/automations",
       "/api/v1/automations/upsert",
       "/api/v1/automations/run",
+      "/api/v1/automations/operations/status",
       "/api/v1/automations/delete",
       "/api/v1/matter",
       "/api/v1/matter/commission",
@@ -782,6 +784,7 @@ describe("api client", () => {
       "/api/v1/scenes/delete",
       "/api/v1/automations/upsert",
       "/api/v1/automations/run",
+      "/api/v1/automations/operations/status",
       "/api/v1/automations/delete",
       "/api/v1/matter/commission",
       "/api/v1/matter/thread/dataset",
@@ -797,9 +800,9 @@ describe("api client", () => {
     expect(calls[7].init?.body).toBe(
       '{"device_id":"1234","endpoint_id":1,"on":true}',
     );
-    expect(calls[23].init?.body).toBe(
+    expect(calls[24].init?.body).toBe(
       '{"active_dataset_tlvs_hex":"0e080000000000010000"}',
     );
-    expect(calls[29].init?.body).toContain("aGVsbG8=");
+    expect(calls[30].init?.body).toContain("aGVsbG8=");
   });
 });

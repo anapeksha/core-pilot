@@ -395,6 +395,17 @@ async function handleMutation(
       accepted: true,
       status: "queued",
       detail: "Automation queued for bounded local evaluation",
+      operation_id: 101,
+    });
+  }
+  if (path === "/api/v1/automations/operations/status") {
+    return json(route, {
+      operation_id: Number(body.operation_id),
+      state: "complete",
+      action_index: 1,
+      action_count: 1,
+      failure: null,
+      error: null,
     });
   }
   if (path === "/api/v1/automations/delete") {
@@ -697,7 +708,10 @@ test("provides a bounded operational home dashboard", async ({ page }) => {
   await page.getByRole("button", { name: "Welcome home" }).click();
   await expect
     .poll(() => state.posts.at(-1)?.path)
-    .toBe("/api/v1/automations/run");
+    .toBe("/api/v1/automations/operations/status");
+  expect(
+    state.posts.some((post) => post.path === "/api/v1/automations/run"),
+  ).toBe(true);
   await expect(page.getByRole("link", { name: "View activity" })).toBeVisible();
 });
 
@@ -789,7 +803,7 @@ test("uses the keyboard command palette for bounded available actions", async ({
   await automationOption.click();
   await expect
     .poll(() => state.posts.at(-1)?.path)
-    .toBe("/api/v1/automations/run");
+    .toBe("/api/v1/automations/operations/status");
 
   await page.getByRole("button", { name: "Open command palette" }).click();
   const shortcutSearch = page
@@ -1093,12 +1107,19 @@ test("exercises local model CRUD pages for rooms, groups, scenes, and automation
   await page.getByRole("button", { name: "Run now" }).last().click();
   await expect(
     page
-      .getByRole("region", { name: "Automation run queued" })
-      .getByText("Automation queued for bounded local evaluation"),
+      .getByRole("region", { name: "Automation run complete" })
+      .getByText("The automation completed successfully."),
   ).toBeVisible();
+  expect(
+    state.posts.some(
+      (post) =>
+        post.path === "/api/v1/automations/run" &&
+        post.body.id === "sunset-routine",
+    ),
+  ).toBe(true);
   expect(state.posts.at(-1)).toMatchObject({
-    path: "/api/v1/automations/run",
-    body: { id: "sunset-routine" },
+    path: "/api/v1/automations/operations/status",
+    body: { operation_id: 101 },
   });
 });
 

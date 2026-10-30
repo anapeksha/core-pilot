@@ -992,6 +992,9 @@ const requestSchemas: Readonly<Record<string, z.ZodType>> = {
   "/api/v1/automations/upsert": automationUpsertRequestSchema,
   "/api/v1/automations/delete": modelDeleteRequestSchema,
   "/api/v1/automations/run": modelDeleteRequestSchema,
+  "/api/v1/automations/operations/status": z
+    .object({ operation_id: z.number().int().min(1).max(0xffffffff) })
+    .strict(),
   "/api/v1/matter/commission": matterCommissionRequestSchema,
   "/api/v1/matter/commission/cancel": matterCommissionCancelRequestSchema,
   "/api/v1/devices": matterDeviceMutationSchema,
