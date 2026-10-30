@@ -531,23 +531,28 @@ void Application::run() {
       } else {
         const auto discovery = matter.discoveryStatus();
         if (!discovery.active) {
-          if (discovery.complete && discovery_nodes[discovery_node_index] != last_removed_node_id) {
+          if (discovery.complete && discovery.count != 0 &&
+              discovery_nodes[discovery_node_index] != last_removed_node_id) {
             core_storage::MatterDevice endpoints[core_storage::kMaxMatterDevices]{};
             const auto count = std::min(discovery.count,
                                         static_cast<std::size_t>(core_storage::kMaxMatterDevices));
+            bool has_on_off = false;
             for (std::size_t index = 0; index < count; ++index) {
               endpoints[index] = {discovery.endpoints[index].node_id,
                                   discovery.endpoints[index].endpoint_id,
                                   discovery.endpoints[index].capabilities,
                                   true,
                                   {}};
+              has_on_off =
+                  has_on_off || (discovery.endpoints[index].capabilities & CoreMatter::on_off) != 0;
             }
             const auto result =
                 devices.replaceNode(discovery_nodes[discovery_node_index], endpoints, count);
             if (result != core_security::Status::Ok) {
               ESP_LOGE(kTag, "failed to persist Matter endpoint discovery: %d",
                        static_cast<int>(result));
-            } else if (matter.subscribeOnOff(discovery_nodes[discovery_node_index]) != ESP_OK) {
+            } else if (has_on_off &&
+                       matter.subscribeOnOff(discovery_nodes[discovery_node_index]) != ESP_OK) {
               ESP_LOGW(kTag, "failed to queue Matter OnOff subscription");
             }
             discovery_attempts = 0;

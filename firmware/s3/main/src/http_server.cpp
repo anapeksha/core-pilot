@@ -1544,8 +1544,8 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   cJSON_AddBoolToObject(response, "fabric_configured", status.fabric_configured);
   cJSON_AddNumberToObject(response, "subscriptions_active", status.subscriptions_active);
   cJSON_AddBoolToObject(response, "ipv6_ready", runtime.network.status().has_ipv6);
-  cJSON_AddBoolToObject(response, "mdns_ready", status.case_ready);
-  cJSON_AddBoolToObject(response, "dns_sd_ready", status.case_ready);
+  cJSON_AddBoolToObject(response, "mdns_ready", false);
+  cJSON_AddBoolToObject(response, "dns_sd_ready", false);
   cJSON_AddBoolToObject(response, "thread_ready",
                         status.border_router_ready && status.thread_attached);
   cJSON_AddBoolToObject(response, "thread_dataset_configured", status.thread_dataset_configured);
@@ -1634,8 +1634,8 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
                               ? "Matter commissioning, CASE, endpoint discovery, and subscriptions "
                                 "are operational."
                           : ready && status.fabric_configured
-                              ? "Matter controller fabric is restored and ready for device "
-                                "operations."
+                              ? "Matter controller fabric is restored; operational device recovery "
+                                "is pending."
                           : ready
                               ? "Matter controller is ready to commission a device."
                               : "Matter controller is unavailable; dashboard remains operational.");

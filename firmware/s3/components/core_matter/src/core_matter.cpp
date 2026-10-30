@@ -59,6 +59,7 @@ enum class CancellationReason : std::uint8_t {
 };
 
 std::atomic<CancellationReason> cancellation_reason{CancellationReason::none};
+std::atomic_bool operational_case_active{false};
 std::atomic_bool on_off_subscription_active{false};
 std::atomic<std::uint64_t> reported_on_off_node_id{0};
 std::atomic<std::uint16_t> reported_on_off_endpoint_id{0};
@@ -111,6 +112,7 @@ void onSubscriptionEstablished(std::uint64_t, std::uint32_t) {
 }
 
 void onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t) {
+  operational_case_active.store(false);
   on_off_subscription_active.store(false);
   if (reported_on_off_node_id.load() == node_id)
     reported_on_off_known.store(false);
@@ -972,7 +974,7 @@ CoreMatter::Status CoreMatter::status() const {
   snapshot.border_router_ready = border_router_initialized.load();
   taskEXIT_CRITICAL(const_cast<portMUX_TYPE*>(&status_lock_));
   snapshot.subscriptions_active = on_off_subscription_active.load() ? 1 : 0;
-  snapshot.case_ready = snapshot.subscriptions_active != 0;
+  snapshot.case_ready = operational_case_active.load();
   const auto callback_state = commissioning_state.load();
   if (callback_state != CommissioningState::idle) {
     snapshot.commissioning_state = callback_state;
@@ -1107,6 +1109,7 @@ void CoreMatter::run() {
       taskENTER_CRITICAL(&status_lock_);
       if (discovery_status_.active &&
           esp_timer_get_time() - discovery_started_us_ > kDiscoveryTimeoutUs) {
+        operational_case_active.store(false);
         discovery_status_.active = false;
         discovery_status_.complete = false;
         discovery_status_.last_error = ESP_ERR_TIMEOUT;
@@ -1213,7 +1216,8 @@ void CoreMatter::run() {
               const chip::Platform::ScopedMemoryBufferWithSize<chip::app::AttributePathParams>&,
               const chip::Platform::ScopedMemoryBufferWithSize<chip::app::EventPathParams>&) {
             taskENTER_CRITICAL(&status_lock_);
-            if (discovery_status_.operation_id == operation_id) {
+            if (discovery_status_.active && discovery_status_.operation_id == operation_id) {
+              operational_case_active.store(true);
               discovery_status_.active = false;
               discovery_status_.complete = true;
               discovery_status_.last_error = ESP_OK;
@@ -1222,7 +1226,8 @@ void CoreMatter::run() {
           };
       const auto error_callback = [this, operation_id](std::uint64_t, CHIP_ERROR error) {
         taskENTER_CRITICAL(&status_lock_);
-        if (discovery_status_.operation_id == operation_id) {
+        if (discovery_status_.active && discovery_status_.operation_id == operation_id) {
+          operational_case_active.store(false);
           discovery_status_.active = false;
           discovery_status_.complete = false;
           discovery_status_.last_error = error == CHIP_ERROR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL;
@@ -1232,7 +1237,8 @@ void CoreMatter::run() {
       const auto connect_failure = [this, operation_id](void*, const chip::ScopedNodeId&,
                                                         CHIP_ERROR error) {
         taskENTER_CRITICAL(&status_lock_);
-        if (discovery_status_.operation_id == operation_id) {
+        if (discovery_status_.active && discovery_status_.operation_id == operation_id) {
+          operational_case_active.store(false);
           discovery_status_.active = false;
           discovery_status_.complete = false;
           discovery_status_.last_error = error == CHIP_ERROR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL;
