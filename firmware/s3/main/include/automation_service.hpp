@@ -67,6 +67,8 @@ public:
   SubmitResult submit(const char* id, std::uint32_t& operation_id);
   SubmitResult submit(const char* id);
   bool status(std::uint32_t operation_id, Status& output) const;
+  bool ready() const;
+  esp_err_t startupError() const;
 
 private:
   static constexpr std::size_t kQueueDepth = 4;
@@ -129,6 +131,7 @@ private:
   StackType_t task_stack_[kTaskStackBytes / sizeof(StackType_t)]{};
   TaskHandle_t task_{nullptr};
   std::atomic_uint32_t next_operation_id_{1};
+  std::atomic<esp_err_t> startup_error_{ESP_ERR_INVALID_STATE};
   mutable portMUX_TYPE status_lock_ = portMUX_INITIALIZER_UNLOCKED;
   Status statuses_[kRetainedStatuses]{};
   std::size_t next_status_{};

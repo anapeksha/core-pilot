@@ -39,16 +39,18 @@ AutomationService::AutomationService(ModelRepository& models, DeviceRegistry& de
 esp_err_t AutomationService::start() {
   if (task_ != nullptr)
     return ESP_OK;
+  startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
+  constexpr std::uint32_t capabilities = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 
-  checkpoint_plaintext_ = static_cast<std::uint8_t*>(heap_caps_calloc(
-      1, core_storage::kMaxAutomationScheduleCheckpointsPayload, MALLOC_CAP_SPIRAM));
+  checkpoint_plaintext_ = static_cast<std::uint8_t*>(
+      heap_caps_calloc(1, core_storage::kMaxAutomationScheduleCheckpointsPayload, capabilities));
   checkpoint_encrypted_ =
-      static_cast<std::uint8_t*>(heap_caps_calloc(1, kCheckpointEncryptedBytes, MALLOC_CAP_SPIRAM));
+      static_cast<std::uint8_t*>(heap_caps_calloc(1, kCheckpointEncryptedBytes, capabilities));
   checkpoint_staging_ = static_cast<core_storage::AutomationScheduleCheckpoints*>(
-      heap_caps_calloc(1, sizeof(*checkpoint_staging_), MALLOC_CAP_SPIRAM));
+      heap_caps_calloc(1, sizeof(*checkpoint_staging_), capabilities));
   schedule_candidates_ = static_cast<core_storage::AutomationScheduleCheckpoints*>(
-      heap_caps_calloc(1, sizeof(*schedule_candidates_), MALLOC_CAP_SPIRAM));
-  work_slots_ = static_cast<Work*>(heap_caps_calloc(kQueueDepth, sizeof(Work), MALLOC_CAP_SPIRAM));
+      heap_caps_calloc(1, sizeof(*schedule_candidates_), capabilities));
+  work_slots_ = static_cast<Work*>(heap_caps_calloc(kQueueDepth, sizeof(Work), capabilities));
   const auto release_buffers = [this]() {
     heap_caps_free(checkpoint_plaintext_);
     heap_caps_free(checkpoint_encrypted_);
@@ -64,6 +66,7 @@ esp_err_t AutomationService::start() {
   if (checkpoint_plaintext_ == nullptr || checkpoint_encrypted_ == nullptr ||
       checkpoint_staging_ == nullptr || schedule_candidates_ == nullptr || work_slots_ == nullptr) {
     release_buffers();
+    startup_error_.store(ESP_ERR_NO_MEM, std::memory_order_release);
     return ESP_ERR_NO_MEM;
   }
   std::size_t size = 0;
@@ -79,6 +82,7 @@ esp_err_t AutomationService::start() {
                                core_storage::kMaxAutomationScheduleCheckpointsPayload);
       mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
       release_buffers();
+      startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
       return ESP_ERR_INVALID_STATE;
     }
     checkpoint_generation_ = metadata.generation;
@@ -87,6 +91,7 @@ esp_err_t AutomationService::start() {
                              core_storage::kMaxAutomationScheduleCheckpointsPayload);
     mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
     release_buffers();
+    startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
     return ESP_ERR_INVALID_STATE;
   }
 
@@ -97,6 +102,7 @@ esp_err_t AutomationService::start() {
   queue_ = xQueueCreateStatic(kQueueDepth, sizeof(WorkSlot), queue_storage_, &queue_buffer_);
   if (queue_ == nullptr) {
     release_buffers();
+    startup_error_.store(ESP_ERR_NO_MEM, std::memory_order_release);
     return ESP_ERR_NO_MEM;
   }
   const esp_timer_create_args_t timer_args{.callback = minuteTimerCallback,
@@ -109,6 +115,7 @@ esp_err_t AutomationService::start() {
     vQueueDelete(queue_);
     queue_ = nullptr;
     release_buffers();
+    startup_error_.store(timer_result, std::memory_order_release);
     return timer_result;
   }
   task_ =
@@ -120,8 +127,10 @@ esp_err_t AutomationService::start() {
     vQueueDelete(queue_);
     queue_ = nullptr;
     release_buffers();
+    startup_error_.store(ESP_ERR_NO_MEM, std::memory_order_release);
     return ESP_ERR_NO_MEM;
   }
+  startup_error_.store(ESP_OK, std::memory_order_release);
   return ESP_OK;
 }
 
@@ -217,6 +226,15 @@ AutomationService::submitModel(const core_domain::ModelUpsert& automation, bool 
 AutomationService::SubmitResult AutomationService::submit(const char* id) {
   std::uint32_t operation_id = 0;
   return submit(id, operation_id);
+}
+
+bool AutomationService::ready() const {
+  return startup_error_.load(std::memory_order_acquire) == ESP_OK && task_ != nullptr &&
+         queue_ != nullptr;
+}
+
+esp_err_t AutomationService::startupError() const {
+  return startup_error_.load(std::memory_order_acquire);
 }
 
 bool AutomationService::status(std::uint32_t operation_id, Status& output) const {

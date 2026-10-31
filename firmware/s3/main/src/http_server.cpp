@@ -548,6 +548,10 @@ esp_err_t systemHandler(httpd_req_t* request, const HttpRuntime& runtime) {
                               ? "ready"
                               : "not-ready");
   cJSON_AddStringToObject(response, "ai", ai_configured ? "configured" : "disabled");
+  cJSON_AddStringToObject(response, "automations",
+                          runtime.automations.ready() ? "ready" : "not-ready");
+  cJSON_AddStringToObject(response, "automations_startup_error",
+                          esp_err_to_name(runtime.automations.startupError()));
   cJSON_AddStringToObject(response, "ota", "signed-update");
   cJSON_AddStringToObject(response, "ota_phase", otaState(ota.state));
   cJSON_AddNumberToObject(response, "ota_progress_bytes", ota.written_bytes);
