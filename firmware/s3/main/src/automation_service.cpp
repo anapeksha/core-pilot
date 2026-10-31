@@ -42,6 +42,7 @@ esp_err_t AutomationService::start() {
   if (task_ != nullptr)
     return ESP_OK;
   startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
+  schedule_startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
   constexpr std::uint32_t capabilities = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT;
 
   checkpoint_plaintext_ = static_cast<std::uint8_t*>(
@@ -92,36 +93,25 @@ esp_err_t AutomationService::start() {
                                          checkpoint_plaintext_, written, random_,
                                          checkpoint_encrypted_, kCheckpointEncryptedBytes)
               : encoded;
-      if (recovered == core_security::Status::Ok)
+      if (recovered == core_security::Status::Ok) {
         checkpoint_generation_ = metadata.generation + 1;
-      else {
-        mbedtls_platform_zeroize(checkpoint_plaintext_,
-                                 core_storage::kMaxAutomationScheduleCheckpointsPayload);
-        mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
-        release_buffers();
-        startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
-        return ESP_ERR_INVALID_STATE;
+        schedule_startup_error_.store(ESP_OK, std::memory_order_release);
+      } else {
+        schedule_startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
       }
     } else if (decoded != core_security::Status::Ok) {
-      mbedtls_platform_zeroize(checkpoint_plaintext_,
-                               core_storage::kMaxAutomationScheduleCheckpointsPayload);
-      mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
-      release_buffers();
-      startup_error_.store(decoded == core_security::Status::UnsupportedFormat
-                               ? ESP_ERR_NOT_SUPPORTED
-                               : ESP_ERR_INVALID_STATE,
-                           std::memory_order_release);
-      return startup_error_.load(std::memory_order_acquire);
+      schedule_startup_error_.store(decoded == core_security::Status::UnsupportedFormat
+                                        ? ESP_ERR_NOT_SUPPORTED
+                                        : ESP_ERR_INVALID_STATE,
+                                    std::memory_order_release);
     } else {
       checkpoint_generation_ = metadata.generation;
+      schedule_startup_error_.store(ESP_OK, std::memory_order_release);
     }
-  } else if (loaded != core_security::Status::NotFound) {
-    mbedtls_platform_zeroize(checkpoint_plaintext_,
-                             core_storage::kMaxAutomationScheduleCheckpointsPayload);
-    mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
-    release_buffers();
-    startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
-    return ESP_ERR_INVALID_STATE;
+  } else if (loaded == core_security::Status::NotFound) {
+    schedule_startup_error_.store(ESP_OK, std::memory_order_release);
+  } else {
+    schedule_startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
   }
 
   mbedtls_platform_zeroize(checkpoint_plaintext_,
@@ -266,6 +256,14 @@ esp_err_t AutomationService::startupError() const {
   return startup_error_.load(std::memory_order_acquire);
 }
 
+bool AutomationService::schedulesReady() const {
+  return ready() && schedule_startup_error_.load(std::memory_order_acquire) == ESP_OK;
+}
+
+esp_err_t AutomationService::scheduleStartupError() const {
+  return schedule_startup_error_.load(std::memory_order_acquire);
+}
+
 bool AutomationService::status(std::uint32_t operation_id, Status& output) const {
   if (operation_id == 0)
     return false;
@@ -368,6 +366,8 @@ bool AutomationService::armMinuteTimer(std::time_t timestamp) {
 }
 
 void AutomationService::evaluateSchedules(std::time_t timestamp) {
+  if (!schedulesReady())
+    return;
   armMinuteTimer(timestamp);
   const std::uint64_t utc_minute = static_cast<std::uint64_t>(timestamp) / 60;
   mbedtls_platform_zeroize(schedule_candidates_, sizeof(*schedule_candidates_));
