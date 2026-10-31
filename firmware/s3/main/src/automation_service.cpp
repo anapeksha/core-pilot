@@ -16,6 +16,8 @@ namespace core_pilot {
 
 namespace {
 constexpr char kCheckpointPath[] = "/core-pilot/automations/schedule-checkpoints.enc";
+constexpr char kCheckpointArchivePath[] =
+    "/core-pilot/automations/schedule-checkpoints-unreadable.enc";
 constexpr std::size_t kCheckpointEncryptedBytes =
     core_storage::kMaxAutomationScheduleCheckpointsPayload + 128;
 
@@ -77,15 +79,42 @@ esp_err_t AutomationService::start() {
   if (loaded == core_security::Status::Ok) {
     const auto decoded = core_storage::decode_automation_schedule_checkpoints(
         metadata.schema_version, checkpoint_plaintext_, size, checkpoints_);
-    if (decoded != core_security::Status::Ok) {
+    if (decoded == core_security::Status::Invalid) {
+      checkpoints_ = {};
+      std::size_t written = 0;
+      const auto encoded = core_storage::encode_automation_schedule_checkpoints(
+          checkpoints_, checkpoint_plaintext_,
+          core_storage::kMaxAutomationScheduleCheckpointsPayload, written);
+      const auto recovered =
+          encoded == core_security::Status::Ok
+              ? storage_.archive_and_put(checkpointSpec(metadata.generation + 1),
+                                         kCheckpointArchivePath, sizeof(kCheckpointArchivePath) - 1,
+                                         checkpoint_plaintext_, written, random_,
+                                         checkpoint_encrypted_, kCheckpointEncryptedBytes)
+              : encoded;
+      if (recovered == core_security::Status::Ok)
+        checkpoint_generation_ = metadata.generation + 1;
+      else {
+        mbedtls_platform_zeroize(checkpoint_plaintext_,
+                                 core_storage::kMaxAutomationScheduleCheckpointsPayload);
+        mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
+        release_buffers();
+        startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
+        return ESP_ERR_INVALID_STATE;
+      }
+    } else if (decoded != core_security::Status::Ok) {
       mbedtls_platform_zeroize(checkpoint_plaintext_,
                                core_storage::kMaxAutomationScheduleCheckpointsPayload);
       mbedtls_platform_zeroize(checkpoint_encrypted_, kCheckpointEncryptedBytes);
       release_buffers();
-      startup_error_.store(ESP_ERR_INVALID_STATE, std::memory_order_release);
-      return ESP_ERR_INVALID_STATE;
+      startup_error_.store(decoded == core_security::Status::UnsupportedFormat
+                               ? ESP_ERR_NOT_SUPPORTED
+                               : ESP_ERR_INVALID_STATE,
+                           std::memory_order_release);
+      return startup_error_.load(std::memory_order_acquire);
+    } else {
+      checkpoint_generation_ = metadata.generation;
     }
-    checkpoint_generation_ = metadata.generation;
   } else if (loaded != core_security::Status::NotFound) {
     mbedtls_platform_zeroize(checkpoint_plaintext_,
                              core_storage::kMaxAutomationScheduleCheckpointsPayload);
