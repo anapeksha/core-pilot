@@ -44,6 +44,8 @@ constexpr Entry kEntries[] = {
     {"/core-pilot/models/database-unreadable.enc", {"MODBAD.ENC", "MODBAD.TMP", "MODBAD.BAK"}},
     {"/core-pilot/automations/schedule-checkpoints.enc",
      {"AUTOSCH.ENC", "AUTOSCH.TMP", "AUTOSCH.BAK"}},
+    {"/core-pilot/automations/schedule-checkpoints-unreadable.enc",
+     {"AUTBAD.ENC", "AUTBAD.TMP", "AUTBAD.BAK"}},
     {"/core-pilot/diagnostics/activity-history.enc",
      {"ACTIVITY.ENC", "ACTIVITY.TMP", "ACTIVITY.BAK"}},
     {"/core-pilot/diagnostics/activity-history-unreadable.enc",

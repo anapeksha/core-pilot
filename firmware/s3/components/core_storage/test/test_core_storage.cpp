@@ -38,6 +38,7 @@ constexpr Expected kExpected[] = {
     {"/core-pilot/models/database.enc", "MODELS.ENC", "MODELS.TMP"},
     {"/core-pilot/models/database-unreadable.enc", "MODBAD.ENC", "MODBAD.TMP"},
     {"/core-pilot/automations/schedule-checkpoints.enc", "AUTOSCH.ENC", "AUTOSCH.TMP"},
+    {"/core-pilot/automations/schedule-checkpoints-unreadable.enc", "AUTBAD.ENC", "AUTBAD.TMP"},
     {"/core-pilot/diagnostics/activity-history.enc", "ACTIVITY.ENC", "ACTIVITY.TMP"},
     {"/core-pilot/config/system.enc", "SYSTEM.ENC", "SYSTEM.TMP"},
     {"/core-pilot/config/ui.enc", "UI.ENC", "UI.TMP"},
