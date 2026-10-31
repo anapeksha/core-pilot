@@ -135,7 +135,9 @@ void AutomationService::timeSynchronized(std::time_t timestamp) {
 AutomationService::SubmitResult AutomationService::submit(const char* id,
                                                           std::uint32_t& operation_id) {
   operation_id = 0;
-  if (id == nullptr || queue_ == nullptr || task_ == nullptr)
+  if (queue_ == nullptr || task_ == nullptr)
+    return SubmitResult::unavailable;
+  if (id == nullptr)
     return SubmitResult::not_found;
 
   core_domain::ModelUpsert automation{};

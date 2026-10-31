@@ -1506,6 +1506,10 @@ esp_err_t automationRunHandler(httpd_req_t* request) {
     status = "queued";
     detail = "Manual automation queued.";
     break;
+  case AutomationService::SubmitResult::unavailable:
+    status = "AUTOMATION_UNAVAILABLE";
+    detail = "The automation runtime is unavailable.";
+    break;
   case AutomationService::SubmitResult::not_found:
     status = "AUTOMATION_NOT_FOUND";
     detail = "The automation does not exist.";

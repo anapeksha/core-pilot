@@ -26,6 +26,7 @@ class AutomationService final {
 public:
   enum class SubmitResult : std::uint8_t {
     queued,
+    unavailable,
     not_found,
     disabled,
     not_manual,

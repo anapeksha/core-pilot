@@ -475,6 +475,10 @@ esp_err_t runAutomation(const HttpRuntime& runtime, const cJSON* arguments, cJSO
     cJSON_AddStringToObject(result, "detail", "Manual automation queued.");
     cJSON_AddNumberToObject(result, "operation_id", operation_id);
     return ESP_OK;
+  case AutomationService::SubmitResult::unavailable:
+    cJSON_AddStringToObject(result, "status", "AUTOMATION_UNAVAILABLE");
+    cJSON_AddStringToObject(result, "detail", "The automation runtime is unavailable.");
+    return ESP_ERR_INVALID_STATE;
   case AutomationService::SubmitResult::not_found:
     cJSON_AddStringToObject(result, "status", "AUTOMATION_NOT_FOUND");
     cJSON_AddStringToObject(result, "detail", "The automation does not exist.");

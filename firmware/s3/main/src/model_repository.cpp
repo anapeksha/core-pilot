@@ -80,19 +80,16 @@ core_security::Status ModelRepository::start() {
 }
 
 std::size_t ModelRepository::count(core_domain::ModelKind kind) const {
-  if (!databases_[active_])
-    return 0;
   SemaphoreLock lock(state_mutex_);
-  return lock.held() ? databases_[active_]->collections[core_storage::model_kind_index(kind)].count
-                     : 0;
+  if (!lock.held() || databases_[active_] == nullptr)
+    return 0;
+  return databases_[active_]->collections[core_storage::model_kind_index(kind)].count;
 }
 
 bool ModelRepository::get(core_domain::ModelKind kind, std::size_t index,
                           core_domain::ModelUpsert& model) const {
-  if (!databases_[active_])
-    return false;
   SemaphoreLock lock(state_mutex_);
-  if (!lock.held())
+  if (!lock.held() || databases_[active_] == nullptr)
     return false;
   const auto& collection = databases_[active_]->collections[core_storage::model_kind_index(kind)];
   if (index >= collection.count)
@@ -103,10 +100,10 @@ bool ModelRepository::get(core_domain::ModelKind kind, std::size_t index,
 
 bool ModelRepository::find(core_domain::ModelKind kind, const char* id,
                            core_domain::ModelUpsert& model) const {
-  if (!databases_[active_] || id == nullptr)
+  if (id == nullptr)
     return false;
   SemaphoreLock lock(state_mutex_);
-  if (!lock.held())
+  if (!lock.held() || databases_[active_] == nullptr)
     return false;
   const auto& collection = databases_[active_]->collections[core_storage::model_kind_index(kind)];
   for (std::size_t index = 0; index < collection.count; ++index) {
@@ -121,10 +118,10 @@ bool ModelRepository::find(core_domain::ModelKind kind, const char* id,
 bool ModelRepository::visit(core_domain::ModelKind kind, Visitor visitor, void* context,
                             std::size_t& visited) const {
   visited = 0;
-  if (!databases_[active_] || visitor == nullptr)
+  if (visitor == nullptr)
     return false;
   SemaphoreLock lock(state_mutex_);
-  if (!lock.held())
+  if (!lock.held() || databases_[active_] == nullptr)
     return false;
   const auto& collection = databases_[active_]->collections[core_storage::model_kind_index(kind)];
   for (; visited < collection.count; ++visited)
