@@ -141,6 +141,29 @@ TEST_CASE("CPER postcard header and AAD bind identity path and tag", "[core_secu
   TEST_ASSERT_TRUE(check(Status::Invalid));
 }
 
+TEST_CASE("newest encrypted record type round trips", "[core_security]") {
+  uint8_t key[kSeedBytes]{};
+  DeviceSeed seed;
+  seed.assign(key);
+  FixedRandom rng;
+  const RecordSpec identity{
+      "/schedule", 9, Namespace::Configuration, RecordType::AutomationScheduleCheckpoints, 1, 1};
+  const uint8_t message[]{0};
+  uint8_t record[128]{};
+  size_t length = 0;
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok),
+                    static_cast<int>(encrypt(seed, identity, message, sizeof(message), rng, record,
+                                             sizeof(record), length)));
+  uint8_t plain[sizeof(message)]{};
+  size_t size = 0;
+  Metadata metadata{};
+  TEST_ASSERT_EQUAL(static_cast<int>(Status::Ok),
+                    static_cast<int>(decrypt(seed, identity, record, length, plain, sizeof(plain),
+                                             size, metadata)));
+  TEST_ASSERT_EQUAL(sizeof(message), size);
+  TEST_ASSERT_EQUAL_MEMORY(message, plain, sizeof(message));
+}
+
 TEST_CASE("bounded storage never writes plaintext and rejects moved records", "[core_security]") {
   uint8_t key[kSeedBytes]{};
   DeviceSeed seed;

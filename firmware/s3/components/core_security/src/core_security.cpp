@@ -56,7 +56,7 @@ bool import_aead_key(const uint8_t (&key)[32], psa_key_usage_t usage, PsaKey& im
 bool valid_spec(const RecordSpec& s) {
   return s.path && s.path_len <= kMaxPathBytes && static_cast<unsigned>(s.name_space) < 8 &&
          static_cast<unsigned>(s.type) <=
-             static_cast<unsigned>(RecordType::MatterCommissioningBoot);
+             static_cast<unsigned>(RecordType::AutomationScheduleCheckpoints);
 }
 void le(uint8_t* out, uint64_t value, size_t count) {
   for (size_t i = 0; i < count; ++i) {
@@ -278,7 +278,7 @@ Status decrypt(const DeviceSeed& seed, const RecordSpec& expected, const uint8_t
     return Status::UnsupportedFormat;
   uint8_t type = record[pos++];
   uint8_t ns = record[pos++];
-  if (type > static_cast<uint8_t>(RecordType::MatterCommissioningBoot) || ns >= 8)
+  if (type > static_cast<uint8_t>(RecordType::AutomationScheduleCheckpoints) || ns >= 8)
     return Status::Invalid;
   uint64_t generation = 0, schema = 0, cipher_len = 0;
   if (!read_varint(record, record_len, pos, generation) ||

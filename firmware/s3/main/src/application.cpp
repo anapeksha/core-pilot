@@ -347,6 +347,8 @@ void Application::run() {
   const esp_err_t time_result = initializeTimeService(http_runtime);
   if (time_result != ESP_OK) {
     ESP_LOGE(kTag, "time service startup failed: %s", esp_err_to_name(time_result));
+  } else {
+    automations.timeSynchronized(std::time(nullptr));
   }
   showProgress(display, 90, "Starting local dashboard");
   const httpd_handle_t server = startHttpServer(http_runtime);
