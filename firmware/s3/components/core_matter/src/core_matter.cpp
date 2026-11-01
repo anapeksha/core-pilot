@@ -604,7 +604,9 @@ esp_err_t CoreMatter::begin(const char* wifi_ssid, std::size_t wifi_ssid_length,
   taskENTER_CRITICAL(&status_lock_);
   status_.state = State::starting;
   taskEXIT_CRITICAL(&status_lock_);
-  if (xTaskCreatePinnedToCore(taskEntry, "matter_owner", 8192, this, 5, &task_, 1) != pdPASS) {
+  constexpr std::uint32_t kMatterOwnerStackBytes = 16384;
+  if (xTaskCreatePinnedToCore(taskEntry, "matter_owner", kMatterOwnerStackBytes, this, 5, &task_,
+                              1) != pdPASS) {
     taskENTER_CRITICAL(&status_lock_);
     status_.state = State::failed;
     status_.last_error = ESP_ERR_NO_MEM;
