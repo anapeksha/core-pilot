@@ -70,6 +70,22 @@ TEST_CASE("generation invalidates stale callbacks and shutdown blocks recovery",
   TEST_ASSERT_FALSE(table.erase(0x22, unconfigured->generation));
 }
 
+TEST_CASE("lifecycle slots support repeated commission and unpair cycles", "[core_matter]") {
+  LifecycleTable<1, 1> table;
+  const std::uint16_t endpoints[]{1};
+
+  for (std::uint64_t node_id = 1; node_id <= 16; ++node_id) {
+    TEST_ASSERT_TRUE(table.configure(node_id, endpoints, 1));
+    const std::uint32_t subscription = table.beginSubscribe(node_id);
+    TEST_ASSERT_NOT_EQUAL(0, subscription);
+    TEST_ASSERT_TRUE(table.established(node_id, subscription));
+    const std::uint32_t shutdown = table.beginShutdown(node_id);
+    TEST_ASSERT_NOT_EQUAL(0, shutdown);
+    TEST_ASSERT_TRUE(table.erase(node_id, shutdown));
+    TEST_ASSERT_EQUAL_UINT32(0, table.nodeCount());
+  }
+}
+
 TEST_CASE("recovery is event driven and bounded to configured nodes", "[core_matter]") {
   LifecycleTable<2, 2> table;
   const std::uint16_t endpoints[]{1};

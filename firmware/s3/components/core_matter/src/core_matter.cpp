@@ -1489,14 +1489,20 @@ void CoreMatter::run() {
         finishCommand(command.operation_id, CommandState::failed, ESP_ERR_NOT_FOUND);
         continue;
       }
-      esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
-      auto* commissioner =
-          esp_matter::controller::matter_controller_client::get_instance().get_commissioner();
-      chip::app::InteractionModelEngine::GetInstance()->ShutdownSubscriptions(
-          commissioner->GetFabricIndex(), command.node_id);
-      const esp_err_t result =
-          esp_matter::controller::matter_controller_client::get_instance().unpair(command.node_id,
-                                                                                  onUnpairComplete);
+      {
+        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+        auto* commissioner =
+            esp_matter::controller::matter_controller_client::get_instance().get_commissioner();
+        chip::app::InteractionModelEngine::GetInstance()->ShutdownSubscriptions(
+            commissioner->GetFabricIndex(), command.node_id);
+      }
+      vTaskDelay(pdMS_TO_TICKS(250));
+      esp_err_t result = ESP_OK;
+      {
+        esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+        result = esp_matter::controller::matter_controller_client::get_instance().unpair(
+            command.node_id, onUnpairComplete);
+      }
       if (result != ESP_OK) {
         taskENTER_CRITICAL(&status_lock_);
         static_cast<void>(lifecycle_.abandonShutdown(command.node_id, active_unpair_generation_));
