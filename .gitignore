@@ -25,6 +25,7 @@
 /firmware/s3/build*
 /firmware/s3/managed_components/
 /firmware/s3/sdkconfig
+/firmware/s3/sdkconfig.development.generated
 /firmware/s3/sdkconfig.clang
 /firmware/s3/sdkconfig.tests.clang
 /firmware/s3/.cache/

@@ -3,6 +3,7 @@
 #include "cJSON.h"
 #include "core_domain.hpp"
 #include "core_network.hpp"
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -14,6 +15,13 @@
 
 namespace core_pilot {
 namespace {
+constexpr char kTag[] = "http_access";
+#if CONFIG_CORE_PILOT_DEVELOPMENT_AUTH_BYPASS
+constexpr bool kDevelopmentAuthBypass = true;
+#else
+constexpr bool kDevelopmentAuthBypass = false;
+#endif
+
 core_security::Auth auth;
 core_security::RandomSource* random_source{};
 CoreNetwork* network_service{};
@@ -114,9 +122,9 @@ esp_err_t authHandler(httpd_req_t* req) {
                         "Access is temporarily unavailable.");
     char response[128]{};
     std::snprintf(response, sizeof(response),
-                  "{\"authentication_required\":true,\"bootstrap_state\":\"%s\","
+                  "{\"authentication_required\":%s,\"bootstrap_state\":\"%s\","
                   "\"session_seconds\":%llu}",
-                  stateName(auth.bootstrap_state(now())),
+                  kDevelopmentAuthBypass ? "false" : "true", stateName(auth.bootstrap_state(now())),
                   static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
     return httpd_resp_sendstr(req, response);
   }
@@ -227,8 +235,8 @@ esp_err_t dispatch(httpd_req_t* req) {
       (req->method == HTTP_POST && !std::strcmp(route.uri, "/api/v1/auth/session"));
   if (!public_route) {
     char bearer[80]{};
-    bool allowed = false;
-    {
+    bool allowed = kDevelopmentAuthBypass;
+    if (!allowed) {
       AuthLock lock;
       allowed = lock.held() && header(req, "Authorization", bearer, sizeof(bearer)) &&
                 !std::strncmp(bearer, "Bearer ", 7) && auth.authorize(bearer + 7, now());
@@ -258,6 +266,8 @@ esp_err_t dispatch(httpd_req_t* req) {
 } // namespace
 
 esp_err_t initializeHttpAccess(core_security::RandomSource& random, CoreNetwork& network) {
+  if (kDevelopmentAuthBypass)
+    ESP_LOGW(kTag, "DEVELOPMENT AUTH BYPASS ENABLED; NEVER USE THIS BUILD IN PRODUCTION");
   random_source = &random;
   network_service = &network;
   auth_mutex = xSemaphoreCreateMutexStatic(&auth_mutex_storage);

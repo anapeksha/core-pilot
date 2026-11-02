@@ -1,0 +1,12 @@
+menu "Core Pilot development options"
+
+config CORE_PILOT_DEVELOPMENT_AUTH_BYPASS
+    bool "Bypass HTTP bearer authentication for local hardware development"
+    default n
+    help
+        Allows protected HTTP routes without a bearer token. Origin, Host, content-type,
+        setup-mode, and input validation remain enforced. Enable only with the checked-in
+        development sdkconfig defaults overlay on a physically controlled local network.
+        Never enable this option in production or release firmware.
+
+endmenu
