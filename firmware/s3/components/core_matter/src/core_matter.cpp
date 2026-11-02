@@ -403,6 +403,36 @@ esp_err_t pairThreadOverBle(chip::NodeId node_id, const char* setup_payload, std
   return ESP_OK;
 }
 
+esp_err_t pairWifiOverBle(chip::NodeId node_id, const char* ssid, const char* password,
+                          const char* setup_payload) {
+  chip::SetupPayload payload;
+  if (chip::ManualSetupPayloadParser(setup_payload).populatePayload(payload) != CHIP_NO_ERROR) {
+    return ESP_ERR_INVALID_ARG;
+  }
+
+  chip::ByteSpan ssid_span(reinterpret_cast<const std::uint8_t*>(ssid), std::strlen(ssid));
+  chip::ByteSpan password_span(reinterpret_cast<const std::uint8_t*>(password),
+                               std::strlen(password));
+  chip::Controller::CommissioningParameters parameters =
+      chip::Controller::CommissioningParameters().SetWiFiCredentials(
+          chip::Controller::WiFiCredentials(ssid_span, password_span));
+  chip::RendezvousParameters rendezvous = chip::RendezvousParameters()
+                                              .SetSetupPINCode(payload.setUpPINCode)
+                                              .SetSetupDiscriminator(payload.discriminator)
+                                              .SetPeerAddress(chip::Transport::PeerAddress::BLE());
+
+  esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
+  auto* commissioner =
+      esp_matter::controller::matter_controller_client::get_instance().get_commissioner();
+  commissioner->RegisterPairingDelegate(&PairingDelegate::instance());
+  const CHIP_ERROR error = commissioner->PairDevice(node_id, rendezvous, parameters);
+  if (error != CHIP_NO_ERROR) {
+    commissioner->RegisterPairingDelegate(nullptr);
+    return error == CHIP_ERROR_NO_MEMORY ? ESP_ERR_NO_MEM : ESP_FAIL;
+  }
+  return ESP_OK;
+}
+
 esp_err_t pairWifiOnNetwork(chip::NodeId node_id, const char* ssid, const char* password,
                             const char* setup_payload) {
   chip::SetupPayload payload;
@@ -1584,6 +1614,11 @@ void CoreMatter::run() {
         result =
             pairWifiOnNetwork(node_id, reinterpret_cast<const char*>(wifi_ssid_),
                               reinterpret_cast<const char*>(wifi_password_), command.setup_payload);
+        if (result == ESP_ERR_NOT_FOUND) {
+          result =
+              pairWifiOverBle(node_id, reinterpret_cast<const char*>(wifi_ssid_),
+                              reinterpret_cast<const char*>(wifi_password_), command.setup_payload);
+        }
       }
       if (result != ESP_OK) {
         commissioning_error.store(result);
