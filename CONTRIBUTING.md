@@ -36,6 +36,27 @@ eim run 'idf.py -B build build' v6.0.2
 
 See [`README.md`](README.md) for installation, flashing, and first-run instructions.
 
+### Development-only authentication bypass
+
+A local hardware-development build may bypass bearer authentication when repeated API testing would otherwise require entering physical access codes. This mode is deliberately opt-in and must only be used on a physically controlled device and trusted local network.
+
+Build it in a dedicated directory with the checked-in defaults overlay:
+
+```sh
+eim run 'idf.py -C firmware/s3 -B firmware/s3/build-development -D PROJECT_VER=0.1.0-dev -D SDKCONFIG=sdkconfig.development.generated -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.development;sdkconfig.development.defaults" reconfigure build' v6.0.2
+```
+
+The development image reports `authentication_required:false` from `/api/v1/auth` and emits a prominent boot warning. Host, Origin, content-type, setup-mode, and request validation remain active.
+
+Rules for this mode:
+
+- Never add the bypass to `sdkconfig.defaults` or a release workflow.
+- Never commit the generated `firmware/s3/sdkconfig.development.generated` file or `build-development/` tree. The tracked `sdkconfig.development` file is an input overlay that disables release signing for directly flashed development applications; do not overwrite it.
+- Never use a development image on an untrusted network or distribute it as firmware.
+- Never use production signing keys for a development image.
+- Restore a CI-built, production-signed image and verify protected requests return `401` without a bearer token before reporting hardware validation complete.
+- CI and release builds use `sdkconfig.defaults` only, where the bypass defaults to disabled.
+
 ## Making changes
 
 - Follow the existing style and use the simplest solution that addresses the root cause.
@@ -99,7 +120,7 @@ docs: explain first-time setup
 test: cover expired access codes
 ```
 
-Do not commit release artifacts, build trees, secrets, or local configuration.
+Do not commit release artifacts, build trees, secrets, generated `sdkconfig` files, or local configuration.
 
 ## Reporting security issues
 

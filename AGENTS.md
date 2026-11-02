@@ -48,6 +48,7 @@ Component names retain the `core_` prefix to avoid collisions with ESP-IDF and t
 - Persisted model limits are UTF-8 byte limits, not character counts: IDs 48 bytes, names 64 bytes, details 96 bytes, group members 32, scene/automation actions 8, and local notifications 72 bytes. Enforce matching limits in UI forms, web request schemas, firmware request parsing, and persistence codecs.
 - Matter node IDs accepted by HTTP must be nonzero hexadecimal values of at most 16 digits; reject signs, prefixes, overflow, and non-hex characters.
 - Keep exceptions and RTTI disabled. Prefer RAII, fixed bounds, explicit status values, and single ownership.
+- HTTP authentication may be bypassed only in an explicit local development build using `sdkconfig.development.defaults` and a separate `build-development` directory. Never put the bypass in `sdkconfig.defaults`, CI, release workflows, or production artifacts; never sign it with production keys. Keep Host, Origin, content-type, setup-mode, and parser validation enabled. Before completing hardware validation, restore CI-built production-signed firmware and verify protected requests return `401` without a bearer token.
 
 ## APIs and readiness
 
@@ -62,7 +63,7 @@ Component names retain the `core_` prefix to avoid collisions with ESP-IDF and t
 
 ## Validation
 
-Run formatting and builds sequentially; `tools/format.py` may remove generated dashboard artifacts while `npm run build` is writing them.
+Run formatting and builds sequentially; `tools/format.py` may remove generated dashboard artifacts while `npm run build` is writing them. The normal commands below keep authentication enabled. When a temporary local auth bypass is necessary, use the documented development overlay command in `CONTRIBUTING.md`; do not alter source authorization logic or commit generated development configuration.
 
 ```sh
 python tools/format.py
