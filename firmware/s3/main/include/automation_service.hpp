@@ -77,7 +77,7 @@ private:
   static constexpr std::size_t kMaxActions = 64;
   static constexpr std::size_t kMaxSceneDepth = 8;
   static constexpr std::size_t kRetainedStatuses = 12;
-  static constexpr std::size_t kTaskStackBytes = 8192;
+  static constexpr std::size_t kTaskStackBytes = 16384;
   static constexpr TickType_t kMatterCommandTimeout = pdMS_TO_TICKS(30000);
 
   struct Work final {
