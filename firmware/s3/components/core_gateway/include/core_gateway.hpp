@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core_gateway_policy.hpp"
 #include "esp_err.h"
 
 #include <cstdint>
@@ -8,7 +9,7 @@ namespace core_pilot {
 
 class CoreGateway final {
 public:
-  enum class State : std::uint8_t { stopped, probing, provisioning, ready, failed };
+  using State = gateway_policy::State;
 
   struct Status final {
     State state;
@@ -23,7 +24,7 @@ public:
 private:
   esp_err_t provision();
 
-  Status status_{State::stopped, false, 0, ESP_OK};
+  gateway_policy::Status status_{};
 };
 
 } // namespace core_pilot

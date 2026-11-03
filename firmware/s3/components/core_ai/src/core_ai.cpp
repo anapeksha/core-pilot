@@ -150,7 +150,7 @@ bool valid_text(const char* value, std::size_t maximum, bool required = true) {
   const std::size_t size = strnlen(value, maximum + 1);
   return size <= maximum && (!required || size != 0);
 }
-bool valid_id(const char* value) {
+bool valid_id_impl(const char* value) {
   if (!valid_text(value, kMaxMemoryIdBytes))
     return false;
   for (const char* p = value; *p; ++p)
@@ -158,14 +158,24 @@ bool valid_id(const char* value) {
       return false;
   return true;
 }
-bool valid_path(const char* value) {
-  if (!valid_text(value, kMaxPromptPathBytes))
+bool valid_path_impl(const char* value) {
+  if (!valid_text(value, kMaxPromptPathBytes) || value[0] == '/')
     return false;
-  for (const char* p = value; *p; ++p)
-    if (!(std::isalnum(static_cast<unsigned char>(*p)) || *p == '_' || *p == '-' || *p == '.' ||
-          *p == '/'))
+  const char* segment = value;
+  for (const char* p = value;; ++p) {
+    if (*p != '\0' && *p != '/') {
+      if (!(std::isalnum(static_cast<unsigned char>(*p)) || *p == '_' || *p == '-' || *p == '.'))
+        return false;
+      continue;
+    }
+    const std::size_t length = static_cast<std::size_t>(p - segment);
+    if (length == 0 || (length == 1 && segment[0] == '.') ||
+        (length == 2 && segment[0] == '.' && segment[1] == '.'))
       return false;
-  return true;
+    if (*p == '\0')
+      return true;
+    segment = p + 1;
+  }
 }
 // Only the destination authority and authentication mode bind a retained credential;
 // model and URL path changes do not transfer it to a different origin.
@@ -194,7 +204,7 @@ bool credential_scope(const ProviderConfig& config, char* host, std::size_t capa
   return true;
 }
 
-bool same_credential_scope(const ProviderConfig& incoming, const ProviderConfig& stored) {
+bool same_credential_scope_impl(const ProviderConfig& incoming, const ProviderConfig& stored) {
   char incoming_host[kMaxProviderUrlBytes + 1]{};
   char stored_host[kMaxProviderUrlBytes + 1]{};
   return incoming.backend == stored.backend && incoming.auth_type == stored.auth_type &&
@@ -296,6 +306,18 @@ void clear_provider_config(ProviderConfig& config) {
 
 bool provider_config_usable(const ProviderConfig& config) {
   return supported_provider(config);
+}
+
+bool valid_memory_id(const char* value) {
+  return valid_id_impl(value);
+}
+
+bool valid_prompt_path(const char* value) {
+  return valid_path_impl(value);
+}
+
+bool same_provider_credential_scope(const ProviderConfig& incoming, const ProviderConfig& stored) {
+  return same_credential_scope_impl(incoming, stored);
 }
 
 ProviderConfigRepository::ProviderConfigRepository(core_security::StorageService& storage,
@@ -422,7 +444,7 @@ Status ProviderConfigRepository::save(ProviderConfig& config) {
         !get16(old_workspace.plaintext, old_size, pos, part) || part > kMaxApiKeyBytes ||
         !take(old_workspace.plaintext, old_size, pos, part, bytes) || pos != old_size)
       return Status::CorruptData;
-    if (!same_credential_scope(config, old))
+    if (!same_provider_credential_scope(config, old))
       return Status::InvalidArgument;
     config.api_key_length = part;
     std::memcpy(config.api_key, bytes, part);
@@ -538,7 +560,7 @@ Status visit_collection(core_security::StorageService& storage, SemaphoreHandle_
       return Status::CorruptData;
     char key_text[kMaxPromptPathBytes + 1]{};
     std::memcpy(key_text, key, key_size);
-    if (!(Prompt ? valid_path(key_text) : valid_id(key_text)))
+    if (!(Prompt ? valid_prompt_path(key_text) : valid_memory_id(key_text)))
       return Status::CorruptData;
     if (callback && !callback(key_text, content, content_size, (flags & 1U) != 0, context))
       return Status::Ok;
@@ -555,7 +577,7 @@ Status upsert_collection(core_security::StorageService& storage,
                          bool baseline) {
   const std::size_t key_limit = Prompt ? kMaxPromptPathBytes : kMaxMemoryIdBytes;
   const std::size_t content_limit = Prompt ? kMaxPromptMarkdownBytes : kMaxMemoryMarkdownBytes;
-  if (!(Prompt ? valid_path(key) : valid_id(key)) || (!content && content_size))
+  if (!(Prompt ? valid_prompt_path(key) : valid_memory_id(key)) || (!content && content_size))
     return Status::InvalidArgument;
   if (content_size > content_limit)
     return Status::TooLarge;
@@ -702,7 +724,7 @@ Status MemoryRepository::get(const char* id, std::uint8_t* markdown, std::size_t
   markdown_size = 0;
   if (!state_)
     return Status::NotReady;
-  if (!valid_id(id) || (!markdown && capacity))
+  if (!valid_memory_id(id) || (!markdown && capacity))
     return Status::InvalidArgument;
   MemoryGetContext context{id, markdown, capacity, &markdown_size};
   Status result = visit_collection<false>(
@@ -786,7 +808,7 @@ Status PromptRepository::get(const char* path, std::uint8_t* markdown, std::size
   baseline = false;
   if (!state_)
     return Status::NotReady;
-  if (!valid_path(path) || (!markdown && capacity))
+  if (!valid_prompt_path(path) || (!markdown && capacity))
     return Status::InvalidArgument;
   PromptGetContext context{path, markdown, capacity, &markdown_size, &baseline};
   Status result = visit_collection<true>(

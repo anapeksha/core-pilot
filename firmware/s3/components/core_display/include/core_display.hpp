@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core_display_policy.hpp"
 #include "esp_err.h"
 
 #include <M5Unified.h>
@@ -23,14 +24,7 @@ public:
     const char* detail;
     const char* action;
   };
-  enum class UpgradePhase : std::uint8_t {
-    prepared,
-    staging,
-    applying,
-    activated,
-    rebooting,
-    failed
-  };
+  using UpgradePhase = display_policy::UpgradePhase;
   enum class AccessState : std::uint8_t {
     active,
     granted,
@@ -39,12 +33,7 @@ public:
     unavailable
   };
   enum class Action : std::uint8_t { none, generate_access_code };
-  struct Upgrade {
-    UpgradePhase phase;
-    std::uint32_t progress_bytes;
-    std::uint32_t total_bytes;
-    bool restart_after_update;
-  };
+  using Upgrade = display_policy::Upgrade;
 
   CoreDisplay();
   CoreDisplay(const CoreDisplay&) = delete;

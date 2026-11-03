@@ -1,6 +1,7 @@
 #include "core_board.hpp"
 
 #include "M5Unified.h"
+#include "core_board_policy.hpp"
 #include "driver/gpio.h"
 #include "driver/sdspi_host.h"
 #include "esp_heap_caps.h"
@@ -225,9 +226,8 @@ esp_err_t initialize_lcd() {
 
 esp_err_t draw_lcd_region(int x, int y, int width, int height, const void* pixels,
                           std::size_t pixel_bytes) {
-  if (!lcd_initialized || pixels == nullptr || width <= 0 || height <= 0 || x < 0 || y < 0 ||
-      x + width > 320 || y + height > 240 ||
-      pixel_bytes != static_cast<std::size_t>(width) * height * 2)
+  if (!lcd_initialized || pixels == nullptr ||
+      !valid_lcd_region({x, y, width, height, pixel_bytes}))
     return ESP_ERR_INVALID_ARG;
 
   SharedSpiGuard guard(SharedSpiGuard::Use::display);

@@ -12,6 +12,15 @@
 
 namespace core_pilot {
 
+namespace activity_policy {
+
+bool copy_event_text(const char* source, char* destination, std::size_t capacity);
+bool valid_page_limit(std::uint8_t limit, std::uint8_t maximum);
+bool before_cursor(std::uint32_t sequence, bool has_cursor, std::uint32_t cursor);
+std::uint32_t following_sequence(std::uint32_t sequence);
+
+} // namespace activity_policy
+
 class ActivityService final {
 public:
   static constexpr std::size_t kCapacity = 128;

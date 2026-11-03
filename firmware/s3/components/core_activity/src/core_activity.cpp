@@ -92,8 +92,12 @@ bool getString(const std::uint8_t* input, std::size_t length, std::size_t maximu
   return true;
 }
 
-bool copyBounded(const char* source, char* destination, std::size_t capacity) {
-  if (source == nullptr || capacity == 0)
+} // namespace
+
+namespace activity_policy {
+
+bool copy_event_text(const char* source, char* destination, std::size_t capacity) {
+  if (source == nullptr || destination == nullptr || capacity == 0)
     return false;
   const std::size_t length = strnlen(source, capacity);
   if (length == 0 || length == capacity)
@@ -102,7 +106,20 @@ bool copyBounded(const char* source, char* destination, std::size_t capacity) {
   return true;
 }
 
-} // namespace
+bool valid_page_limit(std::uint8_t limit, std::uint8_t maximum) {
+  return limit != 0 && limit <= maximum;
+}
+
+bool before_cursor(std::uint32_t sequence, bool has_cursor, std::uint32_t cursor) {
+  return !has_cursor || sequence < cursor;
+}
+
+std::uint32_t following_sequence(std::uint32_t sequence) {
+  const std::uint32_t next = sequence + 1;
+  return next == 0 ? 1 : next;
+}
+
+} // namespace activity_policy
 
 ActivityService::ActivityService(core_security::StorageService& storage,
                                  core_security::RandomSource& random)
@@ -163,8 +180,8 @@ bool ActivityService::append(const char* kind, const char* detail) {
   if (queue_ == nullptr)
     return false;
   PendingEvent pending{};
-  if (!copyBounded(kind, pending.kind, sizeof(pending.kind)) ||
-      !copyBounded(detail, pending.detail, sizeof(pending.detail)))
+  if (!activity_policy::copy_event_text(kind, pending.kind, sizeof(pending.kind)) ||
+      !activity_policy::copy_event_text(detail, pending.detail, sizeof(pending.detail)))
     return false;
   if (xQueueSend(queue_, &pending, 0) == pdTRUE)
     return true;
@@ -175,7 +192,8 @@ bool ActivityService::append(const char* kind, const char* detail) {
 bool ActivityService::page(bool has_before_sequence, std::uint32_t before_sequence,
                            std::uint8_t limit, Page& output) const {
   output = {};
-  if (mutex_ == nullptr || events_ == nullptr || limit == 0 || limit > kMaxPageSize ||
+  if (mutex_ == nullptr || events_ == nullptr ||
+      !activity_policy::valid_page_limit(limit, kMaxPageSize) ||
       xSemaphoreTake(mutex_, pdMS_TO_TICKS(250)) != pdTRUE)
     return false;
 
@@ -185,7 +203,7 @@ bool ActivityService::page(bool has_before_sequence, std::uint32_t before_sequen
   for (std::size_t offset = 0; offset < count_; ++offset) {
     const std::size_t index = (head_ + kCapacity - 1 - offset) % kCapacity;
     const Event& event = events_[index];
-    if (has_before_sequence && event.sequence >= before_sequence)
+    if (!activity_policy::before_cursor(event.sequence, has_before_sequence, before_sequence))
       continue;
     ++eligible;
     if (output.count < limit)
@@ -232,9 +250,8 @@ void ActivityService::insert(const PendingEvent& pending) {
   std::memcpy(event.detail, pending.detail, sizeof(event.detail));
 
   xSemaphoreTake(mutex_, portMAX_DELAY);
-  event.sequence = next_sequence_++;
-  if (next_sequence_ == 0)
-    next_sequence_ = 1;
+  event.sequence = next_sequence_;
+  next_sequence_ = activity_policy::following_sequence(next_sequence_);
   events_[head_] = event;
   head_ = static_cast<std::uint16_t>((head_ + 1) % kCapacity);
   if (count_ < kCapacity)

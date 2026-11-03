@@ -26,7 +26,6 @@ constexpr gpio_num_t kTxPin = GPIO_NUM_17;
 constexpr gpio_num_t kEnablePin = GPIO_NUM_7;
 constexpr gpio_num_t kBootPin = GPIO_NUM_18;
 constexpr std::size_t kFlashBlockSize = 1024;
-constexpr std::uint8_t kMaxFlashAttempts = 2;
 
 struct Segment final {
   const char* name;
@@ -157,24 +156,18 @@ esp_err_t CoreGateway::provision() {
     for (const auto& segment : kSegments) {
       error = esp_loader_flash_verify_known_md5(
           segment.address, static_cast<std::uint32_t>(segment.size), segment.md5_hex);
-      if (error == ESP_LOADER_SUCCESS) {
-        result = verifySegmentSha256(segment);
-        if (result == ESP_OK) {
-          ESP_LOGI(kTag, "H2 %s segment passed SHA-256 validation", segment.name);
-          continue;
-        }
-        ESP_LOGW(kTag, "H2 %s failed SHA-256 validation; reprovisioning", segment.name);
-        result = flashSegment(segment);
-        if (result == ESP_OK)
-          result = verifySegmentSha256(segment);
-        if (result != ESP_OK)
-          break;
+      const bool md5_matches = error == ESP_LOADER_SUCCESS;
+      result = md5_matches ? verifySegmentSha256(segment) : loaderError(error);
+      const auto action = gateway_policy::segment_action(
+          md5_matches, result == ESP_OK, !md5_matches && error != ESP_LOADER_ERROR_INVALID_MD5);
+      if (action == gateway_policy::SegmentAction::accept) {
+        ESP_LOGI(kTag, "H2 %s segment passed SHA-256 validation", segment.name);
         continue;
       }
-      if (error != ESP_LOADER_ERROR_INVALID_MD5) {
-        result = loaderError(error);
+      if (action == gateway_policy::SegmentAction::fail)
         break;
-      }
+      if (md5_matches)
+        ESP_LOGW(kTag, "H2 %s failed SHA-256 validation; reprovisioning", segment.name);
       result = flashSegment(segment);
       if (result == ESP_OK)
         result = verifySegmentSha256(segment);
@@ -203,24 +196,23 @@ esp_err_t CoreGateway::provision() {
 }
 
 esp_err_t CoreGateway::ensureReady() {
-  status_ = {State::provisioning, false, 0, ESP_OK};
+  status_ = gateway_policy::provisioning_started();
   esp_err_t result = ESP_FAIL;
-  for (std::uint8_t attempt = 1; attempt <= kMaxFlashAttempts; ++attempt) {
-    status_.flash_attempts = attempt;
+  for (std::uint8_t attempt = 1; attempt <= gateway_policy::kMaxProvisionAttempts; ++attempt) {
+    gateway_policy::provisioning_attempt(status_, attempt);
     result = provision();
     if (result == ESP_OK) {
-      status_ = {State::ready, true, attempt, ESP_OK};
+      gateway_policy::provisioning_succeeded(status_);
       return ESP_OK;
     }
     ESP_LOGE(kTag, "H2 RCP provisioning attempt %u failed: %s", attempt, esp_err_to_name(result));
   }
-  status_.state = State::failed;
-  status_.last_error = result;
+  gateway_policy::provisioning_failed(status_, result);
   return result;
 }
 
 CoreGateway::Status CoreGateway::status() const {
-  return status_;
+  return {status_.state, status_.manifest_current, status_.flash_attempts, status_.last_error};
 }
 
 } // namespace core_pilot

@@ -179,10 +179,9 @@ bool CoreDisplay::rtcReady() {
   if (!initialized_)
     return false;
   m5::rtc_datetime_t value{};
-  return M5.Rtc.getDateTime(&value) && value.time.hours >= 0 && value.time.hours <= 23 &&
-         value.time.minutes >= 0 && value.time.minutes <= 59 && value.time.seconds >= 0 &&
-         value.time.seconds <= 59 && value.date.month >= 1 && value.date.month <= 12 &&
-         value.date.date >= 1 && value.date.date <= 31 && value.date.year >= 2000;
+  return M5.Rtc.getDateTime(&value) &&
+         display_policy::valid_calendar({value.date.year, value.date.month, value.date.date,
+                                         value.time.hours, value.time.minutes, value.time.seconds});
 }
 
 bool CoreDisplay::setRtcFromUnix(std::time_t timestamp) {
@@ -218,9 +217,9 @@ bool CoreDisplay::readClock(int& hour, int& minute, int& second, int& day, int& 
   }
 
   m5::rtc_datetime_t dt{};
-  if (!M5.Rtc.getDateTime(&dt) || dt.time.hours < 0 || dt.time.hours > 23 || dt.time.minutes < 0 ||
-      dt.time.minutes > 59 || dt.time.seconds < 0 || dt.time.seconds > 59 || dt.date.month < 1 ||
-      dt.date.month > 12 || dt.date.date < 1 || dt.date.date > 31 || dt.date.year < 2000)
+  if (!M5.Rtc.getDateTime(&dt) ||
+      !display_policy::valid_calendar({dt.date.year, dt.date.month, dt.date.date, dt.time.hours,
+                                       dt.time.minutes, dt.time.seconds}))
     return false;
   hour = static_cast<int>(static_cast<unsigned char>(dt.time.hours));
   minute = static_cast<int>(static_cast<unsigned char>(dt.time.minutes));
@@ -322,9 +321,8 @@ void CoreDisplay::home(const char* network, const char* web, const char* status)
 
 void CoreDisplay::renderUpgrade() {
   const auto total = upgrade_.total_bytes;
-  const auto progress = std::min(upgrade_.progress_bytes, total);
-  const auto percent =
-      total ? static_cast<unsigned>(static_cast<std::uint64_t>(progress) * 100 / total) : 0U;
+  const auto progress = display_policy::upgrade_progress_bytes(upgrade_);
+  const auto percent = display_policy::upgrade_progress_percent(upgrade_);
   char line[52];
   std::snprintf(line, sizeof(line), "%u%%  %lu / %lu KiB", percent,
                 static_cast<unsigned long>(progress / 1024),
@@ -344,7 +342,7 @@ void CoreDisplay::renderUpgrade() {
 }
 
 void CoreDisplay::upgrade(const Upgrade& progress) {
-  if (!initialized_)
+  if (!initialized_ || !display_policy::upgrade_screen_allowed(progress.phase))
     return;
   upgrade_ = progress;
   page_ = Page::upgrade;

@@ -1,5 +1,6 @@
 #include "core_ota.hpp"
 
+#include "core_ota_policy.hpp"
 #include "esp_app_desc.h"
 #include "esp_timer.h"
 
@@ -25,163 +26,14 @@ private:
   bool held_;
 };
 
-std::uint8_t hex_value(char value) {
-  if (value >= '0' && value <= '9')
-    return static_cast<std::uint8_t>(value - '0');
-  if (value >= 'a' && value <= 'f')
-    return static_cast<std::uint8_t>(value - 'a' + 10);
-  if (value >= 'A' && value <= 'F')
-    return static_cast<std::uint8_t>(value - 'A' + 10);
-  return 0xff;
-}
-
-struct Identifier final {
-  const char* data{};
-  std::size_t size{};
-};
-
-struct Version final {
-  Identifier core[3]{};
-  Identifier prerelease{};
-};
-
-bool numeric(Identifier id) {
-  for (std::size_t i = 0; i < id.size; ++i) {
-    if (id.data[i] < '0' || id.data[i] > '9')
-      return false;
-  }
-  return id.size != 0;
-}
-
-bool parse_version(const char* text, Version& version) {
-  if (text == nullptr)
-    return false;
-  const char* cursor = text;
-  for (auto& part : version.core) {
-    const char* start = cursor;
-    while (*cursor >= '0' && *cursor <= '9')
-      ++cursor;
-    part = {start, static_cast<std::size_t>(cursor - start)};
-    if (part.size == 0 || (part.size > 1 && *start == '0'))
-      return false;
-    if (&part != &version.core[2]) {
-      if (*cursor++ != '.')
-        return false;
-    }
-  }
-  if (*cursor == '-') {
-    const char* start = ++cursor;
-    const char* identifier = cursor;
-    while (*cursor != 0 && *cursor != '+') {
-      const char c = *cursor;
-      if (c == '.') {
-        if (cursor == identifier ||
-            (numeric({identifier, static_cast<std::size_t>(cursor - identifier)}) &&
-             cursor - identifier > 1 && *identifier == '0'))
-          return false;
-        identifier = cursor + 1;
-      } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                   c == '-')) {
-        return false;
-      }
-      ++cursor;
-    }
-    if (cursor == identifier ||
-        (numeric({identifier, static_cast<std::size_t>(cursor - identifier)}) &&
-         cursor - identifier > 1 && *identifier == '0'))
-      return false;
-    version.prerelease = {start, static_cast<std::size_t>(cursor - start)};
-  }
-  if (*cursor == '+') {
-    ++cursor;
-    const char* identifier = cursor;
-    while (*cursor != 0) {
-      const char c = *cursor;
-      if (c == '.') {
-        if (cursor == identifier)
-          return false;
-        identifier = cursor + 1;
-      } else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
-                   c == '-')) {
-        return false;
-      }
-      ++cursor;
-    }
-    if (cursor == identifier)
-      return false;
-  }
-  return *cursor == 0;
-}
-
-int compare_identifier(Identifier a, Identifier b, bool prerelease = false) {
-  const bool a_numeric = numeric(a);
-  const bool b_numeric = numeric(b);
-  if (prerelease && a_numeric != b_numeric)
-    return a_numeric ? -1 : 1;
-  if (!prerelease || (a_numeric && b_numeric)) {
-    if (a.size != b.size)
-      return a.size < b.size ? -1 : 1;
-  }
-  const std::size_t length = a.size < b.size ? a.size : b.size;
-  const int comparison = std::memcmp(a.data, b.data, length);
-  if (comparison != 0)
-    return comparison < 0 ? -1 : 1;
-  if (a.size != b.size)
-    return a.size < b.size ? -1 : 1;
-  return 0;
-}
-
-int compare_versions(const Version& candidate, const Version& running) {
-  for (std::size_t i = 0; i < 3; ++i) {
-    const int result = compare_identifier(candidate.core[i], running.core[i]);
-    if (result != 0)
-      return result;
-  }
-  if (candidate.prerelease.size == 0 || running.prerelease.size == 0) {
-    if (candidate.prerelease.size == running.prerelease.size)
-      return 0;
-    return candidate.prerelease.size == 0 ? 1 : -1;
-  }
-  const char* a = candidate.prerelease.data;
-  const char* b = running.prerelease.data;
-  const char* a_end = a + candidate.prerelease.size;
-  const char* b_end = b + running.prerelease.size;
-  while (a < a_end && b < b_end) {
-    const char* a_next = a;
-    const char* b_next = b;
-    while (a_next < a_end && *a_next != '.')
-      ++a_next;
-    while (b_next < b_end && *b_next != '.')
-      ++b_next;
-    const int result = compare_identifier({a, static_cast<std::size_t>(a_next - a)},
-                                          {b, static_cast<std::size_t>(b_next - b)}, true);
-    if (result != 0)
-      return result;
-    a = a_next == a_end ? a_end : a_next + 1;
-    b = b_next == b_end ? b_end : b_next + 1;
-  }
-  if (a == a_end && b == b_end)
-    return 0;
-  return a == a_end ? -1 : 1;
-}
-
 bool newer_than_running(const char* candidate) {
-  Version proposed{};
-  Version running{};
+
   const esp_app_desc_t* app = esp_app_get_description();
   if (app == nullptr)
     return false;
   char running_version[sizeof app->version + 1]{};
   std::memcpy(running_version, app->version, sizeof app->version);
-  return parse_version(candidate, proposed) && parse_version(running_version, running) &&
-         compare_versions(proposed, running) > 0;
-}
-
-bool digest_equal(const std::uint8_t* left, const std::uint8_t* right, std::size_t size) {
-  std::uint8_t difference = 0;
-  for (std::size_t index = 0; index < size; ++index)
-    difference |= static_cast<std::uint8_t>(left[index] ^ right[index]);
-  return difference == 0;
+  return ota_policy::newer_version(candidate, running_version);
 }
 
 } // namespace
@@ -208,32 +60,11 @@ CoreOta::~CoreOta() {
 }
 
 bool CoreOta::valid_version(const char* version) {
-  if (version == nullptr)
-    return false;
-  bool nonspace = false;
-  for (std::size_t index = 0; index <= kMaxVersionBytes; ++index) {
-    const unsigned char value = static_cast<unsigned char>(version[index]);
-    if (value == 0)
-      return index != 0 && nonspace;
-    if (index == kMaxVersionBytes || value < 0x20 || value > 0x7e)
-      return false;
-    if (value != ' ')
-      nonspace = true;
-  }
-  return false;
+  return ota_policy::valid_text_version(version, kMaxVersionBytes);
 }
 
 bool CoreOta::parse_digest(const char* hex, std::uint8_t (&digest)[kSha256Bytes]) {
-  if (hex == nullptr)
-    return false;
-  for (std::size_t index = 0; index < kSha256Bytes; ++index) {
-    const std::uint8_t high = hex_value(hex[index * 2]);
-    const std::uint8_t low = hex_value(hex[index * 2 + 1]);
-    if (high == 0xff || low == 0xff)
-      return false;
-    digest[index] = static_cast<std::uint8_t>((high << 4) | low);
-  }
-  return hex[kSha256Bytes * 2] == '\0';
+  return ota_policy::parse_digest(hex, digest, kSha256Bytes);
 }
 
 void CoreOta::clear_upload_locked() {
@@ -335,8 +166,7 @@ CoreOta::Result CoreOta::prepare_impl(const Prepare& request, SessionId* session
   status_.state = State::prepared;
   last_activity_us_ = esp_timer_get_time();
   if (session != nullptr) {
-    if (++next_session_ == 0)
-      ++next_session_;
+    next_session_ = ota_policy::next_session(next_session_);
     session_ = next_session_;
     *session = session_;
   }
@@ -360,20 +190,28 @@ CoreOta::Result CoreOta::write_impl(const Chunk& chunk, SessionId session) {
   if (!lock.held())
     return {Error::no_memory, ESP_ERR_NO_MEM};
   expire_locked();
-  if ((status_.state != State::prepared && status_.state != State::staging) || session != session_)
+  if ((status_.state != State::prepared && status_.state != State::staging) ||
+      !ota_policy::session_matches(session, session_))
     return {Error::invalid_state, ESP_ERR_INVALID_STATE};
-  if (chunk.data == nullptr || chunk.size == 0)
+  const auto chunk_error =
+      ota_policy::validate_chunk(chunk.data, chunk.size, kMaxChunkBytes, chunk.offset,
+                                 status_.written_bytes, status_.size_bytes, chunk.final_chunk);
+  switch (chunk_error) {
+  case ota_policy::ChunkError::invalid_argument:
     return fail_locked(Error::invalid_argument, ESP_ERR_INVALID_ARG);
-  if (chunk.size > kMaxChunkBytes)
+  case ota_policy::ChunkError::chunk_too_large:
     return fail_locked(Error::chunk_too_large, ESP_ERR_INVALID_SIZE);
-  if (chunk.offset != status_.written_bytes)
+  case ota_policy::ChunkError::offset_mismatch:
     return fail_locked(Error::offset_mismatch, ESP_ERR_INVALID_ARG);
-  if (chunk.size > status_.size_bytes - status_.written_bytes)
+  case ota_policy::ChunkError::image_too_large:
     return fail_locked(Error::image_too_large, ESP_ERR_INVALID_SIZE);
+  case ota_policy::ChunkError::final_mismatch:
+    return fail_locked(Error::final_mismatch, ESP_ERR_INVALID_SIZE);
+  case ota_policy::ChunkError::ok:
+    break;
+  }
 
   const std::uint32_t next = status_.written_bytes + static_cast<std::uint32_t>(chunk.size);
-  if (chunk.final_chunk != (next == status_.size_bytes))
-    return fail_locked(Error::final_mismatch, ESP_ERR_INVALID_SIZE);
 
   esp_err_t error = esp_ota_write(handle_, chunk.data, chunk.size);
   if (error != ESP_OK)
@@ -382,8 +220,7 @@ CoreOta::Result CoreOta::write_impl(const Chunk& chunk, SessionId session) {
     return fail_locked(Error::hash_failed, ESP_FAIL);
 
   status_.written_bytes = next;
-  status_.progress_percent =
-      static_cast<std::uint8_t>((static_cast<std::uint64_t>(next) * 100U) / status_.size_bytes);
+  status_.progress_percent = ota_policy::progress_percent(next, status_.size_bytes);
   status_.state = State::staging;
   last_activity_us_ = esp_timer_get_time();
   if (!chunk.final_chunk)
@@ -396,7 +233,7 @@ CoreOta::Result CoreOta::write_impl(const Chunk& chunk, SessionId session) {
       actual_digest_size != sizeof actual_digest)
     return fail_locked(Error::hash_failed, ESP_FAIL);
   hash_active_ = false;
-  if (!digest_equal(actual_digest, expected_digest_, sizeof actual_digest)) {
+  if (!ota_policy::digest_equal(actual_digest, expected_digest_, sizeof actual_digest)) {
     std::memset(actual_digest, 0, sizeof actual_digest);
     return fail_locked(Error::digest_mismatch, ESP_ERR_INVALID_CRC);
   }

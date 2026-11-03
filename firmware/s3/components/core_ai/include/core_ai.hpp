@@ -53,6 +53,9 @@ void clear_provider_config(ProviderConfig& config);
 // Validates the provider transport, backend, authentication mode, and credential presence.
 // This is local configuration validation only; it does not claim network/provider availability.
 bool provider_config_usable(const ProviderConfig& config);
+bool valid_memory_id(const char* value);
+bool valid_prompt_path(const char* value);
+bool same_provider_credential_scope(const ProviderConfig& incoming, const ProviderConfig& stored);
 
 struct MemorySectionView final {
   const char* id;
