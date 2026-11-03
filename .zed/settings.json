@@ -19,10 +19,6 @@
         "...",
       ],
     },
-
-    "Rust": {
-      "language_servers": ["!rust-analyzer"],
-    },
     "C++": {
       "language_servers": ["clangd", "..."],
       "format_on_save": "on",
