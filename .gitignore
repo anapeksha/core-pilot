@@ -29,6 +29,9 @@
 /firmware/s3/sdkconfig.clang
 /firmware/s3/sdkconfig.tests.clang
 /firmware/s3/.cache/
+/firmware/s3/test/**/build/
+/firmware/s3/test/**/sdkconfig
+/firmware/s3/test/**/sdkconfig.old
 compile_commands.json
 .cache/
 .clangd/

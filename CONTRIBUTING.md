@@ -93,6 +93,31 @@ npm run test:e2e
 
 Do not run firmware formatting and the dashboard build concurrently because formatting may remove generated dashboard artifacts while they are being written.
 
+### Portable firmware logic tests
+
+CI has two deliberately separate test environments for firmware logic. Component-owned Unity cases remain beside their production components under `firmware/s3/components/core_*/test/`. The projects under `firmware/s3/test/` are runners: they assemble those policies for a specific execution environment without becoming part of the production firmware image.
+
+1. **Native host execution** configures `firmware/s3/test/host/` with the host compiler and executes deterministic policies for board geometry, display state, gateway provisioning, Matter lifecycle and bounded history, network profile/setup behavior, and OTA validation:
+
+   ```sh
+   cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+   cmake --build firmware/s3/test/host/build
+   ctest --test-dir firmware/s3/test/host/build --output-on-failure
+   ```
+
+2. **ESP32-S3 compile/link validation** builds `firmware/s3/test/esp32s3/` with the official ESP-IDF 6.0.2 toolchain. The image reuses the existing component Unity test sources and verifies that they compile and link for the actual `esp32s3` target:
+
+   ```sh
+   eim run 'idf.py -C firmware/s3/test/esp32s3 -B firmware/s3/test/esp32s3/build -D SDKCONFIG_DEFAULTS=sdkconfig.defaults set-target esp32s3' v6.0.2
+   eim run 'idf.py -C firmware/s3/test/esp32s3 -B firmware/s3/test/esp32s3/build build' v6.0.2
+   ```
+
+The second layer is labeled **compile/link only** in CI: GitHub-hosted runners do not execute the image. The built binaries and ELF are uploaded as a CI artifact and may be flashed to a positively identified CoreS3 for Unity menu execution.
+
+There is currently no ESP32-S3 QEMU execution job. Espressif's QEMU fork supports ESP32-S3 CPU/system emulation, so the minimal Unity image may be a future candidate for deterministic execution after its boot and test-runner behavior is proven reliable in CI. QEMU does not model the CoreS3 board peripherals or provide hardware evidence for Wi-Fi/BLE, the H2 RCP, Matter/Thread integration, timing, LCD/TF bus ownership, storage, touch, RTC, or OTA behavior. Native host execution and QEMU therefore complement—but do not replace—real target validation.
+
+These test builds use normal test configuration and do not use the development authentication overlay.
+
 Hardware-dependent changes require testing on a positively identified device. Record the device, action, expected result, observed result, and pass/fail status. Redact all sensitive values from logs and screenshots.
 
 ## Pull requests

@@ -44,9 +44,53 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dashboard-dist
-          path: dist
+          path: web/dist
           if-no-files-found: error
           retention-days: 1
+
+  host_tests:
+    name: Native portable logic execution
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    container: espressif/idf:v6.0.2
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure native host tests
+        run: cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
+      - name: Build native host tests
+        run: cmake --build firmware/s3/test/host/build
+      - name: Execute native host tests
+        run: ctest --test-dir firmware/s3/test/host/build --output-on-failure
+
+  esp32s3_test_image:
+    name: ESP32-S3 Unity test image (compile/link only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container: espressif/idf:v6.0.2
+    steps:
+      - uses: actions/checkout@v5
+      - name: Configure ESP32-S3 Unity test image
+        run: >-
+          idf.py -C firmware/s3/test/esp32s3
+          -B firmware/s3/test/esp32s3/build
+          -D SDKCONFIG_DEFAULTS=sdkconfig.defaults
+          set-target esp32s3
+      - name: Compile and link ESP32-S3 Unity test image
+        run: >-
+          idf.py -C firmware/s3/test/esp32s3
+          -B firmware/s3/test/esp32s3/build build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-pilot-esp32s3-test-image
+          path: |
+            firmware/s3/test/esp32s3/build/bootloader/bootloader.bin
+            firmware/s3/test/esp32s3/build/partition_table/partition-table.bin
+            firmware/s3/test/esp32s3/build/core_pilot_esp32s3_tests.bin
+            firmware/s3/test/esp32s3/build/core_pilot_esp32s3_tests.elf
+            firmware/s3/test/esp32s3/build/core_pilot_esp32s3_tests.map
+            firmware/s3/test/esp32s3/build/flasher_args.json
+          if-no-files-found: error
+          retention-days: 7
 
   firmware:
     name: ESP-IDF C++ firmware
@@ -97,10 +141,14 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [web, firmware]
+    needs: [web, host_tests, esp32s3_test_image, firmware]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
-        if: needs.web.result != 'success' || needs.firmware.result != 'success'
+        if: >-
+          needs.web.result != 'success' ||
+          needs.host_tests.result != 'success' ||
+          needs.esp32s3_test_image.result != 'success' ||
+          needs.firmware.result != 'success'
         run: exit 1
       - run: echo "All required Core Pilot checks passed."
