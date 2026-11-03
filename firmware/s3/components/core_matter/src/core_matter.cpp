@@ -1232,8 +1232,10 @@ void CoreMatter::run() {
     clearSecrets();
     mbedtls_platform_zeroize(command_slots_, sizeof(command_slots_));
     mbedtls_platform_zeroize(command_slot_used_, sizeof(command_slot_used_));
-    task_ = nullptr;
-    vTaskDelete(nullptr);
+    // CHIP and OpenThread may have scheduled platform callbacks before startup fails. Keep the
+    // protocol owner task storage alive so those callbacks cannot race a deleted FreeRTOS TCB.
+    // The failed state rejects new protocol operations; recovery requires a controlled reboot.
+    vTaskSuspend(nullptr);
     return;
   }
 
