@@ -10,6 +10,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass
 
 
@@ -30,16 +31,40 @@ def opener() -> urllib.request.OpenerDirector:
     return client
 
 
+def read_json_response(response, url: str) -> dict:
+    if response.status != 200:
+        raise RuntimeError(f"{url} returned HTTP {response.status}")
+    if response.headers.get("Cache-Control") != "no-store":
+        raise RuntimeError(f"{url} omitted Cache-Control: no-store")
+    if response.headers.get("Connection", "").lower() != "close":
+        raise RuntimeError(f"{url} omitted Connection: close")
+    return json.load(response)
+
+
 def fetch_json(client: urllib.request.OpenerDirector, url: str, timeout: float) -> dict:
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
     with client.open(request, timeout=timeout) as response:
-        if response.status != 200:
-            raise RuntimeError(f"{url} returned HTTP {response.status}")
-        if response.headers.get("Cache-Control") != "no-store":
-            raise RuntimeError(f"{url} omitted Cache-Control: no-store")
-        if response.headers.get("Connection", "").lower() != "close":
-            raise RuntimeError(f"{url} omitted Connection: close")
-        return json.load(response)
+        return read_json_response(response, url)
+
+
+def post_json(
+    client: urllib.request.OpenerDirector,
+    url: str,
+    body: dict,
+    timeout: float,
+) -> dict:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(body, separators=(",", ":")).encode(),
+        headers={
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Origin": url.split("/api/", 1)[0],
+        },
+        method="POST",
+    )
+    with client.open(request, timeout=timeout) as response:
+        return read_json_response(response, url)
 
 
 def read_sample(
@@ -148,6 +173,142 @@ def run_stress(args: argparse.Namespace, base_url: str) -> int:
     return 0
 
 
+def wait_for(
+    description: str,
+    timeout: float,
+    poll: Callable[[], dict],
+) -> dict:
+    deadline = time.monotonic() + timeout
+    last: dict = {}
+    while time.monotonic() < deadline:
+        last = poll()
+        if last.get("complete"):
+            return last
+        time.sleep(1)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+
+def device_nodes(
+    client: urllib.request.OpenerDirector, base_url: str, timeout: float
+) -> set[str]:
+    response = fetch_json(client, f"{base_url}/api/v1/devices", timeout)
+    devices = response.get("devices")
+    if not isinstance(devices, list):
+        raise RuntimeError("device registry response is malformed")
+    nodes = {
+        device.get("node_id")
+        for device in devices
+        if device.get("protocol") == "matter"
+    }
+    if None in nodes or any(not isinstance(node, str) for node in nodes):
+        raise RuntimeError("Matter device registry contains an invalid node ID")
+    return nodes
+
+
+def run_lifecycle(args: argparse.Namespace, base_url: str) -> int:
+    setup_payload = os.environ.get("CORE_PILOT_MATTER_SETUP_PAYLOAD", "")
+    if not setup_payload:
+        raise RuntimeError("set CORE_PILOT_MATTER_SETUP_PAYLOAD in the environment")
+
+    client = opener()
+    nodes = device_nodes(client, base_url, args.timeout)
+    if len(nodes) != 1:
+        raise RuntimeError(
+            f"expected exactly one commissioned Matter node, found {len(nodes)}"
+        )
+    node_id = next(iter(nodes))
+
+    for cycle in range(1, args.lifecycle_cycles + 1):
+        removal = post_json(
+            client,
+            f"{base_url}/api/v1/matter/devices/remove",
+            {"device_id": node_id},
+            args.timeout,
+        )
+        operation_id = removal.get("operation_id")
+        if not removal.get("accepted") or not isinstance(operation_id, int):
+            raise RuntimeError(
+                f"cycle {cycle} removal rejected: {removal.get('status')}"
+            )
+
+        def removal_status() -> dict:
+            matter = fetch_json(client, f"{base_url}/api/v1/matter", args.timeout)
+            command = matter.get("command", {})
+            if command.get("id") != operation_id:
+                return {"complete": False, "phase": command.get("phase")}
+            phase = command.get("phase")
+            if phase == "failed":
+                raise RuntimeError(
+                    f"cycle {cycle} unpair failed: {command.get('last_error')}"
+                )
+            return {"complete": phase == "complete", "phase": phase}
+
+        wait_for("Matter unpair", args.operation_timeout, removal_status)
+        wait_for(
+            "registry removal",
+            args.operation_timeout,
+            lambda: {
+                "complete": node_id not in device_nodes(client, base_url, args.timeout)
+            },
+        )
+        print(f"cycle={cycle} unpair=complete registry=removed", flush=True)
+
+        commission = post_json(
+            client,
+            f"{base_url}/api/v1/matter/commission",
+            {"transport": args.matter_transport, "setup_payload": setup_payload},
+            args.timeout,
+        )
+        commission_id = commission.get("operation_id")
+        if not commission.get("accepted") or not isinstance(commission_id, int):
+            raise RuntimeError(
+                f"cycle {cycle} commissioning rejected: {commission.get('status')}"
+            )
+
+        def commission_status() -> dict:
+            matter = fetch_json(client, f"{base_url}/api/v1/matter", args.timeout)
+            terminal = matter.get("operation", {}).get("last_terminal")
+            if not isinstance(terminal, dict) or terminal.get("id") != commission_id:
+                active = matter.get("operation", {}).get("active")
+                return {
+                    "complete": False,
+                    "phase": active.get("phase") if isinstance(active, dict) else None,
+                }
+            phase = terminal.get("phase")
+            if phase != "commissioning_complete":
+                failure = terminal.get("failure") or {}
+                raise RuntimeError(
+                    f"cycle {cycle} commissioning {phase}: {failure.get('code')}"
+                )
+            return {"complete": True, "phase": phase}
+
+        wait_for("Matter commissioning", args.operation_timeout, commission_status)
+
+        def recovery_status() -> dict:
+            matter = fetch_json(client, f"{base_url}/api/v1/matter", args.timeout)
+            restored_nodes = device_nodes(client, base_url, args.timeout)
+            ready = all(
+                (
+                    matter.get("case_ready"),
+                    matter.get("subscriptions_ready"),
+                    len(restored_nodes) == 1,
+                )
+            )
+            return {"complete": ready, "nodes": sorted(restored_nodes)}
+
+        recovered = wait_for(
+            "CASE and subscription recovery", args.operation_timeout, recovery_status
+        )
+        node_id = recovered["nodes"][0]
+        print(
+            f"cycle={cycle} commission=complete case=ready subscriptions=ready",
+            flush=True,
+        )
+
+    print(f"PASS lifecycle cycles={args.lifecycle_cycles}", flush=True)
+    return 0
+
+
 def run_soak(args: argparse.Namespace, base_url: str, with_stress: bool) -> int:
     client = opener()
     started = time.monotonic()
@@ -206,7 +367,7 @@ def run_soak(args: argparse.Namespace, base_url: str, with_stress: bool) -> int:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("stress", "soak", "both"))
+    parser.add_argument("mode", choices=("stress", "soak", "both", "lifecycle"))
     parser.add_argument(
         "host", help="Hostname, IPv4 address, or bracketed IPv6 address"
     )
@@ -219,6 +380,11 @@ def main() -> int:
     parser.add_argument("--stress-workers", type=int, default=3)
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--max-failure-rate", type=float, default=0.05)
+    parser.add_argument("--lifecycle-cycles", type=int, default=3)
+    parser.add_argument("--operation-timeout", type=float, default=180.0)
+    parser.add_argument(
+        "--matter-transport", choices=("wifi", "thread"), default="wifi"
+    )
     args = parser.parse_args()
 
     positive = (
@@ -229,6 +395,8 @@ def main() -> int:
         args.stress_requests,
         args.stress_workers,
         args.timeout,
+        args.lifecycle_cycles,
+        args.operation_timeout,
     )
     if any(value <= 0 for value in positive):
         parser.error("durations, counts, workers, and timeout must be positive")
@@ -239,9 +407,17 @@ def main() -> int:
         parser.error(
             "set CORE_PILOT_BEARER to a RAM session token; never pass it on the command line"
         )
+    if args.mode == "lifecycle" and not os.environ.get(
+        "CORE_PILOT_MATTER_SETUP_PAYLOAD"
+    ):
+        parser.error(
+            "set CORE_PILOT_MATTER_SETUP_PAYLOAD in the environment for lifecycle testing"
+        )
     base_url = f"{args.scheme}://{args.host}"
     if args.mode == "stress":
         return run_stress(args, base_url)
+    if args.mode == "lifecycle":
+        return run_lifecycle(args, base_url)
     return run_soak(args, base_url, with_stress=args.mode == "both")
 
 

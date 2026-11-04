@@ -120,6 +120,16 @@ These test builds use normal test configuration and do not use the development a
 
 Hardware-dependent changes require testing on a positively identified device. Record the device, action, expected result, observed result, and pass/fail status. Redact all sensitive values from logs and screenshots.
 
+Matter lifecycle validation requires the accessory setup payload in process memory and refuses to mutate device state when it is absent. Never pass the payload on the command line or write it to a log:
+
+```sh
+export CORE_PILOT_MATTER_SETUP_PAYLOAD='<accessory setup payload>'
+export CORE_PILOT_BEARER='<RAM session token>'
+python tools/test.py lifecycle <core-s3-ip> --lifecycle-cycles 3 --matter-transport wifi
+```
+
+Each cycle verifies asynchronous unpair completion, encrypted registry removal, recommissioning, registry restoration, CASE, and subscriptions. Run the standard stress and soak commands after lifecycle mutation to validate the recovered state.
+
 ## Pull requests
 
 A pull request should:
