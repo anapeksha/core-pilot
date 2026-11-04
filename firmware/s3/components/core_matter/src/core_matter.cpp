@@ -1150,13 +1150,23 @@ void CoreMatter::onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error) {
                        matter->command_status_.kind == CommandKind::unpair_device &&
                        matter->command_status_.state == CommandState::invoking &&
                        matter->command_status_.node_id == node_id;
-  if (current && error == CHIP_NO_ERROR)
-    static_cast<void>(matter->lifecycle_.erase(node_id, generation));
+  if (current) {
+    if (error == CHIP_NO_ERROR)
+      static_cast<void>(matter->lifecycle_.erase(node_id, generation));
+    else
+      static_cast<void>(matter->lifecycle_.abandonShutdown(node_id, generation));
+  }
   taskEXIT_CRITICAL(&matter->status_lock_);
-  if (current)
-    matter->finishCommand(operation_id,
-                          error == CHIP_NO_ERROR ? CommandState::complete : CommandState::failed,
-                          error == CHIP_NO_ERROR ? ESP_OK : ESP_FAIL);
+  if (!current)
+    return;
+
+  matter->finishCommand(operation_id,
+                        error == CHIP_NO_ERROR ? CommandState::complete : CommandState::failed,
+                        error == CHIP_NO_ERROR ? ESP_OK : ESP_FAIL);
+  if (error != CHIP_NO_ERROR && matter->recovery_timer_ != nullptr) {
+    static_cast<void>(esp_timer_stop(matter->recovery_timer_));
+    static_cast<void>(esp_timer_start_once(matter->recovery_timer_, 2000000));
+  }
 }
 
 esp_err_t CoreMatter::applyThreadDatasetOnOwner(const std::uint8_t* dataset, std::size_t length) {

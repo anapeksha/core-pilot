@@ -66,8 +66,14 @@ TEST_CASE("generation invalidates stale callbacks and shutdown blocks recovery",
   TEST_ASSERT_NOT_EQUAL(0, table.beginShutdown(0x22));
   const auto* unconfigured = table.snapshot(0x22);
   TEST_ASSERT_NOT_NULL(unconfigured);
-  TEST_ASSERT_TRUE(table.abandonShutdown(0x22, unconfigured->generation));
-  TEST_ASSERT_FALSE(table.erase(0x22, unconfigured->generation));
+  const std::uint32_t abandoned_generation = unconfigured->generation;
+  TEST_ASSERT_TRUE(table.abandonShutdown(0x22, abandoned_generation));
+  TEST_ASSERT_FALSE(table.erase(0x22, abandoned_generation));
+  const auto* recovering = table.snapshot(0x22);
+  TEST_ASSERT_NOT_NULL(recovering);
+  TEST_ASSERT_EQUAL_UINT8(static_cast<unsigned>(SubscriptionPhase::recovering),
+                          static_cast<unsigned>(recovering->phase));
+  TEST_ASSERT_TRUE(recovering->recovery_pending);
 }
 
 TEST_CASE("lifecycle slots support repeated commission and unpair cycles", "[core_matter]") {
