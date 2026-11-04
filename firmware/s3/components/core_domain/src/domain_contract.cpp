@@ -88,9 +88,9 @@ constexpr RouteContract routes[] = {
      "max_repeated_tool_calls:t max_actions:t destructive_confirmation:s "
      "persistence:s provider_transport:v provider_transport_requirements:a"},
     {"POST", "/api/v1/ai/provider", "provider:o", "accepted:b status:s detail:s"},
-    {"GET", "/api/v1/ai/chat", nullptr, "accepted:b status:s reply:s actions:a"},
+    {"GET", "/api/v1/ai/chat", nullptr, "accepted:b operation_id:s status:s reply:s actions:a"},
     {"POST", "/api/v1/ai/chat", "message:s history:a chat_id:s?",
-     "accepted:b status:s reply:s actions:a"},
+     "accepted:b operation_id:s status:s reply:s actions:a"},
     {"GET", "/api/v1/ai/memory", nullptr, "sections:a encrypted:b detail:s"},
     {"POST", "/api/v1/ai/memory/section", "id:s markdown:s", "accepted:b status:s detail:s"},
     {"GET", "/api/v1/ai/prompts", nullptr, "files:a encrypted:b detail:s"},
@@ -100,7 +100,8 @@ constexpr RouteContract routes[] = {
      "jsonrpc:s id:v result:v? error:o?"},
     {"GET", "/api/v1/ai/mcp/tools", nullptr, "tools:a"},
     {"GET", "/api/v1/ai/mcp/context", nullptr, "system_prompt:s context_json:s tools:a"},
-    {"POST", "/api/v1/ai/mcp/tool", "tool:s enabled:b", "accepted:b status:s detail:s"},
+    {"POST", "/api/v1/ai/mcp/tool", "tool:s enabled:b confirmation:s?",
+     "accepted:b status:s detail:s"},
     {"POST", "/api/v1/ai/mcp/invoke", "tool:s arguments_json:s", "accepted:b status:s detail:s"},
     {"POST", "/api/v1/ota/prepare", "version:s size_bytes:u sha256_hex:s restart_after_update:b",
      "accepted:b status:s detail:s"},
@@ -112,8 +113,6 @@ constexpr RouteContract routes[] = {
     {"POST", "/api/v1/storage/models/reset", "confirmation:s", "accepted:b status:s detail:s"},
     {"POST", "/api/v1/activity/page", "before_sequence:u? limit:t?",
      "events:a next_before_sequence:u? retained:h dropped_events:u detail:s"},
-    {"GET", "/api/v1/diagnostics", nullptr,
-     "storage:o network:o time:o matter:o system:o activity:o"},
 };
 
 struct Nested {

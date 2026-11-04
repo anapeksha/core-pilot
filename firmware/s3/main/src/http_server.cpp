@@ -2679,13 +2679,17 @@ esp_err_t mcpPermissionHandler(httpd_req_t* request) {
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "enabled");
   const cJSON* confirmation =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "confirmation");
+  static constexpr const char* fields[] = {"tool", "enabled"};
+  static constexpr const char* confirmed_fields[] = {"tool", "enabled", "confirmation"};
+  const bool has_confirmation = confirmation != nullptr;
+  const bool valid = exactObject(document, has_confirmation ? confirmed_fields : fields,
+                                 has_confirmation ? 3 : 2) &&
+                     cJSON_IsString(tool) && cJSON_IsBool(enabled) &&
+                     (!has_confirmation || cJSON_IsString(confirmation));
   const esp_err_t result =
-      cJSON_IsString(tool) && cJSON_IsBool(enabled) &&
-              (confirmation == nullptr || cJSON_IsString(confirmation))
-          ? McpService::setPermission(*runtime, tool->valuestring, cJSON_IsTrue(enabled),
-                                      cJSON_IsString(confirmation) ? confirmation->valuestring
-                                                                   : nullptr)
-          : ESP_ERR_INVALID_ARG;
+      valid ? McpService::setPermission(*runtime, tool->valuestring, cJSON_IsTrue(enabled),
+                                        has_confirmation ? confirmation->valuestring : nullptr)
+            : ESP_ERR_INVALID_ARG;
   cJSON_Delete(document);
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);

@@ -221,7 +221,7 @@ esp_err_t dispatch(httpd_req_t* req) {
       core_domain::same_origin_mutation_allowed(origin[0] ? origin : nullptr, host) !=
           core_domain::ApiError::ok)
     return reject(req, "403 Forbidden", "Origin rejected");
-  if (req->method == HTTP_POST) {
+  if (req->method == HTTP_POST || req->method == HTTP_PATCH) {
     char type[64]{};
     if (!header(req, "Content-Type", type, sizeof(type)) ||
         std::strcmp(type, "application/json") != 0)
