@@ -12,13 +12,13 @@ Core Pilot turns an M5Stack CoreS3 into a private, local-first control panel for
 - Create scenes that operate several devices together.
 - Build local automations for routine actions.
 - Discover, commission, monitor, and remove Matter devices.
-- Use a Gateway H2 as an OpenThread radio for Matter-over-Thread devices.
+- Integrate a Gateway H2 OpenThread radio for ongoing Matter-over-Thread development.
 - Store mutable settings and smart-home records encrypted on the SD card.
 - Join an existing Wi-Fi network or guide initial setup through a protected setup network.
 - Install signed firmware updates from the dashboard.
 - Continue providing local controls without relying on AI or an internet connection.
 
-Matter-over-Wi-Fi and Matter-over-Thread are shown as available only when their required services are genuinely ready. Some commissioning and recovery paths are still undergoing hardware validation.
+Matter-over-Wi-Fi commissioning, subscription recovery, control, and removal have been exercised on hardware with a Nesso accessory. This is implementation evidence, not Matter certification. Matter-over-Thread remains experimental until the H2 Spinel link, routed IPv6, and DNS-SD behavior have been validated together on target hardware.
 
 ## Dashboard access
 

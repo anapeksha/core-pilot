@@ -69,9 +69,9 @@ safe migration/erase plan. A pre-existing `firmware/s3/sdkconfig` can override
 
 ESP-IDF's mbedTLS configuration must enable `CONFIG_MBEDTLS_CHACHA20_C`,
 `CONFIG_MBEDTLS_POLY1305_C`, `CONFIG_MBEDTLS_CHACHAPOLY_C`, and
-`CONFIG_MBEDTLS_HKDF_C` before linking this component. The checked-in
-`sdkconfig` currently disables these; enabling them requires a separate
-configuration change outside this component. Unity cases in `test/` can be run
+`CONFIG_MBEDTLS_HKDF_C` before linking this component. The tracked
+`sdkconfig.defaults` enables these primitives; generated `sdkconfig` files must
+not override them. Unity cases in `test/` can be run
 as an ESP-IDF unit-test component on a configured target; memory fakes keep the
 seed/storage cases independent of actual flash hardware. No hardware validation
 is implied by these tests.

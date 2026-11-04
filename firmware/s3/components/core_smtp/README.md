@@ -1,6 +1,6 @@
 # core_smtp
 
-Production-oriented SMTP persistence and a bounded synchronous transport primitive. This component is intentionally not connected to HTTP or `main`; a future core-0 owner task should serialize calls to `send()`.
+Production-oriented SMTP persistence and a bounded synchronous transport primitive. Application orchestration is provided by the core-0 `SmtpService`, which owns queued sends and exposes bounded status through the HTTP API.
 
 ## Security model
 
@@ -13,21 +13,21 @@ Production-oriented SMTP persistence and a bounded synchronous transport primiti
 
 ## Limits
 
-| Value | Maximum bytes/count |
-|---|---:|
-| Host | 253 bytes |
-| Username | 128 bytes |
-| Password | 256 bytes |
-| Email address | 254 bytes |
-| Subject | 160 bytes |
-| Body | 4096 bytes |
-| Recipients | 4 |
-| Reply line / reply | 512 / 4096 bytes |
+| Value              | Maximum bytes/count |
+| ------------------ | ------------------: |
+| Host               |           253 bytes |
+| Username           |           128 bytes |
+| Password           |           256 bytes |
+| Email address      |           254 bytes |
+| Subject            |           160 bytes |
+| Body               |          4096 bytes |
+| Recipients         |                   4 |
+| Reply line / reply |    512 / 4096 bytes |
 
 ## API notes
 
 Call `ConfigRepository::start()` before `load()` or `save()`. A loaded `Config` contains the password because transport needs it; callers must keep it task-local and call `clear_config()` immediately after use. Do not expose it through status or HTTP responses.
 
-`send()` is blocking but every connect/read/write has a caller-bounded timeout. It is suitable as the low-level operation of a future bounded core-0 queue owner, not for direct use in callbacks. It supports `AUTH LOGIN`, only after TLS. SMTP capability negotiation is deliberately conservative: unavailable STARTTLS or rejected commands fail closed.
+`send()` is blocking but every connect/read/write has a caller-bounded timeout. It is the low-level operation used by the application's bounded core-0 queue owner and must not be called directly from HTTP callbacks. It supports `AUTH LOGIN`, only after TLS. SMTP capability negotiation is deliberately conservative: unavailable STARTTLS or rejected commands fail closed.
 
-The public `ReplyParser`, validation functions, LAN policy helper, and `encode_data_body()` are independent enough for host/unit tests. No owner task, HTTP route, retry queue, or application integration is included here.
+The public `ReplyParser`, validation functions, LAN policy helper, and `encode_data_body()` are independent enough for host/unit tests. The queue owner, HTTP routes, and retry policy belong to application orchestration rather than this component.
