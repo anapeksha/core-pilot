@@ -132,7 +132,9 @@ def checked_sample(
     return None, failures
 
 
-def sample_is_ready(current: Sample, baseline_reset_reason: int) -> bool:
+def sample_is_ready(
+    current: Sample, baseline_reset_reason: int, require_thread: bool = True
+) -> bool:
     if current.reset_reason != baseline_reset_reason:
         print(
             f"FAIL reset reason changed from {baseline_reset_reason} "
@@ -143,7 +145,7 @@ def sample_is_ready(current: Sample, baseline_reset_reason: int) -> bool:
     if not all(
         (
             current.matter_ready,
-            current.thread_ready,
+            current.thread_ready or not require_thread,
             current.case_ready,
             current.subscriptions_ready,
         )
@@ -167,7 +169,9 @@ def run_stress(args: argparse.Namespace, base_url: str) -> int:
     current, _ = checked_sample(
         opener(), base_url, args.timeout, args.sample_attempts, 1
     )
-    if current is None or not sample_is_ready(current, current.reset_reason):
+    if current is None or not sample_is_ready(
+        current, current.reset_reason, require_thread=args.matter_transport == "thread"
+    ):
         return 1
     print("PASS stress and recovery", flush=True)
     return 0
