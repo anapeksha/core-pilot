@@ -39,7 +39,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dashboard-dist
-          path: web/dist
+          path: dist
           if-no-files-found: error
           retention-days: 1
 
