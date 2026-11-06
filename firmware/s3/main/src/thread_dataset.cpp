@@ -158,48 +158,58 @@ void ThreadDatasetService::reconcile() {
     return;
   mbedtls_platform_zeroize(queue_buffer_, sizeof(queue_buffer_));
 
-  publish(State::persisting, request.operation_id, ESP_OK);
+  publish(State::submitting, request.operation_id, ESP_OK);
+  std::uint32_t matter_operation_id = 0;
+  const esp_err_t result =
+      matter_.applyThreadDataset(request.tlvs, request.length, matter_operation_id);
+  if (result == ESP_OK) {
+    portENTER_CRITICAL(&lock_);
+    active_request_ = request;
+    matter_operation_id_ = matter_operation_id;
+    portEXIT_CRITICAL(&lock_);
+  } else {
+    publish(State::failed, request.operation_id, result);
+  }
+  mbedtls_platform_zeroize(&request, sizeof(request));
+}
+
+void ThreadDatasetService::reconcileMatterTerminal(std::uint32_t matter_operation_id,
+                                                   bool succeeded, esp_err_t error) {
+  Request request{};
+  portENTER_CRITICAL(&lock_);
+  const bool current = status_.state == State::submitting && matter_operation_id != 0 &&
+                       matter_operation_id == matter_operation_id_;
+  if (current) {
+    request = active_request_;
+    active_request_ = {};
+    matter_operation_id_ = 0;
+    status_.state = succeeded ? State::persisting : State::failed;
+    status_.last_error = succeeded ? ESP_OK : error;
+  }
+  portEXIT_CRITICAL(&lock_);
+  if (!current || !succeeded) {
+    mbedtls_platform_zeroize(&request, sizeof(request));
+    return;
+  }
+
   ThreadDataset dataset{};
   dataset.length = request.length;
   std::memcpy(dataset.tlvs, request.tlvs, request.length);
-  ThreadDataset current{};
-  const auto loaded = loadThreadDataset(storage_, current);
+  ThreadDataset previous{};
+  const auto loaded = loadThreadDataset(storage_, previous);
   if (loaded == core_security::Status::Ok)
-    dataset.generation = current.generation;
-  current.clear();
-
+    dataset.generation = previous.generation;
+  previous.clear();
   if (loaded != core_security::Status::Ok && loaded != core_security::Status::NotFound &&
       loaded != core_security::Status::Invalid) {
     publish(State::failed, request.operation_id, ESP_ERR_INVALID_STATE);
   } else if (saveThreadDataset(storage_, random_, dataset) != core_security::Status::Ok) {
     publish(State::failed, request.operation_id, ESP_FAIL);
   } else {
-    publish(State::submitting, request.operation_id, ESP_OK);
-    std::uint32_t matter_operation_id = 0;
-    const esp_err_t result =
-        matter_.applyThreadDataset(dataset.tlvs, dataset.length, matter_operation_id);
-    if (result == ESP_OK) {
-      portENTER_CRITICAL(&lock_);
-      matter_operation_id_ = matter_operation_id;
-      portEXIT_CRITICAL(&lock_);
-    } else {
-      publish(State::failed, request.operation_id, result);
-    }
+    publish(State::complete, request.operation_id, ESP_OK);
   }
   dataset.clear();
   mbedtls_platform_zeroize(&request, sizeof(request));
-}
-
-void ThreadDatasetService::reconcileMatterTerminal(std::uint32_t matter_operation_id,
-                                                   bool succeeded, esp_err_t error) {
-  portENTER_CRITICAL(&lock_);
-  if (status_.state == State::submitting && matter_operation_id != 0 &&
-      matter_operation_id == matter_operation_id_) {
-    status_.state = succeeded ? State::complete : State::failed;
-    status_.last_error = succeeded ? ESP_OK : error;
-    matter_operation_id_ = 0;
-  }
-  portEXIT_CRITICAL(&lock_);
 }
 
 ThreadDatasetService::Status ThreadDatasetService::status() const {

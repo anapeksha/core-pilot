@@ -30,6 +30,7 @@ public:
     std::uint8_t station_bssid[6]{};
     bool has_ipv6 = false;
     esp_ip6_addr_t ipv6{};
+    bool mdns_ready = false;
   };
 
   enum class ScanState : std::uint8_t { idle, scanning, complete, failed };

@@ -155,6 +155,7 @@ public:
   struct Status final {
     State state;
     bool commissioner_ready;
+    bool spinel_ready;
     bool fabric_configured;
     bool border_router_ready;
     bool thread_dataset_configured;
@@ -164,6 +165,7 @@ public:
     std::uint32_t operation_id;
     std::uint64_t commissioned_node_id;
     std::uint16_t subscriptions_active;
+    bool pase_established;
     bool case_ready;
     esp_err_t last_error;
   };
@@ -203,6 +205,7 @@ public:
                         EndpointSnapshot& snapshot) const;
   std::size_t lifecycleNodeCount() const;
   std::size_t configuredEndpointCount() const;
+  bool takeUnpairReconciliation(std::uint64_t& node_id);
   static void onConnectivityRestored();
   Status status() const;
   CommandStatus commandStatus() const;
@@ -253,10 +256,22 @@ private:
   static void taskEntry(void* context);
   static void recoveryTimerCallback(void* context);
   static void onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error);
-  static void onOnOffReport(std::uint64_t node_id, const chip::app::ConcreteDataAttributePath& path,
+  struct SubscriptionCallbackToken final {
+    CoreMatter* owner;
+    std::uint64_t node_id;
+    std::uint32_t generation;
+    bool in_use;
+  };
+  static void onOnOffReport(void* context, std::uint64_t node_id,
+                            const chip::app::ConcreteDataAttributePath& path,
                             chip::TLV::TLVReader* data, const chip::app::StatusIB& status);
-  static void onSubscriptionEstablished(std::uint64_t node_id, std::uint32_t subscription_id);
-  static void onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t subscription_id);
+  static void onSubscriptionEstablished(void* context, std::uint64_t node_id,
+                                        std::uint32_t subscription_id);
+  static void onSubscriptionTerminated(void* context, std::uint64_t node_id,
+                                       std::uint32_t subscription_id);
+  SubscriptionCallbackToken* allocateSubscriptionToken(std::uint64_t node_id,
+                                                       std::uint32_t generation);
+  void releaseSubscriptionToken(SubscriptionCallbackToken* token);
   void run();
   esp_err_t startController();
   esp_err_t applyThreadDatasetOnOwner(const std::uint8_t* dataset, std::size_t length);
@@ -271,8 +286,11 @@ private:
   struct InvokeCallbackContext final {
     CoreMatter* owner;
     std::uint32_t operation_id;
+    bool in_use;
   };
   static_assert(std::is_trivially_copyable_v<InvokeCallbackContext>);
+  InvokeCallbackContext* allocateInvokeCallback(std::uint32_t operation_id);
+  void releaseInvokeCallback(InvokeCallbackContext* context);
 
   static constexpr UBaseType_t kQueueDepth = 8;
   static constexpr std::size_t kTerminalCommandDepth = 8;
@@ -283,20 +301,38 @@ private:
   bool command_slot_used_[kQueueDepth]{};
   TaskHandle_t task_{nullptr};
   portMUX_TYPE status_lock_ = portMUX_INITIALIZER_UNLOCKED;
-  Status status_{
-      State::stopped,           false, false, false, false, false, CommissioningTransport::wifi,
-      CommissioningState::idle, 0,     0,     0,     false, ESP_OK};
+  Status status_{State::stopped,
+                 false,
+                 false,
+                 false,
+                 false,
+                 false,
+                 false,
+                 CommissioningTransport::wifi,
+                 CommissioningState::idle,
+                 0,
+                 0,
+                 0,
+                 false,
+                 false,
+                 ESP_OK};
   CommandStatus command_status_{CommandKind::none, CommandState::idle, 0, 0, 0, false, ESP_OK};
   detail::TerminalHistory<TerminalCommand, kTerminalCommandDepth> terminal_commands_{};
   std::uint64_t next_terminal_sequence_{1};
   StaticSemaphore_t terminal_signal_storage_{};
   SemaphoreHandle_t terminal_signal_{nullptr};
-  InvokeCallbackContext invoke_callback_context_{};
+  InvokeCallbackContext invoke_callback_contexts_[kQueueDepth]{};
+  std::uint32_t active_invoke_operation_id_{0};
+  std::int64_t active_invoke_started_us_{0};
   esp_timer_handle_t recovery_timer_{nullptr};
   std::uint32_t active_unpair_operation_id_{0};
+  std::uint64_t active_unpair_node_id_{0};
   std::uint32_t active_unpair_generation_{0};
   std::int64_t active_unpair_started_us_{0};
+  bool active_unpair_timed_out_{false};
+  std::uint64_t reconciled_unpair_node_id_{0};
   detail::LifecycleTable<kMaxLifecycleNodes, kMaxLifecycleEndpoints> lifecycle_{};
+  SubscriptionCallbackToken subscription_tokens_[kMaxLifecycleNodes]{};
   DiscoveryStatus discovery_status_{};
   std::uint32_t next_operation_id_{1};
   std::uint32_t next_command_operation_id_{1};

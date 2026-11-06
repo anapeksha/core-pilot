@@ -69,6 +69,7 @@ private:
   Status status_{};
   std::uint32_t next_operation_id_{1};
   std::uint32_t matter_operation_id_{};
+  Request active_request_{};
 };
 
 const char* threadDatasetOperationState(ThreadDatasetService::State state);

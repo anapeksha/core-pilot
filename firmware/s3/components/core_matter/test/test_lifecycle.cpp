@@ -74,6 +74,9 @@ TEST_CASE("generation invalidates stale callbacks and shutdown blocks recovery",
   TEST_ASSERT_EQUAL_UINT8(static_cast<unsigned>(SubscriptionPhase::recovering),
                           static_cast<unsigned>(recovering->phase));
   TEST_ASSERT_TRUE(recovering->recovery_pending);
+  TEST_ASSERT_TRUE(table.eraseAfterUnpair(0x22));
+  TEST_ASSERT_EQUAL_UINT32(0, table.nodeCount());
+  TEST_ASSERT_FALSE(table.eraseAfterUnpair(0x22));
 }
 
 TEST_CASE("lifecycle slots support repeated commission and unpair cycles", "[core_matter]") {

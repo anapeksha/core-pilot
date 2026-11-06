@@ -417,6 +417,19 @@ void Application::run() {
     if (!known && discovery_node_count < core_storage::kMaxMatterDevices)
       discovery_nodes[discovery_node_count++] = node_id;
   }
+  for (std::size_t node_index = 0; node_index < discovery_node_count; ++node_index) {
+    std::uint16_t endpoints[CoreMatter::kMaxLifecycleEndpoints]{};
+    std::size_t endpoint_count = 0;
+    for (std::size_t entry_index = 0; entry_index < registered_devices.count; ++entry_index) {
+      const auto& entry = registered_devices.entries[entry_index];
+      if (entry.node_id == discovery_nodes[node_index] &&
+          (entry.capabilities & CoreMatter::on_off) != 0 && endpoint_count < std::size(endpoints))
+        endpoints[endpoint_count++] = entry.endpoint_id;
+    }
+    if (endpoint_count != 0 && matter.configureSubscriptions(discovery_nodes[node_index], endpoints,
+                                                             endpoint_count) != ESP_OK)
+      ESP_LOGW(kTag, "failed to restore Matter subscriptions from the encrypted registry");
+  }
 
   std::uint64_t recorded_node_id = 0;
   std::size_t discovery_node_index = 0;
@@ -442,6 +455,25 @@ void Application::run() {
     }
 
     const auto matter_status = matter.status();
+    std::uint64_t reconciled_unpair_node = 0;
+    if (matter.takeUnpairReconciliation(reconciled_unpair_node)) {
+      const auto removed = devices.removeNode(reconciled_unpair_node);
+      if (removed == core_security::Status::Ok) {
+        last_removed_node_id = reconciled_unpair_node;
+        activity.append("matter_device_removed",
+                        "A delayed Matter unpair completion removed the local registry record.");
+        std::size_t write = 0;
+        for (std::size_t read = 0; read < discovery_node_count; ++read) {
+          if (discovery_nodes[read] != reconciled_unpair_node)
+            discovery_nodes[write++] = discovery_nodes[read];
+        }
+        discovery_node_count = write;
+        discovery_node_index = std::min(discovery_node_index, discovery_node_count);
+      } else {
+        activity.append("matter_device_remove_failed",
+                        "Matter unpair succeeded but the delayed registry update failed.");
+      }
+    }
     CoreMatter::TerminalCommand terminals[8]{};
     const std::size_t terminal_count =
         matter.terminalCommandsAfter(reconciled_terminal_sequence, terminals, std::size(terminals));

@@ -279,9 +279,11 @@ esp_err_t CoreNetwork::start_mdns() {
   }
   mdns_started_ = true;
   err = mdns_hostname_set(network_policy::kHostname);
-  if (err == ESP_OK) {
+  if (err == ESP_OK)
     err = mdns_instance_name_set("Core Pilot");
-  }
+  portENTER_CRITICAL(&lock_);
+  state_.mdns_ready = err == ESP_OK;
+  portEXIT_CRITICAL(&lock_);
   return err;
 }
 

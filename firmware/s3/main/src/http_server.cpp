@@ -540,13 +540,10 @@ esp_err_t systemHandler(httpd_req_t* request, const HttpRuntime& runtime) {
                                                                       : "disabled");
   cJSON_AddStringToObject(response, "display", "ready");
   cJSON_AddStringToObject(response, "storage", "sd-card-encrypted");
-  cJSON_AddStringToObject(response, "matter",
-                          matter.state == CoreMatter::State::ready ? "ready" : "not-ready");
-  cJSON_AddStringToObject(response, "thread",
-                          matter.border_router_ready && matter.thread_dataset_configured &&
-                                  matter.thread_attached
-                              ? "ready"
-                              : "not-ready");
+  cJSON_AddStringToObject(
+      response, "matter",
+      matter.state == CoreMatter::State::ready && matter.spinel_ready ? "ready" : "not-ready");
+  cJSON_AddStringToObject(response, "thread", "not-ready");
   cJSON_AddStringToObject(response, "ai", ai_configured ? "configured" : "disabled");
   cJSON_AddStringToObject(response, "automations",
                           runtime.automations.ready() ? "ready" : "not-ready");
@@ -1644,21 +1641,20 @@ esp_err_t automationOperationStatusHandler(httpd_req_t* request) {
 
 esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   const auto status = runtime.matter.status();
-  const bool ready = status.state == CoreMatter::State::ready;
+  const bool ready = status.state == CoreMatter::State::ready && status.spinel_ready;
   cJSON* response = cJSON_CreateObject();
   cJSON_AddStringToObject(response, "implementation", "ESP-Matter controller");
   cJSON_AddBoolToObject(response, "commissioned", status.fabric_configured);
   cJSON_AddBoolToObject(response, "fabric_configured", status.fabric_configured);
   cJSON_AddNumberToObject(response, "subscriptions_active", status.subscriptions_active);
-  cJSON_AddBoolToObject(response, "ipv6_ready", runtime.network.status().has_ipv6);
-  cJSON_AddBoolToObject(response, "mdns_ready", false);
+  cJSON_AddBoolToObject(response, "ipv6_ready", false);
+  cJSON_AddBoolToObject(response, "mdns_ready", runtime.network.status().mdns_ready);
   cJSON_AddBoolToObject(response, "dns_sd_ready", false);
-  cJSON_AddBoolToObject(response, "thread_ready",
-                        status.border_router_ready && status.thread_attached);
+  cJSON_AddBoolToObject(response, "thread_ready", false);
   cJSON_AddBoolToObject(response, "thread_dataset_configured", status.thread_dataset_configured);
-  cJSON_AddBoolToObject(response, "wifi_commissioning_ready", status.commissioner_ready);
-  cJSON_AddBoolToObject(response, "thread_commissioning_ready",
-                        status.commissioner_ready && status.thread_dataset_configured);
+  cJSON_AddBoolToObject(response, "wifi_commissioning_ready",
+                        status.spinel_ready && status.commissioner_ready);
+  cJSON_AddBoolToObject(response, "thread_commissioning_ready", false);
   const auto dataset_operation = runtime.thread_dataset.status();
   cJSON* dataset_status = cJSON_AddObjectToObject(response, "thread_dataset_operation");
   cJSON_AddNumberToObject(dataset_status, "id", dataset_operation.operation_id);
@@ -1670,11 +1666,10 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
     cJSON_AddNullToObject(dataset_status, "error");
   cJSON_AddStringToObject(response, "adapter_status", matterState(status.state));
   cJSON_AddBoolToObject(response, "parser_ready", true);
-  cJSON_AddBoolToObject(response, "transport_adapter_ready", status.commissioner_ready);
+  cJSON_AddBoolToObject(response, "transport_adapter_ready",
+                        status.spinel_ready && status.commissioner_ready);
   cJSON_AddBoolToObject(response, "fabric_credentials_ready", status.fabric_configured);
-  cJSON_AddBoolToObject(response, "pase_ready",
-                        status.fabric_configured ||
-                            status.commissioning_state == CoreMatter::CommissioningState::pase);
+  cJSON_AddBoolToObject(response, "pase_ready", status.pase_established);
   cJSON_AddBoolToObject(response, "case_ready", status.case_ready);
   cJSON_AddBoolToObject(response, "subscriptions_ready", status.subscriptions_active != 0);
   cJSON* operation = cJSON_AddObjectToObject(response, "operation");

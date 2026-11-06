@@ -167,6 +167,14 @@ public:
     return true;
   }
 
+  bool eraseAfterUnpair(std::uint64_t node_id) {
+    NodeLifecycle* node = find(node_id);
+    if (node == nullptr)
+      return false;
+    *node = {};
+    return true;
+  }
+
   void connectivityRestored() {
     for (auto& node : nodes_) {
       if (node.node_id != 0 && node.phase == SubscriptionPhase::recovering)
