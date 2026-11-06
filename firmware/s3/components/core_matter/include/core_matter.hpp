@@ -256,22 +256,12 @@ private:
   static void taskEntry(void* context);
   static void recoveryTimerCallback(void* context);
   static void onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error);
-  struct SubscriptionCallbackToken final {
-    CoreMatter* owner;
-    std::uint64_t node_id;
-    std::uint32_t generation;
-    bool in_use;
-  };
-  static void onOnOffReport(void* context, std::uint64_t node_id,
-                            const chip::app::ConcreteDataAttributePath& path,
+
+  static void onOnOffReport(std::uint64_t node_id, const chip::app::ConcreteDataAttributePath& path,
                             chip::TLV::TLVReader* data, const chip::app::StatusIB& status);
-  static void onSubscriptionEstablished(void* context, std::uint64_t node_id,
-                                        std::uint32_t subscription_id);
-  static void onSubscriptionTerminated(void* context, std::uint64_t node_id,
-                                       std::uint32_t subscription_id);
-  SubscriptionCallbackToken* allocateSubscriptionToken(std::uint64_t node_id,
-                                                       std::uint32_t generation);
-  void releaseSubscriptionToken(SubscriptionCallbackToken* token);
+  static void onSubscriptionEstablished(std::uint64_t node_id, std::uint32_t subscription_id);
+  static void onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t subscription_id);
+
   void run();
   esp_err_t startController();
   esp_err_t applyThreadDatasetOnOwner(const std::uint8_t* dataset, std::size_t length);
@@ -332,7 +322,6 @@ private:
   bool active_unpair_timed_out_{false};
   std::uint64_t reconciled_unpair_node_id_{0};
   detail::LifecycleTable<kMaxLifecycleNodes, kMaxLifecycleEndpoints> lifecycle_{};
-  SubscriptionCallbackToken subscription_tokens_[kMaxLifecycleNodes]{};
   DiscoveryStatus discovery_status_{};
   std::uint32_t next_operation_id_{1};
   std::uint32_t next_command_operation_id_{1};

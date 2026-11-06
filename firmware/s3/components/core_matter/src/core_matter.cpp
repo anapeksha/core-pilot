@@ -1123,60 +1123,45 @@ void CoreMatter::releaseInvokeCallback(InvokeCallbackContext* context) {
   taskEXIT_CRITICAL(&status_lock_);
 }
 
-CoreMatter::SubscriptionCallbackToken*
-CoreMatter::allocateSubscriptionToken(std::uint64_t node_id, std::uint32_t generation) {
-  for (auto& token : subscription_tokens_) {
-    if (!token.in_use) {
-      token = {this, node_id, generation, true};
-      return &token;
-    }
-  }
-  return nullptr;
-}
-
-void CoreMatter::releaseSubscriptionToken(SubscriptionCallbackToken* token) {
-  if (token != nullptr)
-    *token = {};
-}
-
-void CoreMatter::onOnOffReport(void* context, std::uint64_t node_id,
+void CoreMatter::onOnOffReport(std::uint64_t node_id,
                                const chip::app::ConcreteDataAttributePath& path,
                                chip::TLV::TLVReader* data,
                                const chip::app::StatusIB& response_status) {
-  auto* token = static_cast<SubscriptionCallbackToken*>(context);
+  CoreMatter* matter = callback_owner_;
   bool value = false;
-  if (token == nullptr || !token->in_use || token->owner == nullptr || token->node_id != node_id ||
-      data == nullptr || !response_status.IsSuccess() || data->Get(value) != CHIP_NO_ERROR)
+  if (matter == nullptr || data == nullptr || !response_status.IsSuccess() ||
+      data->Get(value) != CHIP_NO_ERROR)
     return;
-  CoreMatter* matter = token->owner;
   taskENTER_CRITICAL(&matter->status_lock_);
-  const bool accepted =
-      matter->lifecycle_.report(node_id, token->generation, path.mEndpointId, value);
+  const auto* node = matter->lifecycle_.snapshot(node_id);
+  const bool accepted = node != nullptr && matter->lifecycle_.report(node_id, node->generation,
+                                                                     path.mEndpointId, value);
   if (accepted)
     matter->last_on_off_state_ = {node_id, path.mEndpointId, true, value};
   taskEXIT_CRITICAL(&matter->status_lock_);
 }
 
-void CoreMatter::onSubscriptionEstablished(void* context, std::uint64_t node_id, std::uint32_t) {
-  auto* token = static_cast<SubscriptionCallbackToken*>(context);
-  if (token == nullptr || !token->in_use || token->owner == nullptr || token->node_id != node_id)
+void CoreMatter::onSubscriptionEstablished(std::uint64_t node_id, std::uint32_t) {
+  CoreMatter* matter = callback_owner_;
+  if (matter == nullptr)
     return;
-  CoreMatter* matter = token->owner;
   taskENTER_CRITICAL(&matter->status_lock_);
-  static_cast<void>(matter->lifecycle_.established(node_id, token->generation));
+  const auto* node = matter->lifecycle_.snapshot(node_id);
+  if (node != nullptr)
+    static_cast<void>(matter->lifecycle_.established(node_id, node->generation));
   taskEXIT_CRITICAL(&matter->status_lock_);
 }
 
-void CoreMatter::onSubscriptionTerminated(void* context, std::uint64_t node_id, std::uint32_t) {
-  auto* token = static_cast<SubscriptionCallbackToken*>(context);
-  if (token == nullptr || !token->in_use || token->owner == nullptr || token->node_id != node_id)
+void CoreMatter::onSubscriptionTerminated(std::uint64_t node_id, std::uint32_t) {
+  CoreMatter* matter = callback_owner_;
+  if (matter == nullptr)
     return;
-  CoreMatter* matter = token->owner;
   taskENTER_CRITICAL(&matter->status_lock_);
-  const bool accepted = matter->lifecycle_.terminated(node_id, token->generation, true);
+  const auto* node = matter->lifecycle_.snapshot(node_id);
+  const bool accepted =
+      node != nullptr && matter->lifecycle_.terminated(node_id, node->generation, true);
   if (accepted && matter->last_on_off_state_.node_id == node_id)
     matter->last_on_off_state_.known = false;
-  matter->releaseSubscriptionToken(token);
   taskEXIT_CRITICAL(&matter->status_lock_);
   if (accepted && matter->recovery_timer_ != nullptr) {
     static_cast<void>(esp_timer_stop(matter->recovery_timer_));
@@ -1552,26 +1537,21 @@ void CoreMatter::run() {
     if (command.type == CommandType::subscribe_on_off) {
       taskENTER_CRITICAL(&status_lock_);
       const std::uint32_t generation = lifecycle_.beginSubscribe(command.node_id);
-      SubscriptionCallbackToken* token =
-          generation == 0 ? nullptr : allocateSubscriptionToken(command.node_id, generation);
       if (last_on_off_state_.node_id == command.node_id)
         last_on_off_state_.known = false;
-      if (generation != 0 && token == nullptr)
-        static_cast<void>(lifecycle_.terminated(command.node_id, generation, true));
       taskEXIT_CRITICAL(&status_lock_);
-      if (token == nullptr)
+      if (generation == 0)
         continue;
       esp_matter::lock::ScopedChipStackLock lock(portMAX_DELAY);
       auto* subscription = chip::Platform::New<esp_matter::controller::subscribe_command>(
           command.node_id, 0xffff, 0x0006, 0x0000, esp_matter::controller::SUBSCRIBE_ATTRIBUTE, 1,
-          60, true, nullptr, nullptr, nullptr, nullptr, nullptr, true, token, onOnOffReport,
-          onSubscriptionEstablished, onSubscriptionTerminated);
+          60, true, onOnOffReport, nullptr, onSubscriptionEstablished, onSubscriptionTerminated,
+          nullptr, true);
       const esp_err_t result =
           subscription == nullptr ? ESP_ERR_NO_MEM : subscription->send_command();
       if (result != ESP_OK) {
         taskENTER_CRITICAL(&status_lock_);
         static_cast<void>(lifecycle_.terminated(command.node_id, generation, true));
-        releaseSubscriptionToken(token);
         taskEXIT_CRITICAL(&status_lock_);
         if (recovery_timer_ != nullptr) {
           static_cast<void>(esp_timer_stop(recovery_timer_));
