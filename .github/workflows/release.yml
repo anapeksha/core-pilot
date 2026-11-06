@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Version to embed in verification artifacts
+        description: SemVer version to embed when running the workflow manually
         required: true
-        default: 0.1.0
+        default: 0.1.0-rc.1
         type: string
 
 permissions:
@@ -69,8 +69,13 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          version="${INPUT_VERSION:-${RELEASE_TAG#v}}"
-          [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          version="${RELEASE_TAG:-${INPUT_VERSION}}"
+          version="${version#v}"
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+          if [[ ! "${version}" =~ ${semver} ]]; then
+            echo "Invalid release version: ${version}" >&2
+            exit 1
+          fi
           echo "VERSION=${version}" >> "${GITHUB_ENV}"
       - name: Build firmware
         shell: bash
