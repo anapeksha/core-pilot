@@ -4,7 +4,7 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-11-04
+## [0.1.0-rc.1] - 2026-11-06
 
 ### Added
 
@@ -49,5 +49,11 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Prevented credentials, setup payloads, decrypted records, and key material from being logged.
 - Required Core Pilot release signatures through ESP-IDF signed-app verification for application OTA updates.
 
-[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/anapeksha/core-pilot/releases/tag/v0.1.0
+### Known limitations
+
+- Matter-over-Wi-Fi commissioning with the Nesso N1 currently fails before PASE and CASE become ready; complete commissioning, unpairing, recommissioning, and post-stress subscription recovery remain release-blocking hardware validations.
+- Matter-over-Thread and Thread Border Router readiness have not yet been demonstrated on hardware.
+- This release candidate is not CSA Matter certified and does not claim formal Matter specification compliance.
+
+[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.1...HEAD
+[0.1.0-rc.1]: https://github.com/anapeksha/core-pilot/releases/tag/v0.1.0-rc.1
