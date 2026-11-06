@@ -33,6 +33,11 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 ### Fixed
 
 - Preserved failed Matter owner-task operations and recovered subscriptions after asynchronous unpair failures.
+- Correlated subscription callbacks with their originating lifecycle generation and bounded command completion deadlines.
+- Reconciled successful unpair callbacks that arrive after an operation timeout.
+- Applied and verified Thread datasets before encrypted persistence, with runtime rollback on application failure.
+- Restored Matter subscriptions from the encrypted registry during reboot recovery.
+- Reported Spinel, PASE, mDNS, IPv6, and Thread readiness only from observed runtime state.
 - Applied JSON content-type validation consistently to `POST` and `PATCH` mutations.
 - Corrected dashboard artifact collection in the signed-release workflow.
 
