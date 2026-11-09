@@ -2,6 +2,7 @@
 #include "core_display_policy.hpp"
 #include "core_gateway_policy.hpp"
 #include "core_matter_lifecycle.hpp"
+#include "core_matter_operation_policy.hpp"
 #include "core_matter_terminal_history.hpp"
 #include "core_network_policy.hpp"
 #include "core_ota_policy.hpp"
@@ -65,6 +66,21 @@ struct HistoryEntry final {
   std::uint64_t sequence;
   std::uint32_t value;
 };
+
+bool matter_operation_policy_test() {
+  using core_pilot::detail::unpairCallbackMatches;
+  using core_pilot::detail::unpairCallbackSlotAvailable;
+
+  CHECK(unpairCallbackSlotAvailable(0));
+  CHECK(!unpairCallbackSlotAvailable(17));
+  CHECK(unpairCallbackMatches(17, 0x1234, 3, 0x1234));
+  CHECK(!unpairCallbackMatches(0, 0x1234, 3, 0x1234));
+  CHECK(!unpairCallbackMatches(17, 0x1234, 0, 0x1234));
+  CHECK(!unpairCallbackMatches(17, 0x1234, 3, 0x5678));
+  CHECK(core_pilot::CommissioningFailureClass::none != core_pilot::CommissioningFailureClass::pase);
+  CHECK(core_pilot::kUnknownCommissioningStage == 0xff);
+  return true;
+}
 
 bool terminal_history_test() {
   core_pilot::detail::TerminalHistory<HistoryEntry, 4> history;
@@ -143,8 +159,8 @@ bool network_policy_test() {
 } // namespace
 
 int main() {
-  if (!lifecycle_test() || !terminal_history_test() || !safety_policy_test() ||
-      !network_policy_test()) {
+  if (!lifecycle_test() || !matter_operation_policy_test() || !terminal_history_test() ||
+      !safety_policy_test() || !network_policy_test()) {
     return EXIT_FAILURE;
   }
   std::cout << "firmware logic tests passed\n";

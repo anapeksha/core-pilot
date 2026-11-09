@@ -7,6 +7,7 @@ idf_component_register(
         "${core_pilot_components}/core_display/test/test_core_display.cpp"
         "${core_pilot_components}/core_gateway/test/test_core_gateway.cpp"
         "${core_pilot_components}/core_matter/test/test_lifecycle.cpp"
+        "${core_pilot_components}/core_matter/test/test_operation_policy.cpp"
         "${core_pilot_components}/core_matter/test/test_terminal_history.cpp"
         "${core_pilot_components}/core_network/test/test_core_network.cpp"
         "${core_pilot_components}/core_network/src/core_network_policy.cpp"
