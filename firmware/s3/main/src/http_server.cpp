@@ -51,7 +51,6 @@ namespace core_pilot {
 namespace {
 
 constexpr char kTag[] = "core_http";
-constexpr std::size_t kMaxHttpConnections = 4;
 constexpr std::size_t kMaxRequestBody = 9216;
 
 struct TimeConfig final {
@@ -156,6 +155,7 @@ esp_err_t addCommonHeaders(httpd_req_t* request) {
 }
 
 esp_err_t dashboardHandler(httpd_req_t* request) {
+  const std::int64_t started = esp_timer_get_time();
   const auto size = static_cast<std::size_t>(dashboard_gzip_end - dashboard_gzip_start);
   ESP_RETURN_ON_ERROR(httpd_resp_set_type(request, "text/html; charset=utf-8"), kTag, "type");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Content-Encoding", "gzip"), kTag, "encoding");
@@ -171,13 +171,18 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
   std::size_t offset = 0;
   while (offset < size) {
     const std::size_t chunk = std::min(kDashboardChunkBytes, size - offset);
-    ESP_RETURN_ON_ERROR(
-        httpd_resp_send_chunk(request, reinterpret_cast<const char*>(dashboard_gzip_start + offset),
-                              chunk),
-        kTag, "dashboard chunk");
+    const esp_err_t result = httpd_resp_send_chunk(
+        request, reinterpret_cast<const char*>(dashboard_gzip_start + offset), chunk);
+    if (result != ESP_OK) {
+      recordDashboardTransfer(0, false);
+      return result;
+    }
     offset += chunk;
   }
-  return httpd_resp_send_chunk(request, nullptr, 0);
+  const esp_err_t result = httpd_resp_send_chunk(request, nullptr, 0);
+  const auto elapsed_ms = static_cast<std::uint32_t>((esp_timer_get_time() - started) / 1000);
+  recordDashboardTransfer(elapsed_ms, result == ESP_OK);
+  return result;
 }
 
 esp_err_t healthHandler(httpd_req_t* request) {
@@ -600,12 +605,13 @@ esp_err_t systemHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   cJSON_AddNumberToObject(response, "ota_total_bytes", ota.size_bytes);
   cJSON_AddBoolToObject(response, "ota_restart_after_update", ota.restart_after_update);
   cJSON_AddStringToObject(response, "recovery", "ready");
-  cJSON_AddNumberToObject(response, "http_accepted_connections", 0);
-  cJSON_AddNumberToObject(response, "http_active_connections", 0);
-  cJSON_AddNumberToObject(response, "http_connection_errors", 0);
-  cJSON_AddNumberToObject(response, "dashboard_transfers", 0);
-  cJSON_AddNumberToObject(response, "dashboard_last_transfer_ms", 0);
-  cJSON_AddNumberToObject(response, "dashboard_max_transfer_ms", 0);
+  const auto http = httpTelemetry();
+  cJSON_AddNumberToObject(response, "http_accepted_connections", http.accepted_connections);
+  cJSON_AddNumberToObject(response, "http_active_connections", http.active_connections);
+  cJSON_AddNumberToObject(response, "http_connection_errors", http.connection_errors);
+  cJSON_AddNumberToObject(response, "dashboard_transfers", http.dashboard_transfers);
+  cJSON_AddNumberToObject(response, "dashboard_last_transfer_ms", http.dashboard_last_transfer_ms);
+  cJSON_AddNumberToObject(response, "dashboard_max_transfer_ms", http.dashboard_max_transfer_ms);
   return sendJson(request, response);
 }
 
@@ -2873,11 +2879,13 @@ void publishRtcReady(bool ready) {
 
 httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.max_open_sockets = kMaxHttpConnections;
+  config.max_open_sockets = core_domain::max_http_connections;
   config.max_resp_headers = 12;
   config.max_uri_handlers = 65;
   config.uri_match_fn = httpd_uri_match_wildcard;
-  config.lru_purge_enable = true;
+  config.lru_purge_enable = false;
+  config.open_fn = trackHttpConnectionOpen;
+  config.close_fn = trackHttpConnectionClose;
   config.stack_size = 12288;
 
   httpd_handle_t server = nullptr;
