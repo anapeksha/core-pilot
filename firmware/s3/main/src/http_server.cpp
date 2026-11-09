@@ -1,6 +1,7 @@
 #include "http_server.hpp"
 
 #include "ai_chat_service.hpp"
+#include "application_mutations.hpp"
 #include "automation_service.hpp"
 #include "cJSON.h"
 #include "core_activity.hpp"
@@ -38,6 +39,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 
 extern "C" {
 extern const std::uint8_t dashboard_gzip_start[] asm("_binary_index_html_gz_start");
@@ -2029,7 +2031,9 @@ esp_err_t forgetMatterDeviceHandler(httpd_req_t* request) {
   const cJSON* confirmation =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "confirmation");
   std::uint64_t node_id = 0;
-  const bool valid_node = parseMatterNodeId(device_id, node_id);
+  const char* const fields[]{"device_id", "confirmation"};
+  const bool valid_node =
+      exactObject(document, fields, std::size(fields)) && parseMatterNodeId(device_id, node_id);
   char expected_confirmation[64]{};
   if (valid_node)
     std::snprintf(expected_confirmation, sizeof(expected_confirmation), "FORGET MATTER DEVICE %s",
@@ -2045,22 +2049,15 @@ esp_err_t forgetMatterDeviceHandler(httpd_req_t* request) {
   }
   cJSON_Delete(document);
 
-  const auto result = valid_node && confirmed && registered ? runtime->devices.removeNode(node_id)
-                                                            : core_security::Status::Invalid;
-  if (result == core_security::Status::Ok) {
-    runtime->activity.append(
-        "matter_device_forgotten_locally",
-        "A Matter device was forgotten locally without confirming accessory fabric removal.");
-  }
+  const bool accepted = valid_node && confirmed && registered && enqueueMatterLocalForget(node_id);
 
   cJSON* response = cJSON_CreateObject();
-  cJSON_AddBoolToObject(response, "accepted", result == core_security::Status::Ok);
-  cJSON_AddStringToObject(response, "status",
-                          result == core_security::Status::Ok ? "forgotten_locally" : "rejected");
-  const char* detail = "The local encrypted record could not be removed safely.";
-  if (result == core_security::Status::Ok) {
-    detail = "Only Core Pilot's local encrypted record was removed. The accessory may still "
-             "retain fabric credentials.";
+  cJSON_AddBoolToObject(response, "accepted", accepted);
+  cJSON_AddStringToObject(response, "status", accepted ? "queued" : "rejected");
+  const char* detail = "Another local Matter recovery operation is already queued.";
+  if (accepted) {
+    detail = "Local encrypted record removal was queued. The accessory may still retain fabric "
+             "credentials.";
   } else if (!valid_node || !registered) {
     detail = "The Matter device ID is invalid or is not in the local registry.";
   } else if (!confirmed) {
