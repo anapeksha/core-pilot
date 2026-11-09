@@ -252,6 +252,45 @@ bool nonWhitespace(const char* value) {
   return false;
 }
 
+const char* commissioningFailureCode(CommissioningFailureClass failure) {
+  switch (failure) {
+  case CommissioningFailureClass::none:
+    return "MATTER_COMMISSION_FAILED";
+  case CommissioningFailureClass::pase:
+    return "MATTER_COMMISSION_PASE_FAILED";
+  case CommissioningFailureClass::attestation:
+    return "MATTER_COMMISSION_ATTESTATION_FAILED";
+  case CommissioningFailureClass::credentials:
+    return "MATTER_COMMISSION_CREDENTIALS_FAILED";
+  case CommissioningFailureClass::network:
+    return "MATTER_COMMISSION_NETWORK_FAILED";
+  case CommissioningFailureClass::operational:
+    return "MATTER_COMMISSION_OPERATIONAL_FAILED";
+  case CommissioningFailureClass::commissioning:
+    return "MATTER_COMMISSION_FAILED";
+  }
+  return "MATTER_COMMISSION_FAILED";
+}
+
+const char* commissioningFailureDetail(CommissioningFailureClass failure) {
+  switch (failure) {
+  case CommissioningFailureClass::pase:
+    return "Secure pairing with the accessory failed.";
+  case CommissioningFailureClass::attestation:
+    return "Accessory attestation failed.";
+  case CommissioningFailureClass::credentials:
+    return "Operational credential installation failed.";
+  case CommissioningFailureClass::network:
+    return "Accessory network provisioning failed.";
+  case CommissioningFailureClass::operational:
+    return "Operational discovery or CASE establishment failed.";
+  case CommissioningFailureClass::none:
+  case CommissioningFailureClass::commissioning:
+    return "Matter commissioning failed.";
+  }
+  return "Matter commissioning failed.";
+}
+
 const char* commissioningState(CoreMatter::CommissioningState state) {
   switch (state) {
   case CoreMatter::CommissioningState::idle:
@@ -1704,8 +1743,15 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
     cJSON_AddNumberToObject(terminal, "phase_timeout_ms", CoreMatter::kCommissioningTimeoutMs);
     if (status.commissioning_state == CoreMatter::CommissioningState::failed) {
       cJSON* failure = cJSON_AddObjectToObject(terminal, "failure");
-      cJSON_AddStringToObject(failure, "code", esp_err_to_name(status.last_error));
-      cJSON_AddStringToObject(failure, "detail", "Matter commissioning failed.");
+      if (status.last_error == ESP_ERR_TIMEOUT) {
+        cJSON_AddStringToObject(failure, "code", "MATTER_COMMISSION_TIMEOUT");
+        cJSON_AddStringToObject(failure, "detail", "Matter commissioning timed out.");
+      } else {
+        cJSON_AddStringToObject(failure, "code",
+                                commissioningFailureCode(status.commissioning_failure));
+        cJSON_AddStringToObject(failure, "detail",
+                                commissioningFailureDetail(status.commissioning_failure));
+      }
     } else {
       cJSON_AddNullToObject(terminal, "failure");
     }

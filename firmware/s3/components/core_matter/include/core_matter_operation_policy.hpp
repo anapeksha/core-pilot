@@ -7,6 +7,10 @@ namespace core_pilot {
 enum class CommissioningFailureClass : std::uint8_t {
   none,
   pase,
+  attestation,
+  credentials,
+  network,
+  operational,
   commissioning,
 };
 

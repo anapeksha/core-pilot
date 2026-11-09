@@ -98,13 +98,56 @@ void onCommissioningSuccess(chip::ScopedNodeId peer_id) {
            static_cast<unsigned long long>(peer_id.GetNodeId()));
 }
 
+CommissioningFailureClass classifyCommissioningFailure(chip::Controller::CommissioningStage stage) {
+  using enum chip::Controller::CommissioningStage;
+  switch (stage) {
+  case kSecurePairing:
+    return CommissioningFailureClass::pase;
+  case kSendPAICertificateRequest:
+  case kSendDACCertificateRequest:
+  case kSendAttestationRequest:
+  case kAttestationVerification:
+  case kAttestationRevocationCheck:
+  case kJCMTrustVerification:
+    return CommissioningFailureClass::attestation;
+  case kSendOpCertSigningRequest:
+  case kValidateCSR:
+  case kGenerateNOCChain:
+  case kSendTrustedRootCert:
+  case kSendNOC:
+    return CommissioningFailureClass::credentials;
+  case kWiFiNetworkSetup:
+  case kThreadNetworkSetup:
+  case kFailsafeBeforeWiFiEnable:
+  case kFailsafeBeforeThreadEnable:
+  case kWiFiNetworkEnable:
+  case kThreadNetworkEnable:
+  case kScanNetworks:
+  case kNeedsNetworkCreds:
+  case kPrimaryOperationalNetworkFailed:
+  case kRemoveWiFiNetworkConfig:
+  case kRemoveThreadNetworkConfig:
+  case kRequestWiFiCredentials:
+  case kRequestThreadCredentials:
+    return CommissioningFailureClass::network;
+  case kEvictPreviousCaseSessions:
+  case kFindOperationalForStayActive:
+  case kFindOperationalForCommissioningComplete:
+  case kSendComplete:
+  case kICDSendStayActive:
+    return CommissioningFailureClass::operational;
+  default:
+    return CommissioningFailureClass::commissioning;
+  }
+}
+
 void onCommissioningFailure(chip::NodeId node_id, CHIP_ERROR error,
                             chip::Controller::CommissioningStage stage,
                             std::optional<chip::Credentials::AttestationVerificationResult>) {
   pase_established.store(false);
   const auto reason = cancellation_reason.exchange(CancellationReason::none);
   if (reason == CancellationReason::none) {
-    commissioning_failure.store(CommissioningFailureClass::commissioning);
+    commissioning_failure.store(classifyCommissioningFailure(stage));
     commissioning_failure_stage.store(static_cast<std::uint8_t>(stage));
   }
   commissioning_error.store(reason == CancellationReason::requested   ? ESP_OK
