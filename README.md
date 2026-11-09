@@ -72,65 +72,13 @@ For an existing installation, open **System** in the dashboard and select the si
 
 The setup network is intentionally password protected. Do not configure it as an open access point.
 
-## Build from source
+## Development
 
-### Requirements
+Firmware build and architecture details are documented with each target:
 
-- ESP-IDF 6.0.2 managed through [EIM](https://github.com/espressif/esp-idf).
-- A Node.js version supported by the dependencies in `web/package-lock.json`.
-- npm.
-- An M5Stack CoreS3 for installation and hardware testing.
+- [CoreS3 application firmware](firmware/s3/README.md)
+- [Gateway ESP32-H2 RCP firmware](firmware/h2/README.md)
 
-Build the dashboard first because its generated bundle is embedded in the firmware image. The firmware build also builds the ESP32-H2 RCP and embeds its sparse bootloader, partition-table, and application artifacts; missing or stale RCP output fails the build:
-
-```sh
-cd web
-npm ci
-npm run build
-
-cd ../firmware/s3
-eim run 'idf.py -B build build' v6.0.2
-```
-
-### Flash a development build
-
-Confirm the CoreS3 port before writing anything, then run:
-
-```sh
-cd firmware/s3
-eim run 'idf.py -B build -p /dev/cu.usbmodem1201 flash' v6.0.2
-```
-
-Replace `/dev/cu.usbmodem1201` with the positively identified CoreS3 port. If automatic reset into the ROM downloader is unavailable, use the built-in USB-JTAG path:
-
-```sh
-eim run 'python ../../tools/flash_jtag.py build --adapter-serial <core-s3-usb-jtag-serial>' v6.0.2
-```
-
-Replace `<core-s3-usb-jtag-serial>` with the positively identified CoreS3 USB-JTAG adapter serial.
-
-## Run the dashboard during development
-
-The dashboard can run locally with hot reload:
-
-```sh
-cd web
-npm ci
-npm run dev
-```
-
-The development server does not replace device-side authorization or hardware validation. Use an actual CoreS3 when testing pairing, touch controls, storage, networking, updates, or Matter behavior.
-
-## Repository layout
-
-- `firmware/s3/` — CoreS3 application; its build also builds and embeds the Gateway RCP.
-- `firmware/h2/` — separately buildable ESP32-H2 OpenThread UART RCP embedded into the signed CoreS3 application.
-- `web/` — browser dashboard embedded into the firmware.
-- `tools/` — formatting, validation, flashing, and hardware-test helpers.
-- `.github/` — continuous integration and signed-release workflows.
-
-## Contributing
-
-Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, coding, testing, security, and pull-request guidance.
+Contributions are welcome. Read [`CONTRIBUTING.md`](CONTRIBUTING.md) for project setup and engineering guidance.
 
 Core Pilot is licensed under the terms in [`LICENSE`](LICENSE).
