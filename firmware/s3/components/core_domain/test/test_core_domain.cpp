@@ -1,4 +1,5 @@
 #include "core_domain.hpp"
+#include "request_rate_limiter.hpp"
 
 #include <atomic>
 #include <cJSON.h>
@@ -153,6 +154,48 @@ TEST_CASE("automation grammar rejects invalid dates, masks, delays and levels", 
   TEST_ASSERT_FALSE(parse_action_spec("level|lamp|101", action));
   TEST_ASSERT_FALSE(parse_action_spec("delay|60001", action));
   TEST_ASSERT_FALSE(parse_action_spec("on|lamp|true", action));
+}
+
+TEST_CASE("request limiter enforces global burst and refills on integer boundaries",
+          "[core_domain]") {
+  RequestRateLimiter limiter({3, 1}, {3, 1});
+  TEST_ASSERT_TRUE(limiter.allow(1, 10).allowed);
+  TEST_ASSERT_TRUE(limiter.allow(2, 10).allowed);
+  TEST_ASSERT_TRUE(limiter.allow(3, 10).allowed);
+  const RateLimitResult denied = limiter.allow(4, 10);
+  TEST_ASSERT_FALSE(denied.allowed);
+  TEST_ASSERT_EQUAL_UINT32(1, denied.retry_after_seconds);
+  TEST_ASSERT_FALSE(limiter.allow(4, 10).allowed);
+  TEST_ASSERT_TRUE(limiter.allow(4, 11).allowed);
+}
+
+TEST_CASE("request limiter isolates source buckets", "[core_domain]") {
+  RequestRateLimiter limiter({8, 1}, {2, 1});
+  TEST_ASSERT_TRUE(limiter.allow(11, 20).allowed);
+  TEST_ASSERT_TRUE(limiter.allow(11, 20).allowed);
+  TEST_ASSERT_FALSE(limiter.allow(11, 20).allowed);
+  TEST_ASSERT_TRUE(limiter.allow(12, 20).allowed);
+}
+
+TEST_CASE("request limiter reuses fully refilled source slots", "[core_domain]") {
+  RequestRateLimiter limiter({32, 32}, {1, 1});
+  for (uint64_t source = 1; source <= RequestRateLimiter::max_sources; ++source) {
+    TEST_ASSERT_TRUE(limiter.allow(source, 30).allowed);
+  }
+  TEST_ASSERT_FALSE(limiter.allow(99, 30).allowed);
+  TEST_ASSERT_TRUE(limiter.allow(99, 31).allowed);
+}
+
+TEST_CASE("separate request limiters support stricter policies and bounded retry",
+          "[core_domain]") {
+  RequestRateLimiter ordinary({4, 2}, {4, 2});
+  RequestRateLimiter strict({1, 1}, {1, 1});
+  TEST_ASSERT_TRUE(ordinary.allow(7, 40).allowed);
+  TEST_ASSERT_TRUE(ordinary.allow(7, 40).allowed);
+  TEST_ASSERT_TRUE(strict.allow(7, 40).allowed);
+  const RateLimitResult retry = strict.allow(7, 40);
+  TEST_ASSERT_FALSE(retry.allowed);
+  TEST_ASSERT_EQUAL_UINT32(1, retry.retry_after_seconds);
 }
 
 TEST_CASE("OTA metadata and chunk offsets, padding and size are bounded", "[core_domain]") {
