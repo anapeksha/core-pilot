@@ -1,6 +1,7 @@
 #include "application.hpp"
 
 #include "ai_chat_service.hpp"
+#include "application_mutations.hpp"
 #include "automation_service.hpp"
 #include "bootloader_random.h"
 #include "core_activity.hpp"
@@ -30,6 +31,7 @@
 #include "wifi_provision_service.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
@@ -38,6 +40,7 @@ namespace core_pilot {
 namespace {
 
 constexpr char kTag[] = "core_pilot";
+std::atomic<std::uint64_t> pending_matter_local_forget{};
 
 esp_err_t confirmPendingOta(bool& confirmed) {
   confirmed = false;
@@ -154,6 +157,16 @@ void showAccessState(CoreDisplay& display, const HttpAccessSnapshot& snapshot) {
 }
 
 } // namespace
+
+bool enqueueMatterLocalForget(std::uint64_t node_id) {
+  std::uint64_t empty = 0;
+  return node_id != 0 && pending_matter_local_forget.compare_exchange_strong(empty, node_id);
+}
+
+bool takeMatterLocalForget(std::uint64_t& node_id) {
+  node_id = pending_matter_local_forget.exchange(0);
+  return node_id != 0;
+}
 
 void Application::run() {
   ESP_ERROR_CHECK(nvs_flash_init());
@@ -455,6 +468,26 @@ void Application::run() {
     }
 
     const auto matter_status = matter.status();
+    std::uint64_t forgotten_node = 0;
+    if (takeMatterLocalForget(forgotten_node)) {
+      const auto removed = devices.removeNode(forgotten_node);
+      if (removed == core_security::Status::Ok) {
+        last_removed_node_id = forgotten_node;
+        activity.append(
+            "matter_device_forgotten_locally",
+            "A Matter device was forgotten locally without confirming accessory fabric removal.");
+        std::size_t write = 0;
+        for (std::size_t read = 0; read < discovery_node_count; ++read) {
+          if (discovery_nodes[read] != forgotten_node)
+            discovery_nodes[write++] = discovery_nodes[read];
+        }
+        discovery_node_count = write;
+        discovery_node_index = std::min(discovery_node_index, discovery_node_count);
+      } else {
+        activity.append("matter_device_forget_failed",
+                        "The local Matter registry record could not be removed.");
+      }
+    }
     std::uint64_t reconciled_unpair_node = 0;
     if (matter.takeUnpairReconciliation(reconciled_unpair_node)) {
       const auto removed = devices.removeNode(reconciled_unpair_node);

@@ -8,10 +8,14 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "http_server.hpp"
+#include "lwip/sockets.h"
 #include "mbedtls/platform_util.h"
+#include "request_rate_limiter.hpp"
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <unistd.h>
 
 namespace core_pilot {
 namespace {
@@ -27,6 +31,16 @@ core_security::RandomSource* random_source{};
 CoreNetwork* network_service{};
 StaticSemaphore_t auth_mutex_storage{};
 SemaphoreHandle_t auth_mutex{};
+StaticSemaphore_t rate_mutex_storage{};
+SemaphoreHandle_t rate_mutex{};
+core_domain::RequestRateLimiter request_limiter({600, 20}, {550, 20});
+core_domain::RequestRateLimiter auth_limiter({4, 1}, {2, 1});
+std::atomic<std::uint32_t> accepted_connections{};
+std::atomic<std::uint32_t> active_connections{};
+std::atomic<std::uint32_t> connection_errors{};
+std::atomic<std::uint32_t> dashboard_transfers{};
+std::atomic<std::uint32_t> dashboard_last_transfer_ms{};
+std::atomic<std::uint32_t> dashboard_max_transfer_ms{};
 
 class AuthLock final {
 public:
@@ -51,6 +65,43 @@ size_t route_count{};
 
 uint64_t now() {
   return esp_timer_get_time() / 1000000;
+}
+
+std::uint64_t requestSource(httpd_req_t* request) {
+  sockaddr_storage peer{};
+  socklen_t length = sizeof(peer);
+  if (getpeername(httpd_req_to_sockfd(request), reinterpret_cast<sockaddr*>(&peer), &length) != 0)
+    return 0;
+  const std::uint8_t* bytes = nullptr;
+  std::size_t byte_count = 0;
+  if (peer.ss_family == AF_INET) {
+    const auto& address = reinterpret_cast<const sockaddr_in&>(peer);
+    bytes = reinterpret_cast<const std::uint8_t*>(&address.sin_addr);
+    byte_count = sizeof(address.sin_addr);
+  } else if (peer.ss_family == AF_INET6) {
+    const auto& address = reinterpret_cast<const sockaddr_in6&>(peer);
+    bytes = reinterpret_cast<const std::uint8_t*>(&address.sin6_addr);
+    byte_count = sizeof(address.sin6_addr);
+  }
+  if (bytes == nullptr)
+    return 0;
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (std::size_t index = 0; index < byte_count; ++index) {
+    hash ^= bytes[index];
+    hash *= 1099511628211ULL;
+  }
+  return hash == 0 ? 1 : hash;
+}
+
+esp_err_t rejectRateLimited(httpd_req_t* request, std::uint32_t retry_after) {
+  char seconds[12]{};
+  std::snprintf(seconds, sizeof(seconds), "%lu", static_cast<unsigned long>(retry_after));
+  httpd_resp_set_status(request, "429 Too Many Requests");
+  httpd_resp_set_type(request, "application/json");
+  httpd_resp_set_hdr(request, "Retry-After", seconds);
+  return httpd_resp_sendstr(
+      request,
+      "{\"error\":{\"code\":\"rate_limited\",\"message\":\"Too many requests. Retry later.\"}}");
 }
 
 bool authority_matches(const char* host, const char* authority) {
@@ -113,6 +164,59 @@ bool header(httpd_req_t* req, const char* name, char* out, size_t capacity) {
   return httpd_req_get_hdr_value_str(req, name, out, capacity) == ESP_OK;
 }
 
+bool validToken(const char* token) {
+  if (token == nullptr || std::strlen(token) != 64)
+    return false;
+  for (std::size_t index = 0; index < 64; ++index) {
+    if (!((token[index] >= '0' && token[index] <= '9') ||
+          (token[index] >= 'a' && token[index] <= 'f')))
+      return false;
+  }
+  return true;
+}
+
+bool cookieToken(httpd_req_t* request, char (&token)[65]) {
+  char cookies[256]{};
+  if (!header(request, "Cookie", cookies, sizeof(cookies)))
+    return false;
+  constexpr char prefix[] = "core_pilot_session=";
+  char* current = cookies;
+  while (*current != '\0') {
+    while (*current == ' ' || *current == ';')
+      ++current;
+    char* end = std::strchr(current, ';');
+    if (end != nullptr)
+      *end = '\0';
+    if (std::strncmp(current, prefix, sizeof(prefix) - 1) == 0) {
+      const char* value = current + sizeof(prefix) - 1;
+      if (validToken(value))
+        std::memcpy(token, value, sizeof(token));
+      mbedtls_platform_zeroize(cookies, sizeof(cookies));
+      return token[0] != '\0';
+    }
+    if (end == nullptr)
+      break;
+    current = end + 1;
+  }
+  mbedtls_platform_zeroize(cookies, sizeof(cookies));
+  return false;
+}
+
+bool authorizeRequest(httpd_req_t* request, std::uint64_t timestamp) {
+  char bearer[80]{};
+  char cookie[65]{};
+  bool allowed = false;
+  if (header(request, "Authorization", bearer, sizeof(bearer)) &&
+      std::strncmp(bearer, "Bearer ", 7) == 0 && validToken(bearer + 7)) {
+    allowed = auth.authorize(bearer + 7, timestamp);
+  } else if (cookieToken(request, cookie)) {
+    allowed = auth.authorize(cookie, timestamp);
+  }
+  mbedtls_platform_zeroize(bearer, sizeof(bearer));
+  mbedtls_platform_zeroize(cookie, sizeof(cookie));
+  return allowed;
+}
+
 esp_err_t authHandler(httpd_req_t* req) {
   httpd_resp_set_type(req, "application/json");
   if (req->method == HTTP_GET) {
@@ -120,12 +224,16 @@ esp_err_t authHandler(httpd_req_t* req) {
     if (!lock.held())
       return rejectAuth(req, "503 Service Unavailable", "unavailable",
                         "Access is temporarily unavailable.");
-    char response[128]{};
+    const std::uint64_t timestamp = now();
+    const bool authenticated = kDevelopmentAuthBypass || authorizeRequest(req, timestamp);
+    char response[160]{};
     std::snprintf(response, sizeof(response),
                   "{\"authentication_required\":%s,\"bootstrap_state\":\"%s\","
-                  "\"session_seconds\":%llu}",
-                  kDevelopmentAuthBypass ? "false" : "true", stateName(auth.bootstrap_state(now())),
-                  static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
+                  "\"session_seconds\":%llu,\"session_authenticated\":%s}",
+                  kDevelopmentAuthBypass ? "false" : "true",
+                  stateName(auth.bootstrap_state(timestamp)),
+                  static_cast<unsigned long long>(core_security::Auth::kSessionSeconds),
+                  authenticated ? "true" : "false");
     return httpd_resp_sendstr(req, response);
   }
 
@@ -144,9 +252,14 @@ esp_err_t authHandler(httpd_req_t* req) {
   cJSON* document = nullptr;
   const auto parsed = core_domain::parse_json(body, received, sizeof(body) - 1, document);
   const cJSON* code = document ? cJSON_GetObjectItemCaseSensitive(document, "code") : nullptr;
+  const cJSON* mode = document ? cJSON_GetObjectItemCaseSensitive(document, "mode") : nullptr;
+  const bool cookie_mode = cJSON_IsString(mode) && std::strcmp(mode->valuestring, "cookie") == 0;
+  const bool bearer_mode =
+      mode == nullptr || (cJSON_IsString(mode) && std::strcmp(mode->valuestring, "bearer") == 0);
   const bool valid = parsed == core_domain::ApiError::ok && cJSON_IsObject(document) &&
-                     cJSON_GetArraySize(document) == 1 && cJSON_IsString(code) &&
-                     std::strlen(code->valuestring) == 16;
+                     cJSON_GetArraySize(document) == (mode == nullptr ? 1 : 2) &&
+                     cJSON_IsString(code) && std::strlen(code->valuestring) == 16 &&
+                     (cookie_mode || bearer_mode);
   if (!valid) {
     if (code && cJSON_IsString(code))
       mbedtls_platform_zeroize(code->valuestring, std::strlen(code->valuestring));
@@ -183,8 +296,18 @@ esp_err_t authHandler(httpd_req_t* req) {
   }
 
   char response[128]{};
-  std::snprintf(response, sizeof(response), "{\"token\":\"%s\",\"expires_in\":%llu}", token,
-                static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
+  if (cookie_mode) {
+    char cookie[160]{};
+    std::snprintf(cookie, sizeof(cookie),
+                  "core_pilot_session=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800", token);
+    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    std::snprintf(response, sizeof(response), "{\"authenticated\":true,\"expires_in\":%llu}",
+                  static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
+    mbedtls_platform_zeroize(cookie, sizeof(cookie));
+  } else {
+    std::snprintf(response, sizeof(response), "{\"token\":\"%s\",\"expires_in\":%llu}", token,
+                  static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
+  }
   const auto sent = httpd_resp_sendstr(req, response);
   mbedtls_platform_zeroize(token, sizeof(token));
   mbedtls_platform_zeroize(response, sizeof(response));
@@ -193,13 +316,21 @@ esp_err_t authHandler(httpd_req_t* req) {
 
 esp_err_t logoutHandler(httpd_req_t* req) {
   char bearer[80]{};
+  char cookie[65]{};
   bool revoked = false;
   {
     AuthLock lock;
-    revoked = lock.held() && header(req, "Authorization", bearer, sizeof(bearer)) &&
-              !std::strncmp(bearer, "Bearer ", 7) && auth.revoke(bearer + 7);
+    if (lock.held() && header(req, "Authorization", bearer, sizeof(bearer)) &&
+        std::strncmp(bearer, "Bearer ", 7) == 0 && validToken(bearer + 7)) {
+      revoked = auth.revoke(bearer + 7);
+    } else if (lock.held() && cookieToken(req, cookie)) {
+      revoked = auth.revoke(cookie);
+    }
   }
   mbedtls_platform_zeroize(bearer, sizeof(bearer));
+  mbedtls_platform_zeroize(cookie, sizeof(cookie));
+  httpd_resp_set_hdr(req, "Set-Cookie",
+                     "core_pilot_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0");
   if (!revoked)
     return reject(req, "401 Unauthorized", "Access required");
   httpd_resp_set_type(req, "application/json");
@@ -221,27 +352,35 @@ esp_err_t dispatch(httpd_req_t* req) {
       core_domain::same_origin_mutation_allowed(origin[0] ? origin : nullptr, host) !=
           core_domain::ApiError::ok)
     return reject(req, "403 Forbidden", "Origin rejected");
+  const auto& route = static_cast<Route*>(req->user_ctx)->original;
+  const std::uint64_t source = requestSource(req);
+  core_domain::RateLimitResult rate{false, 1};
+  if (rate_mutex != nullptr && xSemaphoreTake(rate_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+    rate = request_limiter.allow(source, now());
+    if (rate.allowed && req->method == HTTP_POST &&
+        std::strcmp(route.uri, "/api/v1/auth/session") == 0)
+      rate = auth_limiter.allow(source, now());
+    xSemaphoreGive(rate_mutex);
+  }
+  if (!rate.allowed)
+    return rejectRateLimited(req, rate.retry_after_seconds);
   if (req->method == HTTP_POST || req->method == HTTP_PATCH) {
     char type[64]{};
     if (!header(req, "Content-Type", type, sizeof(type)) ||
         std::strcmp(type, "application/json") != 0)
       return reject(req, "415 Unsupported Media Type", "Expected application/json");
   }
-  const auto& route = static_cast<Route*>(req->user_ctx)->original;
   const bool public_route =
       (req->method == HTTP_GET &&
        (!std::strcmp(route.uri, "/") || !std::strcmp(route.uri, "/api/v1/health") ||
         !std::strcmp(route.uri, "/api/v1/auth"))) ||
       (req->method == HTTP_POST && !std::strcmp(route.uri, "/api/v1/auth/session"));
   if (!public_route) {
-    char bearer[80]{};
     bool allowed = kDevelopmentAuthBypass;
     if (!allowed) {
       AuthLock lock;
-      allowed = lock.held() && header(req, "Authorization", bearer, sizeof(bearer)) &&
-                !std::strncmp(bearer, "Bearer ", 7) && auth.authorize(bearer + 7, now());
+      allowed = lock.held() && authorizeRequest(req, now());
     }
-    mbedtls_platform_zeroize(bearer, sizeof(bearer));
     if (!allowed)
       return reject(req, "401 Unauthorized", "Access required");
     if (network_service != nullptr &&
@@ -271,7 +410,8 @@ esp_err_t initializeHttpAccess(core_security::RandomSource& random, CoreNetwork&
   random_source = &random;
   network_service = &network;
   auth_mutex = xSemaphoreCreateMutexStatic(&auth_mutex_storage);
-  if (!auth_mutex)
+  rate_mutex = xSemaphoreCreateMutexStatic(&rate_mutex_storage);
+  if (!auth_mutex || !rate_mutex)
     return ESP_ERR_NO_MEM;
   AuthLock lock;
   return lock.held() && auth.begin(random, now()) == core_security::Status::Ok ? ESP_OK : ESP_FAIL;
@@ -308,6 +448,41 @@ esp_err_t registerHttpAccessRoute(httpd_handle_t server, const httpd_uri_t* rout
   wrapped.handler = dispatch;
   wrapped.user_ctx = &entry;
   return httpd_register_uri_handler(server, &wrapped);
+}
+
+esp_err_t trackHttpConnectionOpen(httpd_handle_t, int) {
+  accepted_connections.fetch_add(1);
+  active_connections.fetch_add(1);
+  return ESP_OK;
+}
+
+void trackHttpConnectionClose(httpd_handle_t, int socket) {
+  std::uint32_t active = active_connections.load();
+  while (active != 0 && !active_connections.compare_exchange_weak(active, active - 1)) {
+  }
+  close(socket);
+}
+
+void recordDashboardTransfer(std::uint32_t elapsed_ms, bool complete) {
+  if (!complete) {
+    connection_errors.fetch_add(1);
+    return;
+  }
+  dashboard_transfers.fetch_add(1);
+  dashboard_last_transfer_ms.store(elapsed_ms);
+  std::uint32_t maximum = dashboard_max_transfer_ms.load();
+  while (elapsed_ms > maximum &&
+         !dashboard_max_transfer_ms.compare_exchange_weak(maximum, elapsed_ms)) {
+  }
+}
+
+HttpTelemetry httpTelemetry() {
+  return {.accepted_connections = accepted_connections.load(),
+          .active_connections = active_connections.load(),
+          .connection_errors = connection_errors.load(),
+          .dashboard_transfers = dashboard_transfers.load(),
+          .dashboard_last_transfer_ms = dashboard_last_transfer_ms.load(),
+          .dashboard_max_transfer_ms = dashboard_max_transfer_ms.load()};
 }
 
 esp_err_t registerHttpAuthRoutes(httpd_handle_t server) {

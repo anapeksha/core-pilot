@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
-import { accessToken, clearAccess, unlockAccess } from "./auth";
+import { accessGranted, clearAccess, unlockAccess } from "./auth";
 import {
   loadActivityPage,
   loadNetwork,
@@ -27,11 +27,12 @@ describe("api client", () => {
     vi.restoreAllMocks();
   });
 
-  it("adds the RAM bearer centrally and clears it on 401 without replay", async () => {
-    const token = "b".repeat(64);
+  it("uses same-origin credentials and clears cookie access on 401 without replay", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(jsonResponse({ token, expires_in: 1800 }))
+      .mockResolvedValueOnce(
+        jsonResponse({ authenticated: true, expires_in: 1800 }),
+      )
       .mockResolvedValueOnce(jsonResponse({ mode: "station" }))
       .mockResolvedValueOnce(jsonResponse({}, { status: 401 }));
     vi.stubGlobal("fetch", fetchMock);
@@ -41,12 +42,12 @@ describe("api client", () => {
       2,
       "/api/v1/network",
       expect.objectContaining({
-        headers: expect.objectContaining({ authorization: `Bearer ${token}` }),
-        credentials: "omit",
+        headers: { accept: "application/json" },
+        credentials: "same-origin",
       }),
     );
     await expect(api.rebootSystem()).rejects.toThrow("401");
-    expect(accessToken()).toBeNull();
+    expect(accessGranted()).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 

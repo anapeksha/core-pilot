@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  accessGranted,
   accessToken,
   authHeaders,
   clearAccess,
@@ -14,29 +15,35 @@ afterEach(() => {
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
-it("keeps a bounded bearer in RAM and expires it", async () => {
+it("creates a bounded same-origin cookie session and expires local access", async () => {
   vi.useFakeTimers();
-  const token = "a".repeat(64);
-  vi.stubGlobal(
-    "fetch",
-    vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ token, expires_in: 1800 })),
-      ),
-  );
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(
+      new Response(JSON.stringify({ authenticated: true, expires_in: 1800 })),
+    );
+  vi.stubGlobal("fetch", fetcher);
+
   await unlockAccess("0123456789abcdef");
-  expect(authHeaders()).toEqual({ Authorization: `Bearer ${token}` });
+
+  expect(fetcher).toHaveBeenCalledWith("/api/v1/auth/session", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    body: JSON.stringify({ code: "0123456789abcdef", mode: "cookie" }),
+  });
+  expect(accessGranted()).toBe(true);
+  expect(authHeaders()).toEqual({});
   vi.advanceTimersByTime(1800000);
+  expect(accessGranted()).toBe(false);
   expect(accessToken()).toBeNull();
 });
 
-it("revokes the server session before clearing the RAM bearer", async () => {
-  const token = "d".repeat(64);
+it("revokes the cookie session before clearing local access", async () => {
   const fetcher = vi
     .fn()
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ token, expires_in: 1800 })),
+      new Response(JSON.stringify({ authenticated: true, expires_in: 1800 })),
     )
     .mockResolvedValueOnce(new Response(JSON.stringify({ accepted: true })));
   vi.stubGlobal("fetch", fetcher);
@@ -46,29 +53,29 @@ it("revokes the server session before clearing the RAM bearer", async () => {
 
   expect(fetcher).toHaveBeenNthCalledWith(2, "/api/v1/auth/logout", {
     method: "POST",
-    credentials: "omit",
+    credentials: "same-origin",
     headers: {
       Accept: "application/json",
-      Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
     body: "{}",
   });
+  expect(accessGranted()).toBe(false);
   expect(accessToken()).toBeNull();
 });
 
-it("clears the RAM bearer when server logout transport fails", async () => {
-  const token = "e".repeat(64);
+it("clears local access when server logout transport fails", async () => {
   const fetcher = vi
     .fn()
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ token, expires_in: 1800 })),
+      new Response(JSON.stringify({ authenticated: true, expires_in: 1800 })),
     )
     .mockRejectedValueOnce(new TypeError("offline"));
   vi.stubGlobal("fetch", fetcher);
 
   await unlockAccess("0123456789abcdef");
   await expect(logoutAccess()).resolves.toBeUndefined();
+  expect(accessGranted()).toBe(false);
   expect(accessToken()).toBeNull();
 });
 
@@ -83,12 +90,14 @@ it("does not restore bearer material from browser storage", async () => {
         JSON.stringify({
           authentication_required: true,
           bootstrap_state: "consumed",
+          session_authenticated: true,
         }),
       ),
     ),
   );
 
   await expect(initializeAccess()).resolves.toBe("consumed");
+  expect(accessGranted()).toBe(true);
   expect(authHeaders()).toEqual({});
   expect(sessionStorage.getItem("core-pilot-access-token")).toBe(
     "b".repeat(64),
@@ -101,6 +110,7 @@ it.each([
   ["expired", "The access code has expired."],
   ["attempts_exhausted", "Access attempts are exhausted."],
   ["unavailable", "Access is temporarily unavailable."],
+  ["rate_limited", "Too many access attempts."],
 ])("reports %s without replaying the mutation", async (code, message) => {
   const fetcher = vi.fn().mockResolvedValue(
     new Response(JSON.stringify({ error: { code, message: "ignored" } }), {

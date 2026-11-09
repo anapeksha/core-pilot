@@ -906,7 +906,7 @@ async function fetchWithTimeout<T>(
     const response = await fetch(path, {
       ...init,
       headers: Object.fromEntries(headers.entries()),
-      credentials: "omit",
+      credentials: "same-origin",
       signal: controller.signal,
     });
     if (response.status === 401) clearAccess();

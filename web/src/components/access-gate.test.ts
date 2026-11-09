@@ -20,9 +20,7 @@ it("does not mount dashboard content before access and hides it on expiry", asyn
         new Response(JSON.stringify({ authentication_required: true })),
       )
       .mockResolvedValueOnce(
-        new Response(
-          JSON.stringify({ token: "a".repeat(64), expires_in: 1800 }),
-        ),
+        new Response(JSON.stringify({ authenticated: true, expires_in: 1800 })),
       ),
   );
   const root = document.createElement("div");

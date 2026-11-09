@@ -52,6 +52,8 @@ std::atomic<CoreMatter::CommissioningState> commissioning_state{
     CoreMatter::CommissioningState::idle};
 std::atomic<std::uint64_t> commissioned_node_id{0};
 std::atomic<esp_err_t> commissioning_error{ESP_OK};
+std::atomic<CommissioningFailureClass> commissioning_failure{CommissioningFailureClass::none};
+std::atomic<std::uint8_t> commissioning_failure_stage{kUnknownCommissioningStage};
 std::atomic<std::int64_t> commissioning_started_us{0};
 std::atomic_bool pase_established{false};
 enum class CancellationReason : std::uint8_t {
@@ -69,6 +71,8 @@ void onPaseComplete(CHIP_ERROR error) {
   pase_established.store(error == CHIP_NO_ERROR);
   if (error != CHIP_NO_ERROR) {
     const auto reason = cancellation_reason.exchange(CancellationReason::none);
+    if (reason == CancellationReason::none)
+      commissioning_failure.store(CommissioningFailureClass::pase);
     commissioning_error.store(reason == CancellationReason::requested   ? ESP_OK
                               : reason == CancellationReason::timed_out ? ESP_ERR_TIMEOUT
                                                                         : ESP_FAIL);
@@ -94,11 +98,58 @@ void onCommissioningSuccess(chip::ScopedNodeId peer_id) {
            static_cast<unsigned long long>(peer_id.GetNodeId()));
 }
 
+CommissioningFailureClass classifyCommissioningFailure(chip::Controller::CommissioningStage stage) {
+  using enum chip::Controller::CommissioningStage;
+  switch (stage) {
+  case kSecurePairing:
+    return CommissioningFailureClass::pase;
+  case kSendPAICertificateRequest:
+  case kSendDACCertificateRequest:
+  case kSendAttestationRequest:
+  case kAttestationVerification:
+  case kAttestationRevocationCheck:
+  case kJCMTrustVerification:
+    return CommissioningFailureClass::attestation;
+  case kSendOpCertSigningRequest:
+  case kValidateCSR:
+  case kGenerateNOCChain:
+  case kSendTrustedRootCert:
+  case kSendNOC:
+    return CommissioningFailureClass::credentials;
+  case kWiFiNetworkSetup:
+  case kThreadNetworkSetup:
+  case kFailsafeBeforeWiFiEnable:
+  case kFailsafeBeforeThreadEnable:
+  case kWiFiNetworkEnable:
+  case kThreadNetworkEnable:
+  case kScanNetworks:
+  case kNeedsNetworkCreds:
+  case kPrimaryOperationalNetworkFailed:
+  case kRemoveWiFiNetworkConfig:
+  case kRemoveThreadNetworkConfig:
+  case kRequestWiFiCredentials:
+  case kRequestThreadCredentials:
+    return CommissioningFailureClass::network;
+  case kEvictPreviousCaseSessions:
+  case kFindOperationalForStayActive:
+  case kFindOperationalForCommissioningComplete:
+  case kSendComplete:
+  case kICDSendStayActive:
+    return CommissioningFailureClass::operational;
+  default:
+    return CommissioningFailureClass::commissioning;
+  }
+}
+
 void onCommissioningFailure(chip::NodeId node_id, CHIP_ERROR error,
                             chip::Controller::CommissioningStage stage,
                             std::optional<chip::Credentials::AttestationVerificationResult>) {
   pase_established.store(false);
   const auto reason = cancellation_reason.exchange(CancellationReason::none);
+  if (reason == CancellationReason::none) {
+    commissioning_failure.store(classifyCommissioningFailure(stage));
+    commissioning_failure_stage.store(static_cast<std::uint8_t>(stage));
+  }
   commissioning_error.store(reason == CancellationReason::requested   ? ESP_OK
                             : reason == CancellationReason::timed_out ? ESP_ERR_TIMEOUT
                                                                       : ESP_FAIL);
@@ -696,6 +747,10 @@ esp_err_t CoreMatter::commission(CommissioningTransport transport, const char* s
   status_.operation_id = operation_id;
   status_.commissioning_transport = transport;
   status_.commissioning_state = CommissioningState::queued;
+  status_.commissioning_failure = CommissioningFailureClass::none;
+  status_.commissioning_failure_stage = kUnknownCommissioningStage;
+  commissioning_failure.store(CommissioningFailureClass::none);
+  commissioning_failure_stage.store(kUnknownCommissioningStage);
   status_.last_error = ESP_OK;
   command.operation_id = operation_id;
   taskEXIT_CRITICAL(&status_lock_);
@@ -866,7 +921,7 @@ esp_err_t CoreMatter::unpairDevice(std::uint64_t node_id, std::uint32_t& operati
     return node_id == 0 ? ESP_ERR_INVALID_ARG : ESP_ERR_INVALID_STATE;
   }
   taskENTER_CRITICAL(&status_lock_);
-  const bool pending = active_unpair_operation_id_ != 0;
+  const bool pending = !detail::unpairCallbackSlotAvailable(active_unpair_operation_id_);
   taskEXIT_CRITICAL(&status_lock_);
   if (pending) {
     operation_id = 0;
@@ -1085,6 +1140,8 @@ CoreMatter::Status CoreMatter::status() const {
   if (callback_state != CommissioningState::idle) {
     snapshot.commissioning_state = callback_state;
     snapshot.commissioned_node_id = commissioned_node_id.load();
+    snapshot.commissioning_failure = commissioning_failure.load();
+    snapshot.commissioning_failure_stage = commissioning_failure_stage.load();
     snapshot.last_error = commissioning_error.load();
   }
   return snapshot;
@@ -1178,8 +1235,8 @@ void CoreMatter::onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error) {
   const std::uint32_t operation_id = matter->active_unpair_operation_id_;
   const std::uint32_t generation = matter->active_unpair_generation_;
   const bool timed_out = matter->active_unpair_timed_out_;
-  const bool pending =
-      operation_id != 0 && generation != 0 && matter->active_unpair_node_id_ == node_id;
+  const bool pending = detail::unpairCallbackMatches(operation_id, matter->active_unpair_node_id_,
+                                                     generation, node_id);
   const bool command_active = pending && !timed_out &&
                               matter->command_status_.operation_id == operation_id &&
                               matter->command_status_.kind == CommandKind::unpair_device &&
@@ -1565,7 +1622,8 @@ void CoreMatter::run() {
       taskENTER_CRITICAL(&status_lock_);
       const bool current = command.operation_id == command_status_.operation_id &&
                            command_status_.kind == CommandKind::unpair_device;
-      if (current) {
+      const bool slot_available = detail::unpairCallbackSlotAvailable(active_unpair_operation_id_);
+      if (current && slot_available) {
         command_status_.state = CommandState::invoking;
         active_unpair_operation_id_ = command.operation_id;
         active_unpair_node_id_ = command.node_id;
@@ -1574,14 +1632,17 @@ void CoreMatter::run() {
         active_unpair_timed_out_ = false;
       }
       taskEXIT_CRITICAL(&status_lock_);
-      if (!current || active_unpair_generation_ == 0) {
-        taskENTER_CRITICAL(&status_lock_);
-        active_unpair_operation_id_ = 0;
-        active_unpair_node_id_ = 0;
-        active_unpair_generation_ = 0;
-        active_unpair_started_us_ = 0;
-        taskEXIT_CRITICAL(&status_lock_);
-        finishCommand(command.operation_id, CommandState::failed, ESP_ERR_NOT_FOUND);
+      if (!current || !slot_available || active_unpair_generation_ == 0) {
+        if (slot_available) {
+          taskENTER_CRITICAL(&status_lock_);
+          active_unpair_operation_id_ = 0;
+          active_unpair_node_id_ = 0;
+          active_unpair_generation_ = 0;
+          active_unpair_started_us_ = 0;
+          taskEXIT_CRITICAL(&status_lock_);
+        }
+        finishCommand(command.operation_id, CommandState::failed,
+                      slot_available ? ESP_ERR_NOT_FOUND : ESP_ERR_INVALID_STATE);
         continue;
       }
       {

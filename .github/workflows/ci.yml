@@ -44,7 +44,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: dashboard-dist
-          path: web/dist
+          path: dist
           if-no-files-found: error
           retention-days: 1
 
@@ -55,6 +55,10 @@ jobs:
     container: espressif/idf:v6.0.2
     steps:
       - uses: actions/checkout@v5
+      - name: Export ESP-IDF environment
+        run: |
+          . "$IDF_PATH/export.sh"
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
       - name: Configure native host tests
         run: cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - name: Build native host tests
@@ -69,6 +73,12 @@ jobs:
     container: espressif/idf:v6.0.2
     steps:
       - uses: actions/checkout@v5
+      - name: Export ESP-IDF environment
+        run: |
+          . "$IDF_PATH/export.sh"
+          echo "PATH=$PATH" >> "$GITHUB_ENV"
+          echo "ESP_IDF_VERSION=$ESP_IDF_VERSION" >> "$GITHUB_ENV"
+          echo "IDF_PYTHON_ENV_PATH=$IDF_PYTHON_ENV_PATH" >> "$GITHUB_ENV"
       - name: Configure ESP32-S3 Unity test image
         run: >-
           idf.py -C firmware/s3/test/esp32s3

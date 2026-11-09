@@ -18,7 +18,7 @@ target_include_directories(
         ../../components/core_network/include
         ../../components/core_ota/include
 )
-target_compile_features(firmware_logic_tests PRIVATE cxx_std_26)
+target_compile_features(firmware_logic_tests PRIVATE cxx_std_23)
 target_compile_options(
     firmware_logic_tests
     PRIVATE

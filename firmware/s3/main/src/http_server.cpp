@@ -1,6 +1,7 @@
 #include "http_server.hpp"
 
 #include "ai_chat_service.hpp"
+#include "application_mutations.hpp"
 #include "automation_service.hpp"
 #include "cJSON.h"
 #include "core_activity.hpp"
@@ -38,6 +39,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <iterator>
 
 extern "C" {
 extern const std::uint8_t dashboard_gzip_start[] asm("_binary_index_html_gz_start");
@@ -49,7 +51,6 @@ namespace core_pilot {
 namespace {
 
 constexpr char kTag[] = "core_http";
-constexpr std::size_t kMaxHttpConnections = 4;
 constexpr std::size_t kMaxRequestBody = 9216;
 
 struct TimeConfig final {
@@ -154,6 +155,7 @@ esp_err_t addCommonHeaders(httpd_req_t* request) {
 }
 
 esp_err_t dashboardHandler(httpd_req_t* request) {
+  const std::int64_t started = esp_timer_get_time();
   const auto size = static_cast<std::size_t>(dashboard_gzip_end - dashboard_gzip_start);
   ESP_RETURN_ON_ERROR(httpd_resp_set_type(request, "text/html; charset=utf-8"), kTag, "type");
   ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Content-Encoding", "gzip"), kTag, "encoding");
@@ -169,13 +171,19 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
   std::size_t offset = 0;
   while (offset < size) {
     const std::size_t chunk = std::min(kDashboardChunkBytes, size - offset);
-    ESP_RETURN_ON_ERROR(
+    const esp_err_t result =
         httpd_resp_send_chunk(request, reinterpret_cast<const char*>(dashboard_gzip_start + offset),
-                              chunk),
-        kTag, "dashboard chunk");
+                              static_cast<ssize_t>(chunk));
+    if (result != ESP_OK) {
+      recordDashboardTransfer(0, false);
+      return result;
+    }
     offset += chunk;
   }
-  return httpd_resp_send_chunk(request, nullptr, 0);
+  const esp_err_t result = httpd_resp_send_chunk(request, nullptr, 0);
+  const auto elapsed_ms = static_cast<std::uint32_t>((esp_timer_get_time() - started) / 1000);
+  recordDashboardTransfer(elapsed_ms, result == ESP_OK);
+  return result;
 }
 
 esp_err_t healthHandler(httpd_req_t* request) {
@@ -250,6 +258,45 @@ bool nonWhitespace(const char* value) {
     if (*value != ' ' && *value != '\t' && *value != '\r' && *value != '\n')
       return true;
   return false;
+}
+
+const char* commissioningFailureCode(CommissioningFailureClass failure) {
+  switch (failure) {
+  case CommissioningFailureClass::none:
+    return "MATTER_COMMISSION_FAILED";
+  case CommissioningFailureClass::pase:
+    return "MATTER_COMMISSION_PASE_FAILED";
+  case CommissioningFailureClass::attestation:
+    return "MATTER_COMMISSION_ATTESTATION_FAILED";
+  case CommissioningFailureClass::credentials:
+    return "MATTER_COMMISSION_CREDENTIALS_FAILED";
+  case CommissioningFailureClass::network:
+    return "MATTER_COMMISSION_NETWORK_FAILED";
+  case CommissioningFailureClass::operational:
+    return "MATTER_COMMISSION_OPERATIONAL_FAILED";
+  case CommissioningFailureClass::commissioning:
+    return "MATTER_COMMISSION_FAILED";
+  }
+  return "MATTER_COMMISSION_FAILED";
+}
+
+const char* commissioningFailureDetail(CommissioningFailureClass failure) {
+  switch (failure) {
+  case CommissioningFailureClass::pase:
+    return "Secure pairing with the accessory failed.";
+  case CommissioningFailureClass::attestation:
+    return "Accessory attestation failed.";
+  case CommissioningFailureClass::credentials:
+    return "Operational credential installation failed.";
+  case CommissioningFailureClass::network:
+    return "Accessory network provisioning failed.";
+  case CommissioningFailureClass::operational:
+    return "Operational discovery or CASE establishment failed.";
+  case CommissioningFailureClass::none:
+  case CommissioningFailureClass::commissioning:
+    return "Matter commissioning failed.";
+  }
+  return "Matter commissioning failed.";
 }
 
 const char* commissioningState(CoreMatter::CommissioningState state) {
@@ -559,12 +606,13 @@ esp_err_t systemHandler(httpd_req_t* request, const HttpRuntime& runtime) {
   cJSON_AddNumberToObject(response, "ota_total_bytes", ota.size_bytes);
   cJSON_AddBoolToObject(response, "ota_restart_after_update", ota.restart_after_update);
   cJSON_AddStringToObject(response, "recovery", "ready");
-  cJSON_AddNumberToObject(response, "http_accepted_connections", 0);
-  cJSON_AddNumberToObject(response, "http_active_connections", 0);
-  cJSON_AddNumberToObject(response, "http_connection_errors", 0);
-  cJSON_AddNumberToObject(response, "dashboard_transfers", 0);
-  cJSON_AddNumberToObject(response, "dashboard_last_transfer_ms", 0);
-  cJSON_AddNumberToObject(response, "dashboard_max_transfer_ms", 0);
+  const auto http = httpTelemetry();
+  cJSON_AddNumberToObject(response, "http_accepted_connections", http.accepted_connections);
+  cJSON_AddNumberToObject(response, "http_active_connections", http.active_connections);
+  cJSON_AddNumberToObject(response, "http_connection_errors", http.connection_errors);
+  cJSON_AddNumberToObject(response, "dashboard_transfers", http.dashboard_transfers);
+  cJSON_AddNumberToObject(response, "dashboard_last_transfer_ms", http.dashboard_last_transfer_ms);
+  cJSON_AddNumberToObject(response, "dashboard_max_transfer_ms", http.dashboard_max_transfer_ms);
   return sendJson(request, response);
 }
 
@@ -1704,8 +1752,15 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
     cJSON_AddNumberToObject(terminal, "phase_timeout_ms", CoreMatter::kCommissioningTimeoutMs);
     if (status.commissioning_state == CoreMatter::CommissioningState::failed) {
       cJSON* failure = cJSON_AddObjectToObject(terminal, "failure");
-      cJSON_AddStringToObject(failure, "code", esp_err_to_name(status.last_error));
-      cJSON_AddStringToObject(failure, "detail", "Matter commissioning failed.");
+      if (status.last_error == ESP_ERR_TIMEOUT) {
+        cJSON_AddStringToObject(failure, "code", "MATTER_COMMISSION_TIMEOUT");
+        cJSON_AddStringToObject(failure, "detail", "Matter commissioning timed out.");
+      } else {
+        cJSON_AddStringToObject(failure, "code",
+                                commissioningFailureCode(status.commissioning_failure));
+        cJSON_AddStringToObject(failure, "detail",
+                                commissioningFailureDetail(status.commissioning_failure));
+      }
     } else {
       cJSON_AddNullToObject(terminal, "failure");
     }
@@ -1983,7 +2038,9 @@ esp_err_t forgetMatterDeviceHandler(httpd_req_t* request) {
   const cJSON* confirmation =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "confirmation");
   std::uint64_t node_id = 0;
-  const bool valid_node = parseMatterNodeId(device_id, node_id);
+  const char* const fields[]{"device_id", "confirmation"};
+  const bool valid_node =
+      exactObject(document, fields, std::size(fields)) && parseMatterNodeId(device_id, node_id);
   char expected_confirmation[64]{};
   if (valid_node)
     std::snprintf(expected_confirmation, sizeof(expected_confirmation), "FORGET MATTER DEVICE %s",
@@ -1999,22 +2056,15 @@ esp_err_t forgetMatterDeviceHandler(httpd_req_t* request) {
   }
   cJSON_Delete(document);
 
-  const auto result = valid_node && confirmed && registered ? runtime->devices.removeNode(node_id)
-                                                            : core_security::Status::Invalid;
-  if (result == core_security::Status::Ok) {
-    runtime->activity.append(
-        "matter_device_forgotten_locally",
-        "A Matter device was forgotten locally without confirming accessory fabric removal.");
-  }
+  const bool accepted = valid_node && confirmed && registered && enqueueMatterLocalForget(node_id);
 
   cJSON* response = cJSON_CreateObject();
-  cJSON_AddBoolToObject(response, "accepted", result == core_security::Status::Ok);
-  cJSON_AddStringToObject(response, "status",
-                          result == core_security::Status::Ok ? "forgotten_locally" : "rejected");
-  const char* detail = "The local encrypted record could not be removed safely.";
-  if (result == core_security::Status::Ok) {
-    detail = "Only Core Pilot's local encrypted record was removed. The accessory may still "
-             "retain fabric credentials.";
+  cJSON_AddBoolToObject(response, "accepted", accepted);
+  cJSON_AddStringToObject(response, "status", accepted ? "queued" : "rejected");
+  const char* detail = "Another local Matter recovery operation is already queued.";
+  if (accepted) {
+    detail = "Local encrypted record removal was queued. The accessory may still retain fabric "
+             "credentials.";
   } else if (!valid_node || !registered) {
     detail = "The Matter device ID is invalid or is not in the local registry.";
   } else if (!confirmed) {
@@ -2830,11 +2880,13 @@ void publishRtcReady(bool ready) {
 
 httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-  config.max_open_sockets = kMaxHttpConnections;
+  config.max_open_sockets = core_domain::max_http_connections;
   config.max_resp_headers = 12;
   config.max_uri_handlers = 65;
   config.uri_match_fn = httpd_uri_match_wildcard;
-  config.lru_purge_enable = true;
+  config.lru_purge_enable = false;
+  config.open_fn = trackHttpConnectionOpen;
+  config.close_fn = trackHttpConnectionClose;
   config.stack_size = 12288;
 
   httpd_handle_t server = nullptr;

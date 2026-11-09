@@ -40,6 +40,17 @@ export const ERROR_MESSAGES = {
     "Thread commissioning needs trusted current time. Synchronize the Core Pilot clock and try again.",
   MATTER_COMMISSIONING_RECOVERY_REQUIRED:
     "A previous Thread commissioning boot was interrupted. Review the accessory state before retrying.",
+  MATTER_COMMISSION_PASE_FAILED:
+    "The secure Matter commissioning session could not be established.",
+  MATTER_COMMISSION_ATTESTATION_FAILED: "Matter accessory attestation failed.",
+  MATTER_COMMISSION_CREDENTIALS_FAILED:
+    "Matter operational credentials could not be installed.",
+  MATTER_COMMISSION_NETWORK_FAILED:
+    "The accessory could not be provisioned onto its Matter network.",
+  MATTER_COMMISSION_OPERATIONAL_FAILED:
+    "The commissioned accessory could not establish an operational Matter session.",
+  MATTER_COMMISSION_FAILED: "Matter commissioning failed.",
+  MATTER_COMMISSION_TIMEOUT: "Matter commissioning timed out.",
   MATTER_COMMAND_QUEUE_FULL:
     "The Matter command queue is busy. Wait briefly and try again.",
   MATTER_COMMAND_TARGET_INVALID:

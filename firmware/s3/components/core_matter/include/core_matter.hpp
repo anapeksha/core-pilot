@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core_matter_lifecycle.hpp"
+#include "core_matter_operation_policy.hpp"
 #include "core_matter_terminal_history.hpp"
 #include "esp_err.h"
 #include "esp_timer.h"
@@ -162,6 +163,8 @@ public:
     bool thread_attached;
     CommissioningTransport commissioning_transport;
     CommissioningState commissioning_state;
+    CommissioningFailureClass commissioning_failure;
+    std::uint8_t commissioning_failure_stage;
     std::uint32_t operation_id;
     std::uint64_t commissioned_node_id;
     std::uint16_t subscriptions_active;
@@ -300,6 +303,8 @@ private:
                  false,
                  CommissioningTransport::wifi,
                  CommissioningState::idle,
+                 CommissioningFailureClass::none,
+                 kUnknownCommissioningStage,
                  0,
                  0,
                  0,

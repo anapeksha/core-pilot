@@ -22,7 +22,7 @@ import {
 } from "~/components/text-field";
 import {
   AccessError,
-  accessToken,
+  accessGranted,
   initializeAccess,
   unlockAccess,
   type BootstrapState,
@@ -81,7 +81,7 @@ export default function AccessGate(props: ParentProps) {
 
   return (
     <>
-      {!checking() && accessToken() ? (
+      {!checking() && accessGranted() ? (
         <ProtectedContent />
       ) : (
         <main class="relative grid min-h-screen place-items-center overflow-hidden bg-background px-4 py-10 sm:px-6">

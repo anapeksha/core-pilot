@@ -7,7 +7,8 @@ export type AccessErrorCode =
   | "expired"
   | "attempts_exhausted"
   | "unavailable"
-  | "invalid_request";
+  | "invalid_request"
+  | "rate_limited";
 
 export class AccessError extends Error {
   constructor(
@@ -19,10 +20,11 @@ export class AccessError extends Error {
 }
 
 const sessionSeconds = 1800;
-const tokenPattern = /^[0-9a-f]{64}$/;
 
 const [token, setToken] = createSignal<string | null>(null);
+const [granted, setGranted] = createSignal(false);
 export const accessToken = token;
+export const accessGranted = granted;
 let expiry: ReturnType<typeof setTimeout> | undefined;
 
 function isBootstrapState(value: unknown): value is BootstrapState {
@@ -37,7 +39,7 @@ function isBootstrapState(value: unknown): value is BootstrapState {
 
 export async function initializeAccess(): Promise<BootstrapState> {
   const response = await fetch("/api/v1/auth", {
-    credentials: "omit",
+    credentials: "same-origin",
     headers: { Accept: "application/json" },
   });
   if (!response.ok) throw new Error("Could not check device access.");
@@ -48,7 +50,7 @@ export async function initializeAccess(): Promise<BootstrapState> {
     "authentication_required" in status &&
     status.authentication_required === false
   ) {
-    setToken("0".repeat(64));
+    setGranted(true);
     return "consumed";
   }
   if (
@@ -56,8 +58,16 @@ export async function initializeAccess(): Promise<BootstrapState> {
     typeof status === "object" &&
     "bootstrap_state" in status &&
     isBootstrapState(status.bootstrap_state)
-  )
+  ) {
+    if (
+      "session_authenticated" in status &&
+      status.session_authenticated === true
+    ) {
+      setGranted(true);
+      expiry = setTimeout(clearAccess, sessionSeconds * 1000);
+    }
     return status.bootstrap_state;
+  }
   return "open";
 }
 
@@ -65,6 +75,7 @@ export function clearAccess() {
   clearTimeout(expiry);
   expiry = undefined;
   setToken(null);
+  setGranted(false);
 }
 
 export function authHeaders(): Record<string, string> {
@@ -75,13 +86,13 @@ export function authHeaders(): Record<string, string> {
 export async function logoutAccess(): Promise<void> {
   const current = token();
   try {
-    if (current)
+    if (granted() || current)
       await fetch("/api/v1/auth/logout", {
         method: "POST",
-        credentials: "omit",
+        credentials: "same-origin",
         headers: {
           Accept: "application/json",
-          Authorization: `Bearer ${current}`,
+          ...(current ? { Authorization: `Bearer ${current}` } : {}),
           "Content-Type": "application/json",
         },
         body: "{}",
@@ -100,14 +111,15 @@ const accessMessages: Record<AccessErrorCode, string> = {
     "Access attempts are exhausted. Generate a new code on the CoreS3.",
   unavailable: "Access is temporarily unavailable. Try again on the CoreS3.",
   invalid_request: "Enter the complete 16-character access code.",
+  rate_limited: "Too many access attempts. Wait before trying again.",
 };
 
 export async function unlockAccess(code: string): Promise<void> {
   const response = await fetch("/api/v1/auth/session", {
     method: "POST",
-    credentials: "omit",
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ code }),
+    body: JSON.stringify({ code, mode: "cookie" }),
   });
   if (!response.ok) {
     let errorCode: AccessErrorCode = "unavailable";
@@ -133,14 +145,13 @@ export async function unlockAccess(code: string): Promise<void> {
   if (
     !value ||
     typeof value !== "object" ||
-    !("token" in value) ||
-    typeof value.token !== "string" ||
-    !tokenPattern.test(value.token) ||
+    !("authenticated" in value) ||
+    value.authenticated !== true ||
     !("expires_in" in value) ||
     value.expires_in !== sessionSeconds
   )
     throw new AccessError("unavailable", accessMessages.unavailable);
   clearAccess();
-  setToken(value.token);
+  setGranted(true);
   expiry = setTimeout(clearAccess, sessionSeconds * 1000);
 }
