@@ -171,8 +171,9 @@ esp_err_t dashboardHandler(httpd_req_t* request) {
   std::size_t offset = 0;
   while (offset < size) {
     const std::size_t chunk = std::min(kDashboardChunkBytes, size - offset);
-    const esp_err_t result = httpd_resp_send_chunk(
-        request, reinterpret_cast<const char*>(dashboard_gzip_start + offset), chunk);
+    const esp_err_t result =
+        httpd_resp_send_chunk(request, reinterpret_cast<const char*>(dashboard_gzip_start + offset),
+                              static_cast<ssize_t>(chunk));
     if (result != ESP_OK) {
       recordDashboardTransfer(0, false);
       return result;
