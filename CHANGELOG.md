@@ -4,6 +4,23 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+### Added
+
+- Bounded per-source HTTP request limiting with stricter authentication limits and retry guidance.
+- Optional `HttpOnly`, same-site dashboard sessions while retaining bearer-token access for tooling.
+- Live HTTP connection and dashboard transfer telemetry.
+- Actionable, non-secret Matter commissioning failure categories.
+
+### Changed
+
+- Moved forced local Matter record removal to the core-0 application owner.
+- Reduced production BLE scanner verbosity while retaining detailed development diagnostics.
+
+### Fixed
+
+- Prevented a second unpair request from overwriting an unresolved late completion callback.
+- Reconciled confirmed unpair completion with encrypted local registry state.
+
 ## [0.1.0-rc.1] - 2026-11-06
 
 ### Added
