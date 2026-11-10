@@ -1,6 +1,6 @@
 # Core Pilot
 
-![Core Pilot — local-first smart-home control on M5Stack CoreS3](docs/assets/core-pilot-thumbnail.webp)
+![Picture of Core S3 rendering Core Pilot screensaver. Shot on Sony A6400, 50mm f/1.8](docs/assets/core-pilot-thumbnail.webp)
 
 Core Pilot turns an M5Stack CoreS3 into a private, local-first control panel for your smart home. The device hosts its own touchscreen experience and web dashboard, so everyday control stays on your local network rather than depending on a cloud service.
 

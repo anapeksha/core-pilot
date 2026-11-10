@@ -6,6 +6,7 @@
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "mcp_service.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -24,6 +25,7 @@ public:
   static constexpr std::size_t kMaxErrorDetailBytes = 95;
 
   enum class Role : std::uint8_t { user, assistant, tool };
+  enum class ToolDecision : std::uint8_t { execute, propose, reject };
   enum class State : std::uint8_t { idle, queued, processing, complete, failed };
   enum class SubmitResult : std::uint8_t {
     queued,
@@ -77,6 +79,13 @@ public:
     std::uint8_t action_count{};
     Action actions[kMaxActions]{};
   };
+
+  // Client history is untrusted context, not an execution transcript. Only user-authored
+  // entries are accepted; assistant/tool entries could fabricate prior authorization/results.
+  static bool clientHistoryAccepted(const HistoryEntry* history, std::size_t history_count);
+
+  // Pure chat-wide admission policy used before any tool invocation.
+  static ToolDecision admitToolCall(McpService::Effect effect, bool effectful_action_seen);
 
   explicit AiChatService(ai::AiStorageService& storage);
   ~AiChatService();

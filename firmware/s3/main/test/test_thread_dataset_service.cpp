@@ -34,6 +34,21 @@ public:
 };
 } // namespace
 
+TEST_CASE("Thread dataset transaction policy exposes compensation failures", "[thread_dataset]") {
+  using core_pilot::detail::ThreadTransactionOutcome;
+  using core_pilot::detail::threadTransactionOutcome;
+  TEST_ASSERT_EQUAL(static_cast<int>(ThreadTransactionOutcome::complete),
+                    static_cast<int>(threadTransactionOutcome(true, true, false)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ThreadTransactionOutcome::failed),
+                    static_cast<int>(threadTransactionOutcome(true, false, true)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ThreadTransactionOutcome::rollback_failed),
+                    static_cast<int>(threadTransactionOutcome(true, false, false)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ThreadTransactionOutcome::failed),
+                    static_cast<int>(threadTransactionOutcome(false, false, true)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ThreadTransactionOutcome::rollback_failed),
+                    static_cast<int>(threadTransactionOutcome(false, false, false)));
+}
+
 TEST_CASE("rejected Thread dataset submission performs no durable mutation", "[thread_dataset]") {
   static core_security::DeviceSeed seed;
   static CountingStore store;

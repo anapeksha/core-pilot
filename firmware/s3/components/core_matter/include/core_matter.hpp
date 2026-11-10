@@ -232,6 +232,7 @@ private:
     discover_endpoints,
     subscribe_on_off,
     connectivity_restored,
+    invoke_complete,
     stop
   };
   /** Bounded value copied across cores by the FreeRTOS request queue. */
@@ -240,11 +241,14 @@ private:
     CommissioningTransport transport;
     std::uint8_t dataset_length;
     std::uint32_t operation_id;
+    void* callback_token;
     std::uint64_t node_id;
     std::uint16_t endpoint_id;
     std::uint16_t value;
     std::uint16_t transition_time_ds;
+    esp_err_t completion_error;
     bool on;
+    bool completion_succeeded;
     std::uint8_t endpoint_count;
     std::uint16_t endpoints[kMaxLifecycleEndpoints];
     char setup_payload[22];
@@ -276,14 +280,18 @@ private:
                                  CommandRejection* rejection = nullptr);
   bool finishCommand(std::uint32_t operation_id, CommandState state, esp_err_t error);
 
+  enum class InvokeContextState : std::uint8_t { available, pending, quarantined };
   struct InvokeCallbackContext final {
-    CoreMatter* owner;
     std::uint32_t operation_id;
-    bool in_use;
+    std::uint32_t generation;
+    InvokeContextState state;
+    bool completion_claimed;
   };
   static_assert(std::is_trivially_copyable_v<InvokeCallbackContext>);
-  InvokeCallbackContext* allocateInvokeCallback(std::uint32_t operation_id);
-  void releaseInvokeCallback(InvokeCallbackContext* context);
+  void* allocateInvokeCallback(std::uint32_t operation_id);
+  void releaseInvokeCallback(void* token);
+  void quarantineInvokeCallback(std::uint32_t operation_id);
+  static void completeInvokeCallback(void* token, bool succeeded, esp_err_t error);
 
   static constexpr UBaseType_t kQueueDepth = 8;
   static constexpr std::size_t kTerminalCommandDepth = 8;
@@ -319,6 +327,7 @@ private:
   InvokeCallbackContext invoke_callback_contexts_[kQueueDepth]{};
   std::uint32_t active_invoke_operation_id_{0};
   std::int64_t active_invoke_started_us_{0};
+  std::uint32_t next_invoke_generation_{1};
   esp_timer_handle_t recovery_timer_{nullptr};
   std::uint32_t active_unpair_operation_id_{0};
   std::uint64_t active_unpair_node_id_{0};

@@ -80,7 +80,13 @@ inline constexpr char OTA_METADATA_INVALID[] = "OTA_METADATA_INVALID";
 inline constexpr char OTA_CHUNK_REJECTED[] = "OTA_CHUNK_REJECTED";
 } // namespace error_code
 
-enum class ApiError { ok, body_too_large, invalid_json, cross_origin_mutation };
+enum class ApiError {
+  ok,
+  body_too_large,
+  invalid_json,
+  duplicate_json_member,
+  cross_origin_mutation
+};
 enum class ModelError {
   ok,
   invalid_id,
@@ -107,6 +113,9 @@ enum class OtaError {
 // Input is length-delimited. On failure, output is null; caller owns a
 // successful cJSON tree.
 ApiError parse_json(const char* bytes, size_t length, size_t max_length, cJSON*& output);
+// Zeroizes all JSON string values and member names. delete_json_sensitive also releases the tree.
+void wipe_json_sensitive(cJSON* value);
+void delete_json_sensitive(cJSON* value);
 ApiError same_origin_mutation_allowed(const char* origin, const char* host);
 // Prints into a caller-owned buffer (including the trailing NUL).
 bool serialize_json(cJSON* value, char* output, size_t capacity);
@@ -188,6 +197,7 @@ struct OtaChunk {
   uint32_t offset = 0;
   char data_base64[max_ota_chunk_base64 + 1]{};
   bool final_chunk = false;
+  char upload_token[65]{};
 };
 OtaError validate_ota_prepare(const OtaPrepare& request);
 OtaError parse_ota_prepare(const cJSON* object, OtaPrepare& result);

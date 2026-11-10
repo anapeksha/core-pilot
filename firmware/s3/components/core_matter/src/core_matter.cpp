@@ -28,6 +28,7 @@
 #include "setup_payload/ManualSetupPayloadParser.h"
 
 #include <atomic>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -770,13 +771,15 @@ esp_err_t CoreMatter::commission(CommissioningTransport transport, const char* s
 
 esp_err_t CoreMatter::applyThreadDataset(const std::uint8_t* dataset, std::size_t length,
                                          std::uint32_t& operation_id) {
-  if (dataset == nullptr || length == 0 || length > sizeof(thread_dataset_) || queue_ == nullptr) {
+  if (length > sizeof(thread_dataset_) || (length != 0 && dataset == nullptr) ||
+      queue_ == nullptr) {
     operation_id = 0;
     return ESP_ERR_INVALID_ARG;
   }
   Command command{.type = CommandType::apply_thread_dataset,
                   .dataset_length = static_cast<std::uint8_t>(length)};
-  std::memcpy(command.dataset, dataset, length);
+  if (length != 0)
+    std::memcpy(command.dataset, dataset, length);
   const esp_err_t result = enqueueDeviceCommand(command, operation_id);
   mbedtls_platform_zeroize(&command, sizeof(command));
   return result;
@@ -1163,21 +1166,72 @@ void CoreMatter::onConnectivityRestored() {
     static_cast<void>(matter->enqueueCommand(Command{.type = CommandType::connectivity_restored}));
 }
 
-CoreMatter::InvokeCallbackContext* CoreMatter::allocateInvokeCallback(std::uint32_t operation_id) {
-  for (auto& context : invoke_callback_contexts_) {
-    if (!context.in_use) {
-      context = {this, operation_id, true};
-      return &context;
-    }
+void* CoreMatter::allocateInvokeCallback(std::uint32_t operation_id) {
+  for (std::size_t slot = 0; slot < kQueueDepth; ++slot) {
+    auto& context = invoke_callback_contexts_[slot];
+    if (context.state != InvokeContextState::available)
+      continue;
+    const std::uint32_t generation = next_invoke_generation_++;
+    if (next_invoke_generation_ == 0)
+      next_invoke_generation_ = 1;
+    context = {operation_id, generation, InvokeContextState::pending, false};
+    return std::bit_cast<void*>(detail::encodeInvokeToken(slot, generation));
   }
   return nullptr;
 }
 
-void CoreMatter::releaseInvokeCallback(InvokeCallbackContext* context) {
+void CoreMatter::releaseInvokeCallback(void* token) {
+  const std::uintptr_t value = std::bit_cast<std::uintptr_t>(token);
+  const detail::InvokeToken decoded = detail::decodeInvokeToken(value);
+  if (value == 0 || decoded.slot >= kQueueDepth || decoded.generation == 0)
+    return;
   taskENTER_CRITICAL(&status_lock_);
-  if (context != nullptr)
-    *context = {};
+  auto& context = invoke_callback_contexts_[decoded.slot];
+  if (context.generation == decoded.generation)
+    context = {};
   taskEXIT_CRITICAL(&status_lock_);
+}
+
+void CoreMatter::quarantineInvokeCallback(std::uint32_t operation_id) {
+  taskENTER_CRITICAL(&status_lock_);
+  for (auto& context : invoke_callback_contexts_) {
+    if (context.operation_id == operation_id && context.state == InvokeContextState::pending) {
+      context.state = InvokeContextState::quarantined;
+      break;
+    }
+  }
+  taskEXIT_CRITICAL(&status_lock_);
+}
+
+void CoreMatter::completeInvokeCallback(void* token, bool succeeded, esp_err_t error) {
+  CoreMatter* matter = callback_owner_;
+  const std::uintptr_t value = std::bit_cast<std::uintptr_t>(token);
+  const detail::InvokeToken decoded = detail::decodeInvokeToken(value);
+  if (matter == nullptr || value == 0 || decoded.slot >= kQueueDepth || decoded.generation == 0)
+    return;
+
+  std::uint32_t operation_id = 0;
+  taskENTER_CRITICAL(&matter->status_lock_);
+  auto& context = matter->invoke_callback_contexts_[decoded.slot];
+  if (context.generation == decoded.generation && context.state != InvokeContextState::available &&
+      !context.completion_claimed) {
+    context.completion_claimed = true;
+    operation_id = context.operation_id;
+  }
+  taskEXIT_CRITICAL(&matter->status_lock_);
+  if (operation_id == 0)
+    return;
+
+  Command completion{.type = CommandType::invoke_complete,
+                     .operation_id = operation_id,
+                     .callback_token = token,
+                     .completion_error = error,
+                     .completion_succeeded = succeeded};
+  if (matter->enqueueCommand(completion) != ESP_OK) {
+    matter->finishCommand(operation_id, succeeded ? CommandState::complete : CommandState::failed,
+                          error);
+    matter->releaseInvokeCallback(token);
+  }
 }
 
 void CoreMatter::onOnOffReport(std::uint64_t node_id,
@@ -1270,7 +1324,7 @@ void CoreMatter::onUnpairComplete(std::uint64_t node_id, CHIP_ERROR error) {
 }
 
 esp_err_t CoreMatter::applyThreadDatasetOnOwner(const std::uint8_t* dataset, std::size_t length) {
-  if (dataset == nullptr || length == 0 || length > sizeof(thread_dataset_))
+  if (length > sizeof(thread_dataset_) || (length != 0 && dataset == nullptr))
     return ESP_ERR_INVALID_ARG;
   if (!esp_openthread_lock_acquire(pdMS_TO_TICKS(2000)))
     return ESP_ERR_TIMEOUT;
@@ -1285,31 +1339,50 @@ esp_err_t CoreMatter::applyThreadDatasetOnOwner(const std::uint8_t* dataset, std
   otOperationalDatasetTlvs previous{};
   const bool previous_available = otDatasetGetActiveTlvs(instance, &previous) == OT_ERROR_NONE;
   otError error = thread_enabled ? otThreadSetEnabled(instance, false) : OT_ERROR_NONE;
+  const auto clear_dataset = [instance]() {
+    const otMeshLocalPrefix prefix = *otThreadGetMeshLocalPrefix(instance);
+    return otThreadSetMeshLocalPrefix(instance, &prefix);
+  };
   otOperationalDatasetTlvs requested{};
   if (error == OT_ERROR_NONE) {
     requested.mLength = static_cast<std::uint8_t>(length);
-    std::memcpy(requested.mTlvs, dataset, length);
-    error = otDatasetSetActiveTlvs(instance, &requested);
+    if (length != 0) {
+      std::memcpy(requested.mTlvs, dataset, length);
+      error = otDatasetSetActiveTlvs(instance, &requested);
+    } else {
+      error = clear_dataset();
+    }
   }
-  if (error == OT_ERROR_NONE && !ip6_enabled)
+  if (error == OT_ERROR_NONE && length != 0 && !ip6_enabled)
     error = otIp6SetEnabled(instance, true);
-  if (error == OT_ERROR_NONE)
+  if (error == OT_ERROR_NONE && length != 0)
     error = otThreadSetEnabled(instance, true);
   otOperationalDatasetTlvs verified{};
-  if (error == OT_ERROR_NONE)
-    error = otDatasetGetActiveTlvs(instance, &verified);
-  if (error == OT_ERROR_NONE &&
+  if (error == OT_ERROR_NONE) {
+    const otError verify_error = otDatasetGetActiveTlvs(instance, &verified);
+    if (length == 0)
+      error = verify_error == OT_ERROR_NOT_FOUND ? OT_ERROR_NONE : OT_ERROR_FAILED;
+    else
+      error = verify_error;
+  }
+  if (error == OT_ERROR_NONE && length != 0 &&
       (verified.mLength != requested.mLength ||
        std::memcmp(verified.mTlvs, requested.mTlvs, requested.mLength) != 0))
     error = OT_ERROR_FAILED;
   if (error != OT_ERROR_NONE) {
-    static_cast<void>(otThreadSetEnabled(instance, false));
-    if (previous_available)
-      static_cast<void>(otDatasetSetActiveTlvs(instance, &previous));
-    if (!ip6_enabled)
-      static_cast<void>(otIp6SetEnabled(instance, false));
-    if (thread_enabled)
-      static_cast<void>(otThreadSetEnabled(instance, true));
+    otError rollback_error = otThreadSetEnabled(instance, false);
+    if (rollback_error == OT_ERROR_NONE) {
+      if (previous_available)
+        rollback_error = otDatasetSetActiveTlvs(instance, &previous);
+      else
+        rollback_error = clear_dataset();
+    }
+    if (rollback_error == OT_ERROR_NONE && !ip6_enabled)
+      rollback_error = otIp6SetEnabled(instance, false);
+    if (rollback_error == OT_ERROR_NONE && thread_enabled)
+      rollback_error = otThreadSetEnabled(instance, true);
+    if (rollback_error != OT_ERROR_NONE)
+      error = OT_ERROR_ABORT;
   }
   esp_openthread_lock_release();
   mbedtls_platform_zeroize(&previous, sizeof(previous));
@@ -1323,10 +1396,12 @@ esp_err_t CoreMatter::applyThreadDatasetOnOwner(const std::uint8_t* dataset, std
                            : error == OT_ERROR_INVALID_STATE ? ESP_ERR_INVALID_STATE
                                                              : ESP_FAIL;
   taskENTER_CRITICAL(&status_lock_);
-  status_.thread_dataset_configured = result == ESP_OK;
+  status_.thread_dataset_configured = result == ESP_OK && length != 0;
   status_.last_error = result;
   if (result == ESP_OK) {
-    std::memcpy(thread_dataset_, dataset, length);
+    mbedtls_platform_zeroize(thread_dataset_, sizeof(thread_dataset_));
+    if (length != 0)
+      std::memcpy(thread_dataset_, dataset, length);
     thread_dataset_length_ = static_cast<std::uint8_t>(length);
   }
   taskEXIT_CRITICAL(&status_lock_);
@@ -1395,8 +1470,12 @@ void CoreMatter::run() {
         active_unpair_started_us_ = 0;
       }
       taskEXIT_CRITICAL(&status_lock_);
-      if (invoke_timed_out)
+      if (invoke_timed_out) {
+        // The transport owns the callback token until it delivers a terminal callback. Keep the
+        // slot quarantined rather than risk reuse while a late callback can still reference it.
+        quarantineInvokeCallback(invoke_operation_id);
         finishCommand(invoke_operation_id, CommandState::failed, ESP_ERR_TIMEOUT);
+      }
       if (unpair_timed_out) {
         finishCommand(timed_out_operation_id, CommandState::failed, ESP_ERR_TIMEOUT);
         if (recovery_timer_ != nullptr) {
@@ -1677,13 +1756,19 @@ void CoreMatter::run() {
       }
       continue;
     }
+    if (command.type == CommandType::invoke_complete) {
+      finishCommand(command.operation_id,
+                    command.completion_succeeded ? CommandState::complete : CommandState::failed,
+                    command.completion_error);
+      releaseInvokeCallback(command.callback_token);
+      continue;
+    }
     if (command.type == CommandType::set_on_off || command.type == CommandType::set_level ||
         command.type == CommandType::set_color_temperature) {
       taskENTER_CRITICAL(&status_lock_);
       const bool current = command.operation_id == command_status_.operation_id &&
                            command_status_.kind != CommandKind::unpair_device;
-      InvokeCallbackContext* invoke_context =
-          current ? allocateInvokeCallback(command.operation_id) : nullptr;
+      void* invoke_context = current ? allocateInvokeCallback(command.operation_id) : nullptr;
       if (current && invoke_context != nullptr) {
         command_status_.state = CommandState::invoking;
         active_invoke_operation_id_ = command.operation_id;
@@ -1698,26 +1783,18 @@ void CoreMatter::run() {
       const auto on_success = [](void* context, const chip::app::ConcreteCommandPath&,
                                  const chip::app::StatusIB& response_status,
                                  chip::TLV::TLVReader*) {
-        auto* callback = static_cast<InvokeCallbackContext*>(context);
         const CHIP_ERROR chip_error = response_status.ToChipError();
-        callback->owner->finishCommand(
-            callback->operation_id,
-            chip_error == CHIP_NO_ERROR ? CommandState::complete : CommandState::failed,
-            chip_error == CHIP_NO_ERROR ? ESP_OK : ESP_ERR_INVALID_RESPONSE);
-        callback->owner->releaseInvokeCallback(callback);
+        completeInvokeCallback(context, chip_error == CHIP_NO_ERROR,
+                               chip_error == CHIP_NO_ERROR ? ESP_OK : ESP_ERR_INVALID_RESPONSE);
       };
       const auto on_error = [](void* context, CHIP_ERROR error) {
-        auto* callback = static_cast<InvokeCallbackContext*>(context);
-        callback->owner->finishCommand(callback->operation_id, CommandState::failed,
-                                       error == CHIP_ERROR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL);
-        callback->owner->releaseInvokeCallback(callback);
+        completeInvokeCallback(context, false,
+                               error == CHIP_ERROR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL);
       };
       const auto on_connect_failure = [](void* context, const chip::ScopedNodeId&,
                                          CHIP_ERROR error) {
-        auto* callback = static_cast<InvokeCallbackContext*>(context);
-        callback->owner->finishCommand(callback->operation_id, CommandState::failed,
-                                       error == CHIP_ERROR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL);
-        callback->owner->releaseInvokeCallback(callback);
+        completeInvokeCallback(context, false,
+                               error == CHIP_ERROR_TIMEOUT ? ESP_ERR_TIMEOUT : ESP_FAIL);
       };
 
       std::uint32_t cluster_id = chip::app::Clusters::OnOff::Id;

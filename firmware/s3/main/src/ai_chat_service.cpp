@@ -237,12 +237,30 @@ struct AiChatService::Runtime final {
   char prior_ids[kMaxActions][129]{};
   char prior_tools[kMaxActions][kMaxToolNameBytes + 1]{};
   char prior_arguments[kMaxActions][kMaxToolArgumentsBytes + 1]{};
+  McpService::Effect prior_effects[kMaxActions]{};
   char result[kMaxResponseBytes + 1]{};
   char system_context[kSystemContextBytes]{};
   char endpoint[kEndpointBytes]{};
   char request_json[kRequestJsonBytes]{};
   char response_json[kResponseJsonBytes]{};
 };
+
+bool AiChatService::clientHistoryAccepted(const HistoryEntry* history, std::size_t history_count) {
+  if (history_count > kMaxHistoryEntries || (history_count != 0 && history == nullptr))
+    return false;
+  for (std::size_t index = 0; index < history_count; ++index)
+    if (history[index].role != Role::user ||
+        !valid_text(history[index].content, history[index].content_length, kMaxHistoryContentBytes))
+      return false;
+  return true;
+}
+
+AiChatService::ToolDecision AiChatService::admitToolCall(McpService::Effect effect,
+                                                         bool effectful_action_seen) {
+  if (!McpService::requiresLocalApproval(effect))
+    return ToolDecision::execute;
+  return effectful_action_seen ? ToolDecision::reject : ToolDecision::propose;
+}
 
 AiChatService::AiChatService(ai::AiStorageService& storage) : storage_(storage) {}
 
@@ -308,13 +326,12 @@ AiChatService::SubmitResult AiChatService::submit(const Request& input,
   if (!started_ || mutex_ == nullptr || queue_ == nullptr)
     return SubmitResult::not_ready;
   if (!valid_text(input.message, input.message_length, kMaxMessageBytes) ||
-      input.history_count > kMaxHistoryEntries ||
-      (input.history_count != 0 && input.history == nullptr))
+      !clientHistoryAccepted(input.history, input.history_count))
     return input.message_length > kMaxMessageBytes ? SubmitResult::too_large
                                                    : SubmitResult::invalid;
   for (std::size_t index = 0; index < input.history_count; ++index) {
     const HistoryEntry& entry = input.history[index];
-    if (role_name(entry.role) == nullptr ||
+    if (entry.role != Role::user ||
         !valid_text(entry.content, entry.content_length, kMaxHistoryContentBytes))
       return entry.content_length > kMaxHistoryContentBytes ? SubmitResult::too_large
                                                             : SubmitResult::invalid;
@@ -522,6 +539,7 @@ void AiChatService::process(std::uint64_t operation_id) {
     }
 
     bool complete = false;
+    bool effectful_action_seen = false;
     for (std::uint8_t round = 0; round <= core_domain::max_ai_tool_rounds && !complete; ++round) {
       mbedtls_platform_zeroize(runtime_->request_json, sizeof runtime_->request_json);
       mbedtls_platform_zeroize(runtime_->response_json, sizeof runtime_->response_json);
@@ -701,7 +719,6 @@ void AiChatService::process(std::uint64_t operation_id) {
       bool calls_valid =
           anthropic_results != nullptr || provider.backend == ai::ProviderBackend::OpenAiCompatible;
       const std::size_t pending_start = prior_count;
-      std::size_t mutating_count = 0;
       const int candidate_count = cJSON_GetArraySize(calls);
       for (int index = 0; calls_valid && index < candidate_count; ++index) {
         const cJSON* call = cJSON_GetArrayItem(calls, index);
@@ -730,12 +747,10 @@ void AiChatService::process(std::uint64_t operation_id) {
         }
         const std::size_t id_length = cJSON_IsString(id) ? std::strlen(id->valuestring) : 0;
         const std::size_t name_length = cJSON_IsString(name) ? std::strlen(name->valuestring) : 0;
-        bool mutating = false;
-        bool destructive = false;
+        McpService::Effect effect = McpService::Effect::read_only;
         if (id_length == 0 || id_length > 128 || name_length == 0 ||
             name_length > kMaxToolNameBytes || !cJSON_IsObject(arguments) ||
-            McpService::preflight(name->valuestring, mutating, destructive) != ESP_OK ||
-            destructive) {
+            McpService::preflight(name->valuestring, effect) != ESP_OK) {
           cJSON_Delete(arguments);
           mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
           calls_valid = false;
@@ -756,20 +771,24 @@ void AiChatService::process(std::uint64_t operation_id) {
           failure_detail = "repeated identical AI tool call blocked";
           break;
         }
-        if (mutating && ++mutating_count > 1) {
+        const ToolDecision decision = admitToolCall(effect, effectful_action_seen);
+        if (decision == ToolDecision::reject) {
           cJSON_Delete(arguments);
           mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
           calls_valid = false;
           failure_error = Error::actions_unsupported;
-          failure_detail = "only one mutating AI tool call is allowed per round";
+          failure_detail = "only one effectful AI action is allowed per chat";
           break;
         }
+        if (decision == ToolDecision::propose)
+          effectful_action_seen = true;
         std::snprintf(runtime_->prior_ids[prior_count], sizeof runtime_->prior_ids[prior_count],
                       "%s", id->valuestring);
         std::snprintf(runtime_->prior_tools[prior_count], sizeof runtime_->prior_tools[prior_count],
                       "%s", name->valuestring);
         std::snprintf(runtime_->prior_arguments[prior_count],
                       sizeof runtime_->prior_arguments[prior_count], "%s", arguments_json);
+        runtime_->prior_effects[prior_count] = effect;
         ++prior_count;
         cJSON_Delete(arguments);
         mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
@@ -778,8 +797,18 @@ void AiChatService::process(std::uint64_t operation_id) {
       for (std::size_t index = pending_start; calls_valid && index < prior_count; ++index) {
         cJSON* arguments = cJSON_Parse(runtime_->prior_arguments[index]);
         cJSON* invocation = nullptr;
-        const esp_err_t invoked =
-            McpService::invoke(*http_runtime_, runtime_->prior_tools[index], arguments, invocation);
+        esp_err_t invoked = ESP_OK;
+        if (McpService::requiresLocalApproval(runtime_->prior_effects[index])) {
+          invocation = cJSON_CreateObject();
+          if (invocation != nullptr) {
+            cJSON_AddStringToObject(invocation, "status", "proposed");
+            cJSON_AddBoolToObject(invocation, "approval_required", true);
+            cJSON_AddStringToObject(invocation, "approval_source", "independent_local_user");
+          }
+        } else {
+          invoked = McpService::invoke(*http_runtime_, runtime_->prior_tools[index], arguments,
+                                       invocation);
+        }
         cJSON_Delete(arguments);
         if (invocation == nullptr) {
           invocation = cJSON_CreateObject();

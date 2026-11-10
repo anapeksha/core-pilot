@@ -1,0 +1,9 @@
+[project]
+name = "core-pilot-tools"
+version = "0.0.0"
+description = "Host-side development and hardware-validation tools for Core Pilot"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.uv]
+package = false

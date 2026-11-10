@@ -389,6 +389,7 @@ describe("api client", () => {
           accepted: true,
           status: "prepared",
           detail: "Firmware metadata validated.",
+          upload_token: "a".repeat(64),
         }),
       ),
     );
@@ -728,6 +729,7 @@ describe("api client", () => {
       offset: 0,
       data_base64: "AA==",
       final_chunk: true,
+      upload_token: "a".repeat(64),
     });
 
     expect(calls.map((call) => call.path)).toEqual([

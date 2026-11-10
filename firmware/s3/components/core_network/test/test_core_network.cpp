@@ -39,6 +39,28 @@ TEST_CASE("station profile validates explicit lengths without reading past them"
   TEST_ASSERT_FALSE(valid_profile(p));
 }
 
+TEST_CASE("association identity rejects stale and mismatched events", "[core_network]") {
+  const std::uint8_t expected_bssid[6]{1, 2, 3, 4, 5, 6};
+  const std::uint8_t other_bssid[6]{6, 5, 4, 3, 2, 1};
+  const std::uint8_t expected_ssid[]{'h', 'o', 'm', 'e'};
+  const std::uint8_t other_ssid[]{'o', 'l', 'd'};
+  TEST_ASSERT_TRUE(association_matches("home", nullptr, false, expected_ssid, sizeof(expected_ssid),
+                                       expected_bssid));
+  TEST_ASSERT_TRUE(association_matches("home", expected_bssid, true, expected_ssid,
+                                       sizeof(expected_ssid), expected_bssid));
+  TEST_ASSERT_FALSE(association_matches("home", expected_bssid, true, expected_ssid,
+                                        sizeof(expected_ssid), other_bssid));
+  TEST_ASSERT_FALSE(
+      association_matches("home", nullptr, false, other_ssid, sizeof(other_ssid), other_bssid));
+  TEST_ASSERT_FALSE(association_matches("home", nullptr, false, expected_ssid,
+                                        sizeof(expected_ssid) - 1, expected_bssid));
+}
+
+TEST_CASE("scan timeout policy is bounded", "[core_network]") {
+  TEST_ASSERT_GREATER_THAN_UINT32(kJoinTimeoutMs, kScanTimeoutMs);
+  TEST_ASSERT_LESS_THAN_UINT32(kBootJoinBudgetMs, kScanTimeoutMs);
+}
+
 TEST_CASE("scan and setup name are bounded", "[core_network]") {
   TEST_ASSERT_EQUAL_UINT32(0, scan_limit(0));
   TEST_ASSERT_EQUAL_UINT32(32, scan_limit(32));

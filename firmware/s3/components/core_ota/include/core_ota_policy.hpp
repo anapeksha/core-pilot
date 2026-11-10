@@ -206,8 +206,17 @@ inline bool digest_equal(const std::uint8_t* left, const std::uint8_t* right, st
   return difference == 0;
 }
 
-constexpr bool session_matches(std::uint64_t requested, std::uint64_t active) {
-  return requested == active;
+inline bool session_matches(const std::uint8_t* requested, const std::uint8_t* active,
+                            std::size_t size) {
+  if (!requested || !active || size == 0)
+    return false;
+  std::uint8_t difference = 0;
+  std::uint8_t present = 0;
+  for (std::size_t i = 0; i < size; ++i) {
+    difference |= static_cast<std::uint8_t>(requested[i] ^ active[i]);
+    present |= active[i];
+  }
+  return difference == 0 && present != 0;
 }
 
 constexpr ChunkError validate_chunk(const std::uint8_t* data, std::size_t chunk_size,
@@ -231,11 +240,6 @@ constexpr std::uint8_t progress_percent(std::uint32_t written, std::uint32_t tot
   return total == 0
              ? 0
              : static_cast<std::uint8_t>((static_cast<std::uint64_t>(written) * 100U) / total);
-}
-
-constexpr std::uint64_t next_session(std::uint64_t current) {
-  const std::uint64_t next = current + 1;
-  return next == 0 ? 1 : next;
 }
 
 } // namespace core_pilot::ota_policy

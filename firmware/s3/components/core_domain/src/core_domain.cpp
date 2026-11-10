@@ -94,6 +94,29 @@ bool action_id(const char* id) {
 bool add_string(cJSON* object, const char* key, const char* value) {
   return cJSON_AddStringToObject(object, key, value) != nullptr;
 }
+bool has_duplicate_members(const cJSON* value) {
+  if (cJSON_IsObject(value)) {
+    for (const cJSON* item = value->child; item; item = item->next) {
+      for (const cJSON* other = item->next; other; other = other->next)
+        if (item->string && other->string && std::strcmp(item->string, other->string) == 0)
+          return true;
+    }
+  }
+  for (const cJSON* child = value ? value->child : nullptr; child; child = child->next)
+    if (has_duplicate_members(child))
+      return true;
+  return false;
+}
+void wipe_json(cJSON* value) {
+  if (!value)
+    return;
+  for (cJSON* child = value->child; child; child = child->next)
+    wipe_json(child);
+  if (value->string)
+    std::memset(value->string, 0, std::strlen(value->string));
+  if (cJSON_IsString(value) && value->valuestring)
+    std::memset(value->valuestring, 0, std::strlen(value->valuestring));
+}
 } // namespace
 
 ApiError parse_json(const char* bytes, size_t length, size_t max_length, cJSON*& output) {
@@ -111,11 +134,23 @@ ApiError parse_json(const char* bytes, size_t length, size_t max_length, cJSON*&
   while (end < bytes + length && ascii_space(*end))
     ++end;
   if (end != bytes + length) {
-    cJSON_Delete(output);
+    delete_json_sensitive(output);
     output = nullptr;
     return ApiError::invalid_json;
   }
+  if (has_duplicate_members(output)) {
+    delete_json_sensitive(output);
+    output = nullptr;
+    return ApiError::duplicate_json_member;
+  }
   return ApiError::ok;
+}
+void wipe_json_sensitive(cJSON* value) {
+  wipe_json(value);
+}
+void delete_json_sensitive(cJSON* value) {
+  wipe_json_sensitive(value);
+  cJSON_Delete(value);
 }
 ApiError same_origin_mutation_allowed(const char* origin, const char* host) {
   if (!origin)
@@ -472,13 +507,18 @@ OtaError parse_ota_chunk(const cJSON* object, OtaChunk& result) {
   const cJSON* offset = cJSON_GetObjectItemCaseSensitive(object, "offset");
   const cJSON* data = cJSON_GetObjectItemCaseSensitive(object, "data_base64");
   const cJSON* final = cJSON_GetObjectItemCaseSensitive(object, "final_chunk");
+  const cJSON* token = cJSON_GetObjectItemCaseSensitive(object, "upload_token");
   OtaChunk temp{};
   if (!json_u32(offset, temp.offset))
     return OtaError::offset_mismatch;
   if (!cJSON_IsString(data) || !copy(data->valuestring, temp.data_base64))
     return OtaError::chunk_too_large;
-  if (!cJSON_IsBool(final))
+  if (!cJSON_IsBool(final) || !cJSON_IsString(token) ||
+      !copy(token->valuestring, temp.upload_token) || std::strlen(temp.upload_token) != 64)
     return OtaError::not_prepared;
+  for (const char c : temp.upload_token)
+    if (c && !hex(c))
+      return OtaError::not_prepared;
   temp.final_chunk = cJSON_IsTrue(final);
   result = temp;
   return OtaError::ok;
@@ -518,6 +558,7 @@ bool serialize_ota_chunk(const OtaChunk& chunk, char* output, size_t capacity) {
   bool ok = cJSON_AddNumberToObject(object, "offset", chunk.offset) &&
             add_string(object, "data_base64", chunk.data_base64) &&
             cJSON_AddBoolToObject(object, "final_chunk", chunk.final_chunk) &&
+            add_string(object, "upload_token", chunk.upload_token) &&
             serialize_json(object, output, capacity);
   cJSON_Delete(object);
   if (!ok)

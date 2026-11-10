@@ -524,7 +524,11 @@ async function handleMutation(
     state.system.ota = "staging encrypted chunks";
     state.system.ota_phase = "prepared";
     state.system.ota_total_bytes = Number(body.size_bytes ?? 0);
-    return json(route, { accepted: true, detail: "OTA metadata accepted." });
+    return json(route, {
+      accepted: true,
+      detail: "OTA metadata accepted.",
+      upload_token: "a".repeat(64),
+    });
   }
   if (path === "/api/v1/ota/chunk") {
     state.system.ota_progress_bytes = Number(body.offset ?? 0) + 1;

@@ -9,6 +9,7 @@ import {
   mcpToolIds,
   mcpToolNames,
   mcpToolPermissionRequestSchema,
+  otaChunkRequestSchema,
   otaPrepareRequestSchema,
   roomUpsertRequestSchema,
   sceneUpsertRequestSchema,
@@ -105,6 +106,25 @@ describe("persisted name limits", () => {
       expect(otaPrepareRequestSchema.safeParse(request(version)).success).toBe(
         false,
       );
+  });
+
+  it("requires a canonical OTA upload session for every chunk", () => {
+    const request = {
+      offset: 0,
+      data_base64: "AA==",
+      final_chunk: true,
+      upload_token: "a".repeat(64),
+    };
+    expect(otaChunkRequestSchema.safeParse(request).success).toBe(true);
+    expect(
+      otaChunkRequestSchema.safeParse({ ...request, upload_token: "" }).success,
+    ).toBe(false);
+    expect(
+      otaChunkRequestSchema.safeParse({
+        ...request,
+        upload_token: "A".repeat(64),
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps the MCP name and ID allowlists in parity", () => {

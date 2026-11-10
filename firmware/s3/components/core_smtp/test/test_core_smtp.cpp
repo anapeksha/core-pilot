@@ -6,6 +6,41 @@
 
 using namespace core_pilot::smtp;
 
+TEST_CASE("SMTP DNS policy times out and rejects late callbacks", "[core_smtp]") {
+  detail::DnsResolutionPolicy policy;
+  const std::uint32_t generation = policy.begin();
+  TEST_ASSERT_TRUE(policy.timeout(generation));
+  TEST_ASSERT_EQUAL(static_cast<int>(detail::DnsResolutionPolicy::Phase::TimedOut),
+                    static_cast<int>(policy.phase()));
+  TEST_ASSERT_FALSE(policy.claim_callback(generation));
+}
+
+TEST_CASE("SMTP DNS policy cleanup invalidates completed generations", "[core_smtp]") {
+  detail::DnsResolutionPolicy policy;
+  const std::uint32_t first = policy.begin();
+  TEST_ASSERT_TRUE(policy.claim_callback(first));
+  policy.cleanup(first);
+  TEST_ASSERT_EQUAL(static_cast<int>(detail::DnsResolutionPolicy::Phase::Idle),
+                    static_cast<int>(policy.phase()));
+  TEST_ASSERT_FALSE(policy.claim_callback(first));
+
+  const std::uint32_t second = policy.begin();
+  TEST_ASSERT_NOT_EQUAL(first, second);
+  TEST_ASSERT_FALSE(policy.claim_callback(first));
+  TEST_ASSERT_TRUE(policy.claim_callback(second));
+}
+
+TEST_CASE("SMTP DNS policy cleanup after timeout remains reusable", "[core_smtp]") {
+  detail::DnsResolutionPolicy policy;
+  const std::uint32_t first = policy.begin();
+  TEST_ASSERT_TRUE(policy.timeout(first));
+  policy.cleanup(first);
+  TEST_ASSERT_EQUAL(static_cast<int>(detail::DnsResolutionPolicy::Phase::Idle),
+                    static_cast<int>(policy.phase()));
+  const std::uint32_t second = policy.begin();
+  TEST_ASSERT_TRUE(policy.claim_callback(second));
+}
+
 TEST_CASE("SMTP reply parser accepts bounded multiline replies", "[core_smtp]") {
   ReplyParser parser;
   constexpr char first[] = "250-mail.example\r\n250-STARTTLS\r\n";

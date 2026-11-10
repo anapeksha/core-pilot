@@ -215,7 +215,7 @@ esp_err_t sendJson(httpd_req_t* request, cJSON* response) {
     return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
   }
   char* body = cJSON_PrintUnformatted(response);
-  cJSON_Delete(response);
+  core_domain::delete_json_sensitive(response);
   if (body == nullptr) {
     return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR, "Out of memory");
   }
@@ -223,6 +223,7 @@ esp_err_t sendJson(httpd_req_t* request, cJSON* response) {
   const esp_err_t result = header_result == ESP_OK
                                ? httpd_resp_send(request, body, HTTPD_RESP_USE_STRLEN)
                                : header_result;
+  mbedtls_platform_zeroize(body, std::strlen(body));
   cJSON_free(body);
   return result;
 }
@@ -493,13 +494,16 @@ const char* otaState(CoreOta::State state) {
 }
 
 esp_err_t sendOtaMutation(httpd_req_t* request, bool accepted, const char* status,
-                          const char* detail, const char* http_status = nullptr) {
+                          const char* detail, const char* http_status = nullptr,
+                          const char* upload_token = nullptr) {
   if (http_status != nullptr)
     httpd_resp_set_status(request, http_status);
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", accepted);
   cJSON_AddStringToObject(response, "status", status);
   cJSON_AddStringToObject(response, "detail", detail);
+  if (upload_token != nullptr)
+    cJSON_AddStringToObject(response, "upload_token", upload_token);
   return sendJson(request, response);
 }
 
@@ -523,29 +527,33 @@ esp_err_t otaMutationHandler(httpd_req_t* request) {
   CoreOta::Result result{};
   bool final_chunk = false;
   bool restart_after_response = false;
+  char upload_token[65]{};
   if (prepare) {
     core_domain::OtaPrepare parsed{};
     const auto parse_result = core_domain::parse_ota_prepare(document, parsed);
-    cJSON_Delete(document);
+    core_domain::delete_json_sensitive(document);
     if (parse_result != core_domain::OtaError::ok)
       return sendOtaMutation(request, false, core_domain::error_code::OTA_METADATA_INVALID,
                              "OTA metadata failed strict validation.", "400 Bad Request");
-    result = runtime->ota.prepare(parsed);
+    result = runtime->ota.prepare(parsed, upload_token);
+    mbedtls_platform_zeroize(&parsed, sizeof parsed);
   } else {
     core_domain::OtaChunk parsed{};
     const auto parse_result = core_domain::parse_ota_chunk(document, parsed);
-    cJSON_Delete(document);
+    core_domain::delete_json_sensitive(document);
     if (parse_result != core_domain::OtaError::ok)
       return sendOtaMutation(request, false, core_domain::error_code::OTA_CHUNK_REJECTED,
                              "OTA chunk failed strict validation.", "400 Bad Request");
     final_chunk = parsed.final_chunk;
     result = runtime->ota.write(parsed);
+    mbedtls_platform_zeroize(&parsed, sizeof parsed);
     const auto ota_status = runtime->ota.status();
     restart_after_response =
         result && ota_status.state == CoreOta::State::activated && ota_status.restart_after_update;
   }
 
   if (!result) {
+    mbedtls_platform_zeroize(upload_token, sizeof upload_token);
     const bool busy = result.error == CoreOta::Error::invalid_state;
     return sendOtaMutation(request, false,
                            prepare ? core_domain::error_code::OTA_METADATA_INVALID
@@ -564,7 +572,9 @@ esp_err_t otaMutationHandler(httpd_req_t* request) {
       prepare                  ? "OTA metadata accepted for integrity-checked local upload."
       : restart_after_response ? "OTA image integrity verified and activated; restart scheduled."
                                : "OTA chunk staged; final activation requires SHA-256 integrity "
-                                 "verification.");
+                                 "verification.",
+      nullptr, prepare ? upload_token : nullptr);
+  mbedtls_platform_zeroize(upload_token, sizeof upload_token);
   if (response_result == ESP_OK && restart_after_response && !runtime->ota.deferRestart())
     ESP_LOGE(kTag, "failed to queue deferred OTA restart");
   return response_result;
@@ -2888,6 +2898,8 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
   config.open_fn = trackHttpConnectionOpen;
   config.close_fn = trackHttpConnectionClose;
   config.stack_size = 12288;
+  config.recv_wait_timeout = 5;
+  config.send_wait_timeout = 5;
 
   httpd_handle_t server = nullptr;
   if (httpd_start(&server, &config) != ESP_OK) {

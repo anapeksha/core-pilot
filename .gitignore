@@ -52,7 +52,7 @@ web/test-results/
 web/playwright-report/
 web/dist/
 
-# Python release-tool environment
+# Python tool environment
 /tools/.venv/
 __pycache__
 

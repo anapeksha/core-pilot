@@ -23,6 +23,22 @@ struct ThreadDataset final {
   void clear();
 };
 
+namespace detail {
+
+enum class ThreadTransactionOutcome : std::uint8_t { complete, failed, roll_back, rollback_failed };
+
+[[nodiscard]] constexpr ThreadTransactionOutcome
+threadTransactionOutcome(bool live_applied, bool persisted, bool rolled_back) {
+  if (!live_applied)
+    return rolled_back ? ThreadTransactionOutcome::failed
+                       : ThreadTransactionOutcome::rollback_failed;
+  if (persisted)
+    return ThreadTransactionOutcome::complete;
+  return rolled_back ? ThreadTransactionOutcome::failed : ThreadTransactionOutcome::rollback_failed;
+}
+
+} // namespace detail
+
 bool decodeThreadDatasetHex(const char* hex, ThreadDataset& dataset);
 bool validateThreadDataset(const std::uint8_t* tlvs, std::size_t length);
 core_security::Status loadThreadDataset(core_security::StorageService& storage,
@@ -33,7 +49,16 @@ core_security::Status saveThreadDataset(core_security::StorageService& storage,
 
 class ThreadDatasetService final {
 public:
-  enum class State : std::uint8_t { idle, queued, persisting, submitting, complete, failed };
+  enum class State : std::uint8_t {
+    idle,
+    queued,
+    persisting,
+    submitting,
+    rolling_back,
+    rollback_failed,
+    complete,
+    failed
+  };
 
   struct Status final {
     State state{State::idle};
@@ -69,7 +94,10 @@ private:
   Status status_{};
   std::uint32_t next_operation_id_{1};
   std::uint32_t matter_operation_id_{};
+  esp_err_t transaction_error_{ESP_OK};
   Request active_request_{};
+  ThreadDataset previous_dataset_{};
+  bool previous_dataset_available_{false};
 };
 
 const char* threadDatasetOperationState(ThreadDatasetService::State state);

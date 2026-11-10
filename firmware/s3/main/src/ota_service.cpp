@@ -1,5 +1,6 @@
 #include "ota_service.hpp"
 
+#include "core_ota_policy.hpp"
 #include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "mbedtls/base64.h"
@@ -60,12 +61,24 @@ esp_err_t OtaService::start() {
   return ESP_OK;
 }
 
-CoreOta::Result OtaService::prepare(const core_domain::OtaPrepare& request) {
+CoreOta::Result OtaService::prepare(const core_domain::OtaPrepare& request,
+                                    char (&upload_token)[65]) {
+  upload_token[0] = '\0';
   SemaphoreLock lock(slot_mutex_);
   if (!lock.held())
     return unavailableResult();
   slot_->prepare = request;
-  return submit(Operation::prepare);
+  const CoreOta::Result result = submit(Operation::prepare);
+  if (result) {
+    static constexpr char hex[] = "0123456789abcdef";
+    for (std::size_t i = 0; i < sizeof slot_->session.bytes; ++i) {
+      upload_token[i * 2] = hex[slot_->session.bytes[i] >> 4];
+      upload_token[i * 2 + 1] = hex[slot_->session.bytes[i] & 0x0f];
+    }
+    upload_token[64] = '\0';
+  }
+  mbedtls_platform_zeroize(&slot_->session, sizeof slot_->session);
+  return result;
 }
 
 CoreOta::Result OtaService::write(const core_domain::OtaChunk& request) {
@@ -119,13 +132,21 @@ void OtaService::run() {
       request.size_bytes = slot_->prepare.size_bytes;
       std::memcpy(request.sha256_hex, slot_->prepare.sha256_hex, sizeof request.sha256_hex);
       request.restart_after_update = slot_->prepare.restart_after_update;
-      slot_->result = ota_.prepare(request);
+      slot_->result = ota_.prepare(request, slot_->session);
       mbedtls_platform_zeroize(&request, sizeof request);
       xSemaphoreGive(completion_);
       continue;
     }
 
     std::uint8_t decoded[CoreOta::kMaxChunkBytes]{};
+    CoreOta::SessionId session{};
+    bool valid_token = std::strlen(slot_->chunk.upload_token) == 64;
+    for (std::size_t i = 0; valid_token && i < sizeof session.bytes; ++i) {
+      const auto high = ota_policy::hex_value(slot_->chunk.upload_token[i * 2]);
+      const auto low = ota_policy::hex_value(slot_->chunk.upload_token[i * 2 + 1]);
+      valid_token = high != 0xff && low != 0xff;
+      session.bytes[i] = static_cast<std::uint8_t>((high << 4) | low);
+    }
     std::size_t decoded_size = 0;
     const auto status = ota_.status();
     const auto validation = core_domain::validate_ota_chunk(slot_->chunk, status.written_bytes,
@@ -137,7 +158,8 @@ void OtaService::run() {
                                 reinterpret_cast<const unsigned char*>(slot_->chunk.data_base64),
                                 std::strlen(slot_->chunk.data_base64));
     }
-    if (validation != core_domain::OtaError::ok || decode_result != 0 || decoded_size == 0) {
+    if (!valid_token || validation != core_domain::OtaError::ok || decode_result != 0 ||
+        decoded_size == 0) {
       slot_->result = {
           validation == core_domain::OtaError::chunk_too_large   ? CoreOta::Error::chunk_too_large
           : validation == core_domain::OtaError::offset_mismatch ? CoreOta::Error::offset_mismatch
@@ -145,9 +167,10 @@ void OtaService::run() {
                                                                  : CoreOta::Error::invalid_argument,
           ESP_ERR_INVALID_ARG};
     } else {
-      slot_->result =
-          ota_.write({slot_->chunk.offset, decoded, decoded_size, slot_->chunk.final_chunk});
+      slot_->result = ota_.write(
+          {slot_->chunk.offset, decoded, decoded_size, slot_->chunk.final_chunk}, session);
     }
+    mbedtls_platform_zeroize(&session, sizeof session);
     mbedtls_platform_zeroize(decoded, sizeof decoded);
     xSemaphoreGive(completion_);
   }

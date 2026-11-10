@@ -10,6 +10,7 @@ constexpr std::size_t kMaxPasswordBytes = 63;
 constexpr std::size_t kMaxScanResults = 32;
 constexpr std::size_t kMaxSavedNetworks = 8;
 constexpr unsigned kJoinTimeoutMs = 8000;
+constexpr unsigned kScanTimeoutMs = 10000;
 constexpr unsigned kBootJoinBudgetMs = 24000;
 constexpr char kHostname[] = "corepilot";
 constexpr char kSetupPrefix[] = "CorePilot-Setup-";
@@ -25,6 +26,9 @@ struct Profile {
 // empty (open network) or a WPA passphrase; no profile is retained by the
 // policy.
 bool valid_profile(const Profile& profile);
+bool association_matches(const char* expected_ssid, const std::uint8_t* expected_bssid,
+                         bool require_bssid, const std::uint8_t* actual_ssid,
+                         std::size_t actual_ssid_length, const std::uint8_t actual_bssid[6]);
 std::size_t scan_limit(std::size_t requested);
 // out must have room for sizeof(kSetupPrefix) + 6 bytes (including NUL).
 bool setup_ssid(const std::uint8_t mac[6], char* out, std::size_t capacity);

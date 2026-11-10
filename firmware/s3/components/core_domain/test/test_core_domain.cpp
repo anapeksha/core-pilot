@@ -25,6 +25,14 @@ TEST_CASE("API JSON bounds, trailing data and origin are rejected", "[core_domai
   TEST_ASSERT_EQUAL(static_cast<int>(ApiError::ok),
                     static_cast<int>(parse_json("{} \n", 4, max_json_body, json)));
   cJSON_Delete(json);
+  TEST_ASSERT_EQUAL(static_cast<int>(ApiError::duplicate_json_member),
+                    static_cast<int>(parse_json("{\"a\":1,\"a\":2}", 13, max_json_body, json)));
+  TEST_ASSERT_NULL(json);
+  constexpr char nested_duplicate[] = "{\"outer\":{\"secret\":\"a\",\"secret\":\"b\"}}";
+  TEST_ASSERT_EQUAL(static_cast<int>(ApiError::duplicate_json_member),
+                    static_cast<int>(parse_json(nested_duplicate, sizeof nested_duplicate - 1,
+                                                max_json_body, json)));
+  TEST_ASSERT_NULL(json);
   TEST_ASSERT_EQUAL(static_cast<int>(ApiError::ok),
                     static_cast<int>(same_origin_mutation_allowed(nullptr, "corepilot.local")));
   TEST_ASSERT_EQUAL(
@@ -33,6 +41,21 @@ TEST_CASE("API JSON bounds, trailing data and origin are rejected", "[core_domai
   TEST_ASSERT_EQUAL(
       static_cast<int>(ApiError::cross_origin_mutation),
       static_cast<int>(same_origin_mutation_allowed("https://corepilot.local", "corepilot.local")));
+}
+
+TEST_CASE("sensitive JSON cleanup recursively wipes names and values", "[core_domain]") {
+  cJSON* json = cJSON_Parse("{\"token\":\"secret\",\"nested\":{\"code\":\"1234\"}}");
+  TEST_ASSERT_NOT_NULL(json);
+  cJSON* token = cJSON_GetObjectItemCaseSensitive(json, "token");
+  cJSON* nested = cJSON_GetObjectItemCaseSensitive(json, "nested");
+  cJSON* code = cJSON_GetObjectItemCaseSensitive(nested, "code");
+  wipe_json_sensitive(json);
+  TEST_ASSERT_EQUAL_CHAR('\0', token->string[0]);
+  TEST_ASSERT_EQUAL_CHAR('\0', token->valuestring[0]);
+  TEST_ASSERT_EQUAL_CHAR('\0', nested->string[0]);
+  TEST_ASSERT_EQUAL_CHAR('\0', code->string[0]);
+  TEST_ASSERT_EQUAL_CHAR('\0', code->valuestring[0]);
+  cJSON_Delete(json);
 }
 
 TEST_CASE("common API DTOs preserve wire keys and numeric bounds", "[core_domain]") {
@@ -216,7 +239,9 @@ TEST_CASE("OTA metadata and chunk offsets, padding and size are bounded", "[core
   TEST_ASSERT_FALSE(serialize_ota_prepare(prepare, encoded, sizeof encoded));
   TEST_ASSERT_EQUAL(static_cast<int>(OtaError::image_too_large),
                     static_cast<int>(validate_ota_prepare(prepare)));
-  json = cJSON_Parse("{\"offset\":0,\"data_base64\":\"AQID\",\"final_chunk\":true}");
+  json = cJSON_Parse(
+      "{\"offset\":0,\"data_base64\":\"AQID\",\"final_chunk\":true,"
+      "\"upload_token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}");
   OtaChunk chunk{};
   size_t decoded = 0;
   TEST_ASSERT_EQUAL(static_cast<int>(OtaError::ok), static_cast<int>(parse_ota_chunk(json, chunk)));
@@ -225,6 +250,7 @@ TEST_CASE("OTA metadata and chunk offsets, padding and size are bounded", "[core
   TEST_ASSERT_EQUAL_UINT32(3, decoded);
   TEST_ASSERT_TRUE(serialize_ota_chunk(chunk, encoded, sizeof encoded));
   TEST_ASSERT_NOT_NULL(std::strstr(encoded, "\"data_base64\":\"AQID\""));
+  TEST_ASSERT_NOT_NULL(std::strstr(encoded, "\"upload_token\":"));
   TEST_ASSERT_EQUAL(static_cast<int>(OtaError::offset_mismatch),
                     static_cast<int>(validate_ota_chunk(chunk, 1, 3, decoded)));
   cJSON_Delete(json);

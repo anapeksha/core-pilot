@@ -16,6 +16,19 @@ bool valid_profile(const Profile& profile) {
           std::memchr(profile.password, 0, profile.password_length) == nullptr);
 }
 
+bool association_matches(const char* expected_ssid, const std::uint8_t* expected_bssid,
+                         bool require_bssid, const std::uint8_t* actual_ssid,
+                         std::size_t actual_ssid_length, const std::uint8_t actual_bssid[6]) {
+  if (expected_ssid == nullptr || actual_ssid == nullptr || actual_bssid == nullptr ||
+      (require_bssid && expected_bssid == nullptr))
+    return false;
+  const std::size_t expected_length = strnlen(expected_ssid, kMaxSsidBytes + 1);
+  return expected_length != 0 && expected_length <= kMaxSsidBytes &&
+         expected_length == actual_ssid_length &&
+         std::memcmp(expected_ssid, actual_ssid, expected_length) == 0 &&
+         (!require_bssid || std::memcmp(expected_bssid, actual_bssid, 6) == 0);
+}
+
 std::size_t scan_limit(std::size_t requested) {
   return requested < kMaxScanResults ? requested : kMaxScanResults;
 }

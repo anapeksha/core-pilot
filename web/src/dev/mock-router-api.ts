@@ -358,11 +358,13 @@ export function mockRouterApi(): Plugin {
             written: 0,
             restart: body.restart_after_update === true,
           });
-          json(
-            response,
-            200,
-            mutation("prepared", "Mock OTA metadata accepted in dev memory."),
-          );
+          json(response, 200, {
+            ...mutation(
+              "prepared",
+              "Mock OTA metadata accepted in dev memory.",
+            ),
+            upload_token: "a".repeat(64),
+          });
           return;
         }
 

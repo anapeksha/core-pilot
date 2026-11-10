@@ -1,7 +1,6 @@
 #include "core_ota_policy.hpp"
 
 #include <cstdint>
-#include <limits>
 #include <unity.h>
 #include <unity_test_runner.h>
 
@@ -62,10 +61,19 @@ TEST_CASE("OTA chunk validation enforces offset bounds and finality", "[core_ota
                         static_cast<int>(validate_chunk(data, 4, 4, 0, 0, 4, false)));
 }
 
+TEST_CASE("OTA concurrent foreign replayed and stale sessions are rejected", "[core_ota]") {
+  const std::uint8_t active[]{1, 2, 3, 4};
+  const std::uint8_t concurrent_foreign[]{1, 2, 3, 5};
+  const std::uint8_t stale_replayed[]{9, 8, 7, 6};
+  const std::uint8_t missing[]{0, 0, 0, 0};
+  TEST_ASSERT_TRUE(session_matches(active, active, sizeof active));
+  TEST_ASSERT_FALSE(session_matches(concurrent_foreign, active, sizeof active));
+  TEST_ASSERT_FALSE(session_matches(stale_replayed, active, sizeof active));
+  TEST_ASSERT_FALSE(session_matches(missing, active, sizeof active));
+  TEST_ASSERT_FALSE(session_matches(missing, missing, sizeof missing));
+}
+
 TEST_CASE("OTA sessions progress and digest comparison cover boundaries", "[core_ota]") {
-  TEST_ASSERT_TRUE(session_matches(7, 7));
-  TEST_ASSERT_FALSE(session_matches(0, 7));
-  TEST_ASSERT_EQUAL_UINT64(1, next_session(std::numeric_limits<std::uint64_t>::max()));
   TEST_ASSERT_EQUAL_UINT8(0, progress_percent(1, 0));
   TEST_ASSERT_EQUAL_UINT8(33, progress_percent(1, 3));
   TEST_ASSERT_EQUAL_UINT8(100, progress_percent(3, 3));
