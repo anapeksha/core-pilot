@@ -123,7 +123,30 @@ struct TransportOptions final {
   std::uint32_t connect_timeout_ms{10000};
   std::uint32_t io_timeout_ms{10000};
   const char* client_name{"core-pilot.local"};
+  std::uint32_t resolve_timeout_ms{5000};
 };
+
+namespace detail {
+
+// Pure lifecycle policy for the fixed asynchronous DNS context. A callback must
+// claim its generation before publishing an address; timed-out and cleaned-up
+// generations reject all late callbacks.
+class DnsResolutionPolicy final {
+public:
+  enum class Phase : std::uint8_t { Idle, Active, CallbackClaimed, TimedOut };
+
+  std::uint32_t begin();
+  bool claim_callback(std::uint32_t generation);
+  bool timeout(std::uint32_t generation);
+  void cleanup(std::uint32_t generation);
+  Phase phase() const;
+
+private:
+  std::uint32_t generation_{};
+  Phase phase_{Phase::Idle};
+};
+
+} // namespace detail
 
 // Blocking and bounded. Call only from a future core-0 SMTP owner task, never
 // directly from an HTTP callback. No input, credential, or message data is logged.

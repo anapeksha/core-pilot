@@ -5,11 +5,12 @@
 #include "esp_tls.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "lwip/dns.h"
 #include "lwip/inet.h"
-#include "lwip/netdb.h"
 #include "lwip/sockets.h"
 #include "mbedtls/platform_util.h"
 
+#include <bit>
 #include <cerrno>
 #include <cstdio>
 #include <cstring>
@@ -201,6 +202,104 @@ core_security::RecordSpec record_spec(std::uint64_t generation) {
           generation};
 }
 
+struct DnsContext final {
+  DnsContext()
+      : mutex(xSemaphoreCreateMutexStatic(&mutex_buffer)),
+        completed(xSemaphoreCreateBinaryStatic(&completed_buffer)) {}
+
+  StaticSemaphore_t mutex_buffer{};
+  StaticSemaphore_t completed_buffer{};
+  SemaphoreHandle_t mutex{};
+  SemaphoreHandle_t completed{};
+  portMUX_TYPE state_lock = portMUX_INITIALIZER_UNLOCKED;
+  detail::DnsResolutionPolicy policy{};
+  ip_addr_t address{};
+  bool resolved{};
+};
+
+DnsContext& dns_context() {
+  static DnsContext context;
+  return context;
+}
+
+void dns_callback(const char*, const ip_addr_t* address, void* argument) {
+  auto& context = dns_context();
+  const auto generation = static_cast<std::uint32_t>(std::bit_cast<std::uintptr_t>(argument));
+  taskENTER_CRITICAL(&context.state_lock);
+  const bool accepted = context.policy.claim_callback(generation);
+  if (accepted) {
+    context.resolved = address != nullptr;
+    if (address)
+      context.address = *address;
+  }
+  taskEXIT_CRITICAL(&context.state_lock);
+  if (accepted)
+    xSemaphoreGive(context.completed);
+}
+
+Status resolve_host(const char* host, std::uint32_t timeout_ms, ip_addr_t& output) {
+  auto& context = dns_context();
+  if (!context.mutex || !context.completed ||
+      xSemaphoreTake(context.mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE)
+    return Status::Timeout;
+
+  struct Unlock final {
+    SemaphoreHandle_t mutex;
+    ~Unlock() {
+      xSemaphoreGive(mutex);
+    }
+  } unlock{context.mutex};
+
+  while (xSemaphoreTake(context.completed, 0) == pdTRUE) {
+  }
+  taskENTER_CRITICAL(&context.state_lock);
+  const std::uint32_t generation = context.policy.begin();
+  context.resolved = false;
+  taskEXIT_CRITICAL(&context.state_lock);
+
+  ip_addr_t immediate{};
+  const void* generation_token = std::bit_cast<void*>(static_cast<std::uintptr_t>(generation));
+  const err_t started =
+      dns_gethostbyname_addrtype(host, &immediate, dns_callback,
+                                 const_cast<void*>(generation_token), LWIP_DNS_ADDRTYPE_DEFAULT);
+  if (started == ERR_OK)
+    dns_callback(host, &immediate, const_cast<void*>(generation_token));
+  else if (started != ERR_INPROGRESS) {
+    taskENTER_CRITICAL(&context.state_lock);
+    context.policy.cleanup(generation);
+    taskEXIT_CRITICAL(&context.state_lock);
+    return Status::ResolveFailed;
+  }
+
+  TickType_t wait_ticks = pdMS_TO_TICKS(timeout_ms);
+  if (wait_ticks == 0)
+    wait_ticks = 1;
+  if (xSemaphoreTake(context.completed, wait_ticks) != pdTRUE) {
+    taskENTER_CRITICAL(&context.state_lock);
+    const bool timed_out = context.policy.timeout(generation);
+    if (timed_out)
+      context.policy.cleanup(generation);
+    taskEXIT_CRITICAL(&context.state_lock);
+    if (timed_out)
+      return Status::Timeout;
+    // The callback won the deadline race and finished publishing under the same
+    // lock. Treat the operation as timed out; its pending signal is drained by
+    // the next serialized request.
+    taskENTER_CRITICAL(&context.state_lock);
+    context.policy.cleanup(generation);
+    taskEXIT_CRITICAL(&context.state_lock);
+    return Status::Timeout;
+  }
+
+  taskENTER_CRITICAL(&context.state_lock);
+  const bool resolved = context.resolved;
+  if (resolved)
+    output = context.address;
+  context.policy.cleanup(generation);
+  taskEXIT_CRITICAL(&context.state_lock);
+  return resolved ? Status::Ok : Status::ResolveFailed;
+}
+
 struct Connection final {
   ~Connection() {
     if (tls)
@@ -222,44 +321,51 @@ bool set_socket_timeout(int fd, std::uint32_t milliseconds) {
 
 Status connect_plain(const Config& config, const TransportOptions& options,
                      Connection& connection) {
-  char port[6]{};
-  std::snprintf(port, sizeof(port), "%u", static_cast<unsigned>(config.port));
-  addrinfo hints{};
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_family = AF_UNSPEC;
-  addrinfo* addresses{};
-  if (getaddrinfo(config.host, port, &hints, &addresses) != 0)
-    return Status::ResolveFailed;
-  bool policy_denied = false;
-  for (addrinfo* address = addresses; address; address = address->ai_next) {
-    const void* raw_address = nullptr;
-    std::size_t raw_size = 0;
-    if (address->ai_family == AF_INET) {
-      raw_address = &reinterpret_cast<const sockaddr_in*>(address->ai_addr)->sin_addr;
-      raw_size = sizeof(in_addr);
-    } else if (address->ai_family == AF_INET6) {
-      raw_address = &reinterpret_cast<const sockaddr_in6*>(address->ai_addr)->sin6_addr;
-      raw_size = sizeof(in6_addr);
-    }
-    if (raw_address == nullptr ||
-        !resolved_target_allowed(config.security, address->ai_family,
-                                 static_cast<const std::uint8_t*>(raw_address), raw_size)) {
-      policy_denied = true;
-      continue;
-    }
-    const int fd = socket(address->ai_family, address->ai_socktype, address->ai_protocol);
-    if (fd < 0)
-      continue;
-    if (set_socket_timeout(fd, options.connect_timeout_ms) &&
-        connect(fd, address->ai_addr, address->ai_addrlen) == 0) {
-      connection.fd = fd;
-      break;
-    }
-    close(fd);
+  ip_addr_t resolved{};
+  Status result = resolve_host(config.host, options.resolve_timeout_ms, resolved);
+  if (result != Status::Ok)
+    return result;
+
+  sockaddr_storage storage{};
+  sockaddr* address = reinterpret_cast<sockaddr*>(&storage);
+  socklen_t address_size{};
+  int family{};
+  const std::uint8_t* raw_address{};
+  std::size_t raw_size{};
+#if LWIP_IPV6
+  if (IP_IS_V6(&resolved)) {
+    auto* target = reinterpret_cast<sockaddr_in6*>(&storage);
+    target->sin6_family = AF_INET6;
+    target->sin6_port = htons(config.port);
+    std::memcpy(&target->sin6_addr, ip_2_ip6(&resolved), sizeof(target->sin6_addr));
+    family = AF_INET6;
+    address_size = sizeof(*target);
+    raw_address = reinterpret_cast<const std::uint8_t*>(&target->sin6_addr);
+    raw_size = sizeof(target->sin6_addr);
+  } else
+#endif
+  {
+    auto* target = reinterpret_cast<sockaddr_in*>(&storage);
+    target->sin_family = AF_INET;
+    target->sin_port = htons(config.port);
+    target->sin_addr.s_addr = ip4_addr_get_u32(ip_2_ip4(&resolved));
+    family = AF_INET;
+    address_size = sizeof(*target);
+    raw_address = reinterpret_cast<const std::uint8_t*>(&target->sin_addr);
+    raw_size = sizeof(target->sin_addr);
   }
-  freeaddrinfo(addresses);
-  if (connection.fd < 0)
-    return policy_denied ? Status::PolicyDenied : Status::ConnectFailed;
+  if (!resolved_target_allowed(config.security, family, raw_address, raw_size))
+    return Status::PolicyDenied;
+
+  const int fd = socket(family, SOCK_STREAM, IPPROTO_TCP);
+  if (fd < 0)
+    return Status::ConnectFailed;
+  if (!set_socket_timeout(fd, options.connect_timeout_ms) ||
+      connect(fd, address, address_size) != 0) {
+    close(fd);
+    return Status::ConnectFailed;
+  }
+  connection.fd = fd;
   if (!set_socket_timeout(connection.fd, options.io_timeout_ms))
     return Status::IoError;
   return Status::Ok;
@@ -437,6 +543,37 @@ Status send_envelope(Connection& connection, const Config& config, const Message
 }
 
 } // namespace
+
+std::uint32_t detail::DnsResolutionPolicy::begin() {
+  ++generation_;
+  if (generation_ == 0)
+    ++generation_;
+  phase_ = Phase::Active;
+  return generation_;
+}
+
+bool detail::DnsResolutionPolicy::claim_callback(std::uint32_t generation) {
+  if (generation != generation_ || phase_ != Phase::Active)
+    return false;
+  phase_ = Phase::CallbackClaimed;
+  return true;
+}
+
+bool detail::DnsResolutionPolicy::timeout(std::uint32_t generation) {
+  if (generation != generation_ || phase_ != Phase::Active)
+    return false;
+  phase_ = Phase::TimedOut;
+  return true;
+}
+
+void detail::DnsResolutionPolicy::cleanup(std::uint32_t generation) {
+  if (generation == generation_)
+    phase_ = Phase::Idle;
+}
+
+detail::DnsResolutionPolicy::Phase detail::DnsResolutionPolicy::phase() const {
+  return phase_;
+}
 
 struct ConfigRepository::State final {
   StaticSemaphore_t mutex_buffer{};
@@ -748,7 +885,8 @@ Status send(const Config& config, const Message& message, const TransportOptions
       !valid_text(message.subject, kMaxSubjectBytes, true) || !message.body ||
       message.body_length == 0 || message.body_length > kMaxBodyBytes ||
       message.recipient_count > kMaxRecipients || !valid_text(options.client_name, 253, true) ||
-      options.connect_timeout_ms == 0 || options.io_timeout_ms == 0)
+      options.resolve_timeout_ms == 0 || options.connect_timeout_ms == 0 ||
+      options.io_timeout_ms == 0)
     return Status::InvalidArgument;
   for (std::size_t i = 0; i < message.recipient_count; ++i)
     if (!valid_email_address(message.recipients[i]))
