@@ -60,6 +60,7 @@ public:
   // Starts one nonblocking station scan. WIFI_EVENT_SCAN_DONE publishes a
   // bounded immutable snapshot; no HTTP callback waits on the radio.
   esp_err_t requestScan();
+  esp_err_t waitForScan(std::uint32_t generation, TickType_t timeout);
   ScanSnapshot scanSnapshot() const;
 
   // Core-0 network owner only. Replaces the in-RAM station profile and waits
@@ -70,6 +71,8 @@ public:
   esp_err_t restoreSetupAp();
 
 private:
+  enum class JoinPhase : std::uint8_t { idle, joining, connected };
+
   static void on_event(void* arg, esp_event_base_t base, int32_t id, void* data);
   esp_err_t start_station(const network_policy::Profile& profile);
   esp_err_t start_radio_for_boot_scan();
@@ -96,6 +99,9 @@ private:
   bool mdns_started_ = false;
   bool reconnect_enabled_ = false;
   bool transition_in_progress_ = false;
+  JoinPhase join_phase_ = JoinPhase::idle;
+  std::uint32_t join_generation_{};
+  std::uint32_t completed_join_generation_{};
   char setup_password_[17]{};
 };
 

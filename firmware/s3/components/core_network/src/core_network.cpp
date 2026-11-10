@@ -13,6 +13,7 @@ namespace {
 constexpr char kTag[] = "core_network";
 constexpr EventBits_t kGotIpv4 = BIT0;
 constexpr EventBits_t kDisconnected = BIT1;
+constexpr EventBits_t kScanDone = BIT2;
 constexpr std::int8_t kMaxTxPowerQuarterDbm = 40; // 10 dBm
 
 void erase(void* ptr, std::size_t len) {
@@ -65,24 +66,31 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
     self.scan_.last_error = result;
     self.scan_.count = result == ESP_OK ? count : 0;
     self.scan_.state = result == ESP_OK ? ScanState::complete : ScanState::failed;
-    ++self.scan_.generation;
-    if (self.scan_.generation == 0)
-      self.scan_.generation = 1;
     if (result == ESP_OK)
       std::memcpy(self.scan_.records, records, count * sizeof(records[0]));
     portEXIT_CRITICAL(&self.lock_);
+    xEventGroupSetBits(self.events_, kScanDone);
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
     const auto* event = static_cast<wifi_event_sta_disconnected_t*>(data);
     portENTER_CRITICAL(&self.lock_);
-    self.state_.station_connected = false;
-    self.state_.has_ipv4 = false;
-    self.state_.has_ipv6 = false;
-    self.state_.has_bssid = false;
-    std::memset(self.state_.station_bssid, 0, sizeof(self.state_.station_bssid));
-    const bool reconnect = self.state_.mode == Mode::station && self.reconnect_enabled_ &&
+    const std::size_t event_ssid_length =
+        strnlen(reinterpret_cast<const char*>(event->ssid), sizeof(event->ssid));
+    const bool expected = network_policy::association_matches(
+        self.state_.station_ssid, self.state_.station_bssid, self.state_.has_bssid, event->ssid,
+        event_ssid_length, event->bssid);
+    if (expected) {
+      self.state_.station_connected = false;
+      self.state_.has_ipv4 = false;
+      self.state_.has_ipv6 = false;
+      self.state_.has_bssid = false;
+      std::memset(self.state_.station_bssid, 0, sizeof(self.state_.station_bssid));
+    }
+    const bool reconnect = expected && self.join_phase_ == JoinPhase::connected &&
+                           self.state_.mode == Mode::station && self.reconnect_enabled_ &&
                            !self.transition_in_progress_;
     portEXIT_CRITICAL(&self.lock_);
-    xEventGroupSetBits(self.events_, kDisconnected);
+    if (expected)
+      xEventGroupSetBits(self.events_, kDisconnected);
     if (reconnect) {
       const esp_err_t result = esp_wifi_connect();
       ESP_LOGW(kTag, "Wi-Fi disconnected (reason %u), reconnect: %s",
@@ -93,21 +101,23 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
     wifi_ap_record_t access_point{};
     const bool has_access_point = esp_wifi_sta_get_ap_info(&access_point) == ESP_OK;
     portENTER_CRITICAL(&self.lock_);
-    const std::size_t expected_length =
-        strnlen(self.state_.station_ssid, sizeof(self.state_.station_ssid));
     const std::size_t actual_length =
         has_access_point
             ? strnlen(reinterpret_cast<const char*>(access_point.ssid), sizeof(access_point.ssid))
             : 0;
     const bool expected_access_point =
-        has_access_point && expected_length == actual_length &&
-        std::memcmp(self.state_.station_ssid, access_point.ssid, expected_length) == 0;
+        self.join_phase_ == JoinPhase::joining && has_access_point &&
+        network_policy::association_matches(self.state_.station_ssid, self.state_.station_bssid,
+                                            self.state_.has_bssid, access_point.ssid, actual_length,
+                                            access_point.bssid);
     if (expected_access_point) {
       self.state_.station_connected = true;
       self.state_.has_ipv4 = true;
       self.state_.ipv4 = event->ip_info.ip;
       self.state_.has_bssid = true;
       std::memcpy(self.state_.station_bssid, access_point.bssid, sizeof(self.state_.station_bssid));
+      self.completed_join_generation_ = self.join_generation_;
+      self.join_phase_ = JoinPhase::connected;
     }
     portEXIT_CRITICAL(&self.lock_);
     if (expected_access_point)
@@ -118,8 +128,10 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
     const auto* event = static_cast<ip_event_got_ip6_t*>(data);
     if (event->esp_netif == self.sta_) {
       portENTER_CRITICAL(&self.lock_);
-      self.state_.has_ipv6 = true;
-      self.state_.ipv6 = event->ip6_info.ip;
+      if (self.join_phase_ == JoinPhase::connected && self.state_.station_connected) {
+        self.state_.has_ipv6 = true;
+        self.state_.ipv6 = event->ip6_info.ip;
+      }
       portEXIT_CRITICAL(&self.lock_);
     }
   }
@@ -186,21 +198,31 @@ esp_err_t CoreNetwork::start_station(const network_policy::Profile& profile) {
   portENTER_CRITICAL(&lock_);
   transition_in_progress_ = true;
   reconnect_enabled_ = false;
+  join_phase_ = JoinPhase::joining;
+  ++join_generation_;
+  if (join_generation_ == 0)
+    ++join_generation_;
+  const std::uint32_t generation = join_generation_;
   portEXIT_CRITICAL(&lock_);
   xEventGroupClearBits(events_, kGotIpv4 | kDisconnected);
   err = esp_wifi_connect();
   if (err != ESP_OK) {
     portENTER_CRITICAL(&lock_);
     transition_in_progress_ = false;
+    join_phase_ = JoinPhase::idle;
     portEXIT_CRITICAL(&lock_);
     return err;
   }
-  const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4 | kDisconnected, pdTRUE, pdFALSE,
+  const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4, pdTRUE, pdFALSE,
                                                pdMS_TO_TICKS(network_policy::kJoinTimeoutMs));
-  const bool connected = (bits & kGotIpv4) != 0 && status().has_ipv4;
+  portENTER_CRITICAL(&lock_);
+  const bool connected =
+      (bits & kGotIpv4) != 0 && state_.has_ipv4 && completed_join_generation_ == generation;
+  portEXIT_CRITICAL(&lock_);
   portENTER_CRITICAL(&lock_);
   transition_in_progress_ = false;
   reconnect_enabled_ = connected;
+  join_phase_ = connected ? JoinPhase::connected : JoinPhase::idle;
   portEXIT_CRITICAL(&lock_);
   return connected ? ESP_OK : ESP_ERR_TIMEOUT;
 }
@@ -403,7 +425,11 @@ esp_err_t CoreNetwork::requestScan() {
   scan_.state = ScanState::scanning;
   scan_.last_error = ESP_OK;
   scan_.count = 0;
+  ++scan_.generation;
+  if (scan_.generation == 0)
+    ++scan_.generation;
   portEXIT_CRITICAL(&lock_);
+  xEventGroupClearBits(events_, kScanDone);
 
   esp_err_t result = esp_wifi_scan_start(nullptr, false);
   if (result != ESP_OK) {
@@ -418,6 +444,32 @@ esp_err_t CoreNetwork::requestScan() {
     portEXIT_CRITICAL(&lock_);
   }
   return result;
+}
+
+esp_err_t CoreNetwork::waitForScan(std::uint32_t generation, TickType_t timeout) {
+  const EventBits_t bits = xEventGroupWaitBits(events_, kScanDone, pdTRUE, pdFALSE, timeout);
+  portENTER_CRITICAL(&lock_);
+  if (scan_.generation != generation) {
+    portEXIT_CRITICAL(&lock_);
+    return ESP_ERR_INVALID_STATE;
+  }
+  if ((bits & kScanDone) != 0 && scan_.state != ScanState::scanning) {
+    const esp_err_t result = scan_.last_error;
+    portEXIT_CRITICAL(&lock_);
+    return result;
+  }
+  scan_.state = ScanState::failed;
+  scan_.last_error = ESP_ERR_TIMEOUT;
+  scan_.count = 0;
+  const Mode mode = state_.mode;
+  portEXIT_CRITICAL(&lock_);
+  esp_wifi_scan_stop();
+  if (mode == Mode::setup_ap) {
+    const esp_err_t restore_result = esp_wifi_set_mode(WIFI_MODE_AP);
+    if (restore_result != ESP_OK)
+      return restore_result;
+  }
+  return ESP_ERR_TIMEOUT;
 }
 
 CoreNetwork::ScanSnapshot CoreNetwork::scanSnapshot() const {
@@ -436,6 +488,11 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
   portENTER_CRITICAL(&lock_);
   transition_in_progress_ = true;
   reconnect_enabled_ = false;
+  join_phase_ = JoinPhase::joining;
+  ++join_generation_;
+  if (join_generation_ == 0)
+    ++join_generation_;
+  const std::uint32_t generation = join_generation_;
   portEXIT_CRITICAL(&lock_);
   esp_wifi_scan_stop();
   esp_wifi_disconnect();
@@ -444,6 +501,7 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
     if (mode_result != ESP_OK) {
       portENTER_CRITICAL(&lock_);
       transition_in_progress_ = false;
+      join_phase_ = JoinPhase::idle;
       portEXIT_CRITICAL(&lock_);
       return mode_result;
     }
@@ -460,6 +518,7 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
   if (result != ESP_OK) {
     portENTER_CRITICAL(&lock_);
     transition_in_progress_ = false;
+    join_phase_ = JoinPhase::idle;
     portEXIT_CRITICAL(&lock_);
     return result;
   }
@@ -476,12 +535,17 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
   if (result != ESP_OK) {
     portENTER_CRITICAL(&lock_);
     transition_in_progress_ = false;
+    join_phase_ = JoinPhase::idle;
     portEXIT_CRITICAL(&lock_);
     return result;
   }
-  const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4 | kDisconnected, pdTRUE, pdFALSE,
+  const EventBits_t bits = xEventGroupWaitBits(events_, kGotIpv4, pdTRUE, pdFALSE,
                                                pdMS_TO_TICKS(network_policy::kJoinTimeoutMs));
-  if ((bits & kGotIpv4) != 0 && status().has_ipv4) {
+  portENTER_CRITICAL(&lock_);
+  const bool connected =
+      (bits & kGotIpv4) != 0 && state_.has_ipv4 && completed_join_generation_ == generation;
+  portEXIT_CRITICAL(&lock_);
+  if (connected) {
     portENTER_CRITICAL(&lock_);
     transition_in_progress_ = false;
     reconnect_enabled_ = initial_mode == Mode::station;
@@ -501,12 +565,18 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
     state_.station_ssid[0] = '\0';
     portEXIT_CRITICAL(&lock_);
     const esp_err_t mode_result = esp_wifi_set_mode(WIFI_MODE_AP);
-    if (mode_result != ESP_OK)
+    if (mode_result != ESP_OK) {
+      portENTER_CRITICAL(&lock_);
+      transition_in_progress_ = false;
+      join_phase_ = JoinPhase::idle;
+      portEXIT_CRITICAL(&lock_);
       return mode_result;
+    }
   }
   portENTER_CRITICAL(&lock_);
   transition_in_progress_ = false;
   reconnect_enabled_ = false;
+  join_phase_ = JoinPhase::idle;
   portEXIT_CRITICAL(&lock_);
   return ESP_ERR_TIMEOUT;
 }

@@ -139,7 +139,11 @@ void WifiProvisionService::taskLoop() {
 
 void WifiProvisionService::scan() {
   setStatus(State::scanning, ESP_OK);
-  const esp_err_t result = network_.requestScan();
+  esp_err_t result = network_.requestScan();
+  if (result == ESP_OK) {
+    const auto generation = network_.scanSnapshot().generation;
+    result = network_.waitForScan(generation, pdMS_TO_TICKS(network_policy::kScanTimeoutMs));
+  }
   setStatus(result == ESP_OK ? State::committed : State::failed, result);
 }
 
@@ -155,36 +159,49 @@ void WifiProvisionService::publishSaved(const SavedWifiNetworks& staged) {
 void WifiProvisionService::provision(const Request& request) {
   setStatus(State::connecting, ESP_OK);
   const auto before = network_.status();
-  SavedWifiNetworks staged;
+  SavedWifiNetworks original;
   portENTER_CRITICAL(&lock_);
-  cloneSaved(saved_, staged);
+  cloneSaved(saved_, original);
   portEXIT_CRITICAL(&lock_);
+  SavedWifiNetworks staged;
+  cloneSaved(original, staged);
   const network_policy::Profile trial{request.ssid, request.ssid_length, request.password,
                                       request.password_length};
   esp_err_t result = network_.connectProfile(trial);
-  if (result == ESP_OK && staged.upsert(trial) &&
-      saveWifi(storage_, random_, staged) == core_security::Status::Ok) {
+  bool storage_changed = false;
+  if (result == ESP_OK && staged.upsert(trial)) {
+    storage_changed = saveWifi(storage_, random_, staged) == core_security::Status::Ok;
+    if (storage_changed)
+      result = network_.commitProfile();
+    else
+      result = ESP_FAIL;
+  } else if (result == ESP_OK) {
+    result = ESP_FAIL;
+  }
+  if (result == ESP_OK) {
     publishSaved(staged);
-    result = network_.commitProfile();
-    setStatus(result == ESP_OK ? State::committed : State::failed, result);
+    setStatus(State::committed, ESP_OK);
     activity_.append("wifi_configuration_saved", "A tested Wi-Fi network was encrypted.");
     return;
   }
-  if (result == ESP_OK)
-    result = ESP_FAIL;
+  const bool storage_restored =
+      !storage_changed || saveWifi(storage_, random_, original) == core_security::Status::Ok;
   esp_err_t rollback = ESP_FAIL;
   const int previous = before.station_ssid[0] == '\0'
                            ? -1
-                           : staged.find(before.station_ssid, std::strlen(before.station_ssid));
-  if (previous >= 0)
-    rollback = network_.connectProfile(staged.profile(static_cast<std::size_t>(previous)));
-  else
+                           : original.find(before.station_ssid, std::strlen(before.station_ssid));
+  if (previous >= 0) {
+    rollback = network_.connectProfile(original.profile(static_cast<std::size_t>(previous)));
+    if (rollback == ESP_OK)
+      rollback = network_.commitProfile();
+  } else {
     rollback = network_.restoreSetupAp();
-  setStatus(rollback == ESP_OK ? State::rolled_back : State::failed, result);
-  activity_.append(rollback == ESP_OK ? "wifi_configuration_rolled_back"
-                                      : "wifi_configuration_failed",
-                   rollback == ESP_OK ? "The previous network state was restored."
-                                      : "Wi-Fi recovery requires attention.");
+  }
+  const bool restored = storage_restored && rollback == ESP_OK;
+  setStatus(restored ? State::rolled_back : State::failed, result);
+  activity_.append(restored ? "wifi_configuration_rolled_back" : "wifi_configuration_failed",
+                   restored ? "The previous network state was restored."
+                            : "Wi-Fi recovery requires attention.");
 }
 
 bool WifiProvisionService::connectFirstAvailable(const SavedWifiNetworks& candidates,
@@ -203,10 +220,12 @@ bool WifiProvisionService::connectFirstAvailable(const SavedWifiNetworks& candid
 
 void WifiProvisionService::forgetSaved(const Request& request) {
   setStatus(State::forgetting, ESP_OK);
-  SavedWifiNetworks staged;
+  SavedWifiNetworks original;
   portENTER_CRITICAL(&lock_);
-  cloneSaved(saved_, staged);
+  cloneSaved(saved_, original);
   portEXIT_CRITICAL(&lock_);
+  SavedWifiNetworks staged;
+  cloneSaved(original, staged);
   const auto before = network_.status();
   const bool active = before.station_ssid[0] != '\0' &&
                       std::strlen(before.station_ssid) == request.ssid_length &&
@@ -221,25 +240,32 @@ void WifiProvisionService::forgetSaved(const Request& request) {
     if (!transitioned)
       transitioned = network_.restoreSetupAp() == ESP_OK;
   }
-  if (transitioned && saveWifi(storage_, random_, staged) == core_security::Status::Ok) {
+  bool storage_changed = false;
+  esp_err_t result = transitioned ? ESP_OK : ESP_FAIL;
+  if (result == ESP_OK) {
+    storage_changed = saveWifi(storage_, random_, staged) == core_security::Status::Ok;
+    if (!storage_changed)
+      result = ESP_FAIL;
+  }
+  if (result == ESP_OK && active && network_.status().has_ipv4)
+    result = network_.commitProfile();
+  if (result == ESP_OK) {
     publishSaved(staged);
-    if (active && network_.status().has_ipv4)
-      network_.commitProfile();
     setStatus(State::committed, ESP_OK);
     activity_.append("wifi_network_forgotten", "A saved Wi-Fi network was removed.");
     return;
   }
-  esp_err_t rollback = ESP_FAIL;
-  SavedWifiNetworks original;
-  portENTER_CRITICAL(&lock_);
-  cloneSaved(saved_, original);
-  portEXIT_CRITICAL(&lock_);
+  const bool storage_restored =
+      !storage_changed || saveWifi(storage_, random_, original) == core_security::Status::Ok;
+  esp_err_t rollback = ESP_OK;
   const int old = original.find(request.ssid, request.ssid_length);
-  if (active && old >= 0)
+  if (active && old >= 0) {
     rollback = network_.connectProfile(original.profile(static_cast<std::size_t>(old)));
-  else
-    rollback = ESP_OK;
-  setStatus(rollback == ESP_OK ? State::rolled_back : State::failed, ESP_FAIL);
+    if (rollback == ESP_OK)
+      rollback = network_.commitProfile();
+  }
+  const bool restored = storage_restored && rollback == ESP_OK;
+  setStatus(restored ? State::rolled_back : State::failed, result);
 }
 
 void WifiProvisionService::setStatus(State state, esp_err_t error) {
