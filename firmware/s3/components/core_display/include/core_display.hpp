@@ -32,7 +32,12 @@ public:
     attempts_exhausted,
     unavailable
   };
-  enum class Action : std::uint8_t { none, generate_access_code };
+  enum class Action : std::uint8_t {
+    none,
+    generate_access_code,
+    approve_ai_action,
+    reject_ai_action
+  };
   using Upgrade = display_policy::Upgrade;
 
   CoreDisplay();
@@ -67,13 +72,20 @@ public:
   void accessCode(const char* code);
   void accessState(AccessState state);
 
+  /** Shows a locally generated AI action proposal for physical approval. */
+  void approval(const char* summary);
+
+  /** Returns from an AI approval page to the primary status page. */
+  void clearApproval();
+
   /** Shows firmware-upgrade progress and prevents idle sleep. */
   void upgrade(const Upgrade& progress);
 
 private:
-  enum class Page : std::uint8_t { boot, fatal, home, upgrade };
+  enum class Page : std::uint8_t { boot, fatal, home, approval, upgrade };
   void renderHome();
   void clearAccessCode();
+  void renderApproval();
   void renderSaver();
   void renderUpgrade();
   void updateClock();
@@ -92,6 +104,7 @@ private:
   char web_[51]{};
   char status_[51]{};
   char access_code_[17]{};
+  char approval_summary_[97]{};
   AccessState access_state_{AccessState::unavailable};
   char time_[6]{};
   char date_[32]{};

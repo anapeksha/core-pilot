@@ -65,7 +65,10 @@ import {
 import { bytesAtMost, entityLimits } from "~/lib/request-contracts";
 import {
   fallbackAi,
+  type AiApprovalProposal,
+  type AiChatHistoryMessage,
   type AiChatMessage,
+  type AiChatResponse,
   type AiMemorySection,
 } from "../lib/api";
 
@@ -176,9 +179,135 @@ function messageLabel(role: AiChatMessage["role"]): string {
   return "Core Pilot";
 }
 
-const ChatMessage: Component<{ message: AiChatMessage; pending?: boolean }> = (
+export type DisplayChatMessage = AiChatMessage & {
+  operationId?: string;
+  proposal?: AiApprovalProposal;
+};
+
+export function userAuthoredHistory(
+  messages: readonly AiChatMessage[],
+): AiChatHistoryMessage[] {
+  return messages
+    .filter(
+      (message): message is AiChatHistoryMessage => message.role === "user",
+    )
+    .slice(-entityLimits.chatHistory);
+}
+
+export function proposalExpiry(
+  proposal: AiApprovalProposal,
+): string | undefined {
+  if (proposal.expires_at) {
+    const expiresAt = new Date(proposal.expires_at);
+    if (!Number.isNaN(expiresAt.getTime()))
+      return `Expires ${expiresAt.toLocaleString()}`;
+  }
+  if (proposal.state === "proposed" || proposal.state === "approval_required") {
+    if (proposal.expires_in_seconds !== undefined)
+      return `Expires in ${proposal.expires_in_seconds} seconds`;
+  }
+  return undefined;
+}
+
+export function reconcileApprovalResponse(
+  messages: readonly DisplayChatMessage[],
+  response: AiChatResponse,
+): DisplayChatMessage[] {
+  const existingIndex = messages.findIndex(
+    (message) => message.operationId === response.operation_id,
+  );
+  const existing = existingIndex >= 0 ? messages[existingIndex] : undefined;
+  const proposal = response.proposal ?? existing?.proposal;
+  if (!proposal) return [...messages];
+
+  const updated: DisplayChatMessage = {
+    role: "assistant",
+    content:
+      response.reply ||
+      existing?.content ||
+      "Review this proposal on CoreS3 before it expires.",
+    operationId: response.operation_id,
+    proposal: { ...proposal, state: response.status },
+  };
+  if (existingIndex < 0)
+    return [...messages, updated].slice(-MAX_RENDERED_CHAT_MESSAGES);
+  return messages.map((message, index) =>
+    index === existingIndex ? updated : message,
+  );
+}
+
+function proposalStateLabel(state: AiApprovalProposal["state"]): string {
+  return state.replaceAll("_", " ");
+}
+
+function proposalGuidance(state: AiApprovalProposal["state"]): string {
+  if (state === "proposed" || state === "approval_required")
+    return "Approve on CoreS3";
+  if (state === "executing") return "Executing on CoreS3";
+  if (state === "complete") return "Completed on CoreS3";
+  if (state === "rejected") return "Rejected on CoreS3";
+  if (state === "expired") return "Approval expired";
+  return "Operation failed";
+}
+
+const ApprovalProposal: Component<{ proposal: AiApprovalProposal }> = (
   props,
-) => {
+) => (
+  <div class="mt-3 space-y-3 rounded-lg border border-warning-foreground/40 bg-warning/20 p-3">
+    <Flex class="flex-wrap gap-2" justifyContent="start">
+      <Badge
+        variant={props.proposal.state === "complete" ? "success" : "warning"}
+      >
+        {proposalGuidance(props.proposal.state)}
+      </Badge>
+      <Badge variant="outline">Effect: {props.proposal.effect}</Badge>
+      <Badge variant="outline">
+        State: {proposalStateLabel(props.proposal.state)}
+      </Badge>
+    </Flex>
+    <div>
+      <p class="text-xs font-semibold uppercase tracking-wide text-foreground/60">
+        Local summary
+      </p>
+      <p class="mt-1 text-sm whitespace-pre-wrap">
+        {props.proposal.local_summary}
+      </p>
+    </div>
+    <Show when={proposalExpiry(props.proposal)}>
+      {(expiry) => <p class="text-xs text-foreground/70">{expiry()}</p>}
+    </Show>
+    <Show when={props.proposal.actions.length > 0}>
+      <ul class="space-y-1 text-sm">
+        <For each={props.proposal.actions}>
+          {(action) => (
+            <li>
+              <span class="font-medium">{action.tool}</span>: {action.detail}
+            </li>
+          )}
+        </For>
+      </ul>
+    </Show>
+    <div class="rounded-md bg-background/70 px-3 py-2 text-sm font-semibold">
+      {proposalGuidance(props.proposal.state)}
+    </div>
+    <Show
+      when={
+        props.proposal.state === "proposed" ||
+        props.proposal.state === "approval_required"
+      }
+    >
+      <p class="text-xs text-foreground/60">
+        Review and approve this proposal on the physical CoreS3. Browser
+        approval is not available.
+      </p>
+    </Show>
+  </div>
+);
+
+const ChatMessage: Component<{
+  message: DisplayChatMessage;
+  pending?: boolean;
+}> = (props) => {
   const isUserMessage = () => props.message.role === "user";
   return (
     <Message
@@ -199,6 +328,9 @@ const ChatMessage: Component<{ message: AiChatMessage; pending?: boolean }> = (
             {props.message.content}
           </p>
         </MessageBubble>
+        <Show when={props.message.proposal}>
+          {(proposal) => <ApprovalProposal proposal={proposal()} />}
+        </Show>
         <Show when={props.message.role === "tool"}>
           <MessageFooter>
             Executed locally; sensitive result data withheld
@@ -270,9 +402,9 @@ const MemorySectionForm: Component<{
 const MAX_RENDERED_CHAT_MESSAGES = 50;
 
 function appendChatMessage(
-  current: AiChatMessage[],
-  message: AiChatMessage,
-): AiChatMessage[] {
+  current: DisplayChatMessage[],
+  message: DisplayChatMessage,
+): DisplayChatMessage[] {
   return [...current, message].slice(-MAX_RENDERED_CHAT_MESSAGES);
 }
 
@@ -323,7 +455,7 @@ const AiAssistant: Component = () => {
     mode: "onSubmit",
     resolver: zodResolver(chatSchema),
   });
-  const [messages, setMessages] = createSignal<AiChatMessage[]>([
+  const [messages, setMessages] = createSignal<DisplayChatMessage[]>([
     {
       role: "assistant",
       content:
@@ -415,24 +547,37 @@ const AiAssistant: Component = () => {
   const sendChat = handleChatSubmit((formValues) => {
     const message = formValues.message.trim();
     if (chatMutation.isPending) return;
-    const history = messages().slice(-12);
+    const history = userAuthoredHistory(messages());
     setMessages((current) =>
       appendChatMessage(current, { role: "user", content: message }),
     );
     resetChat({ message: "" });
     chatMutation.mutate(
       {
-        message,
-        history,
-        chat_id: chatId,
+        request: {
+          message,
+          ...(history.length > 0 ? { history } : {}),
+          chat_id: chatId,
+        },
+        onStatus: (response) =>
+          setMessages((current) =>
+            reconcileApprovalResponse(current, response),
+          ),
       },
       {
         onSuccess: (response) => {
           setMessages((current) => {
-            const withAnswer = appendChatMessage(current, {
-              role: "assistant",
-              content: response.reply,
-            });
+            const trackedApproval = current.some(
+              (entry) => entry.operationId === response.operation_id,
+            );
+            const withAnswer = trackedApproval
+              ? reconcileApprovalResponse(current, response)
+              : appendChatMessage(current, {
+                  role: "assistant",
+                  content: response.reply,
+                });
+            if (trackedApproval && response.status !== "complete")
+              return withAnswer;
             return response.actions.reduce(
               (next, action) =>
                 appendChatMessage(next, {
@@ -537,7 +682,16 @@ const AiAssistant: Component = () => {
                     </AlertDescription>
                   </Alert>
                 </Show>
-                <Show when={chatMutation.isPending}>
+                <Show
+                  when={
+                    chatMutation.isPending &&
+                    !messages().some(
+                      (message) =>
+                        message.proposal?.state === "approval_required" ||
+                        message.proposal?.state === "executing",
+                    )
+                  }
+                >
                   <ChatMessage
                     pending
                     message={{

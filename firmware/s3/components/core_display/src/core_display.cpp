@@ -281,6 +281,40 @@ void CoreDisplay::renderHome() {
   push();
 }
 
+void CoreDisplay::renderApproval() {
+  canvas_.fillScreen(kBlack);
+  drawText("LOCAL APPROVAL", 16, 30, kCyan);
+  drawText("AI requested an action", 16, 60, kWhite, true);
+  drawText(approval_summary_, 16, 96, kBlue);
+  drawText("Review this action on the device", 16, 128, kMuted);
+  drawText("Approval expires shortly", 16, 150, kMuted);
+  canvas_.drawRoundRect(16, 184, 136, 44, 8, kMuted);
+  canvas_.drawRoundRect(168, 184, 136, 44, 8, kBlue);
+  drawText("Reject", 58, 212, kWhite);
+  drawText("Approve", 208, 212, kBlue);
+  push();
+}
+
+void CoreDisplay::approval(const char* summary) {
+  if (!initialized_ || summary == nullptr)
+    return;
+  copyLine(approval_summary_, summary);
+  page_ = Page::approval;
+  saver_ = blanked_ = false;
+  last_touch_ms_ = nowMs();
+  M5.Display.setBrightness(160);
+  renderApproval();
+}
+
+void CoreDisplay::clearApproval() {
+  std::memset(approval_summary_, 0, sizeof approval_summary_);
+  if (!initialized_ || page_ != Page::approval)
+    return;
+  page_ = Page::home;
+  last_touch_ms_ = nowMs();
+  renderHome();
+}
+
 void CoreDisplay::clearAccessCode() {
   volatile char* value = access_code_;
   for (std::size_t i = 0; i < sizeof(access_code_); ++i)
@@ -461,6 +495,15 @@ CoreDisplay::Action CoreDisplay::poll() {
       renderHome();
       if (was_blanked)
         M5.Display.setBrightness(160);
+    } else if (page_ == Page::approval) {
+      const auto& touch = M5.Touch.getDetail();
+      if (touch.wasPressed()) {
+        const auto approval = display_policy::approval_action(touch.x, touch.y);
+        if (approval == display_policy::ApprovalAction::approve)
+          action = Action::approve_ai_action;
+        else if (approval == display_policy::ApprovalAction::reject)
+          action = Action::reject_ai_action;
+      }
     } else if (page_ == Page::home &&
                (access_state_ == AccessState::granted || access_state_ == AccessState::expired ||
                 access_state_ == AccessState::attempts_exhausted)) {

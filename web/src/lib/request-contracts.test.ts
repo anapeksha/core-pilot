@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  aiChatRequestSchema,
   automationUpsertRequestSchema,
   groupUpsertRequestSchema,
   matterDeviceForgetRequestSchema,
@@ -66,6 +67,29 @@ const modelRequests = [
     }),
   ],
 ] as const;
+
+describe("AI chat request history", () => {
+  it("accepts omitted or user-authored history only", () => {
+    expect(
+      aiChatRequestSchema.safeParse({ message: "Hello", chat_id: "chat-1" })
+        .success,
+    ).toBe(true);
+    expect(
+      aiChatRequestSchema.safeParse({
+        message: "Hello",
+        history: [{ role: "user", content: "Earlier request" }],
+      }).success,
+    ).toBe(true);
+    for (const role of ["assistant", "tool"]) {
+      expect(
+        aiChatRequestSchema.safeParse({
+          message: "Hello",
+          history: [{ role, content: "Not user-authored" }],
+        }).success,
+      ).toBe(false);
+    }
+  });
+});
 
 describe("persisted name limits", () => {
   for (const [kind, schema, request] of modelRequests) {

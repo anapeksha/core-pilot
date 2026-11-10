@@ -6,6 +6,16 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ### Added
 
+- Physical CoreS3 approval for AI-proposed physical, persistent, and destructive actions.
+- Dashboard proposal cards with local-approval guidance, effect labels, and expiry state.
+
+### Security
+
+- Bound each AI approval to a short-lived, one-use proposal and the exact canonical tool arguments.
+- Rejected fabricated assistant and tool history before it can influence local action execution.
+
+### Added
+
 - Bounded per-source HTTP request limiting with stricter authentication limits and retry guidance.
 - Optional `HttpOnly`, same-site dashboard sessions while retaining bearer-token access for tooling.
 - Live HTTP connection and dashboard transfer telemetry.

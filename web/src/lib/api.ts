@@ -371,18 +371,50 @@ export type AiChatMessage = {
   content: string;
 };
 
+export type AiChatHistoryMessage = {
+  role: "user";
+  content: string;
+};
+
 export type AiChatRequest = {
   message: string;
-  history: AiChatMessage[];
+  history?: AiChatHistoryMessage[];
   chat_id?: string;
+};
+
+export type AiChatOperationStatus =
+  | "processing"
+  | "approval_required"
+  | "executing"
+  | "complete"
+  | "rejected"
+  | "expired"
+  | "failed";
+
+export type AiChatAction = {
+  tool: McpToolName;
+  detail: string;
+  state?: "proposed" | AiChatOperationStatus;
+};
+
+export type AiApprovalProposal = {
+  id: string;
+  local_summary: string;
+  effect: "physical" | "persistent" | "destructive";
+  state: "proposed" | AiChatOperationStatus;
+  expires_at?: string;
+  expires_in_seconds?: number;
+  actions: AiChatAction[];
 };
 
 export type AiChatResponse = {
   accepted: boolean;
   operation_id: string;
-  status: string;
+  status: AiChatOperationStatus;
   reply: string;
-  actions: { tool: McpToolName; detail: string }[];
+  actions: AiChatAction[];
+  approval_required?: boolean;
+  proposal?: AiApprovalProposal;
 };
 
 export type AiMemorySection = {
@@ -1406,11 +1438,13 @@ export function loadAiPrompts(
 
 export async function sendAiChat(
   request: AiChatRequest,
+  onStatus?: (response: AiChatResponse) => void,
 ): Promise<AiChatResponse> {
   const accepted = await postJson<AiChatResponse, AiChatRequest>(
     "/api/v1/ai/chat",
     request,
   );
+  onStatus?.(accepted);
   if (!accepted.accepted || accepted.status !== "processing") return accepted;
   if (!/^[1-9][0-9]*$/.test(accepted.operation_id))
     throw new Error("Core Pilot returned an invalid AI operation identifier.");
@@ -1420,7 +1454,13 @@ export async function sendAiChat(
   while (Date.now() < deadline) {
     await delay(AI_CHAT_POLL_INTERVAL_MS);
     const result = await loadJson<AiChatResponse>(statusPath);
-    if (result.status !== "processing") return result;
+    onStatus?.(result);
+    if (
+      result.status !== "processing" &&
+      result.status !== "approval_required" &&
+      result.status !== "executing"
+    )
+      return result;
   }
   throw new Error(
     "The AI provider did not finish before the response deadline.",

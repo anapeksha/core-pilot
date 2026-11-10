@@ -7,6 +7,11 @@ import type { Plugin, ViteDevServer } from "vite";
 type JsonObject = Record<string, unknown>;
 type ModelCollection = "rooms" | "groups" | "scenes" | "automations";
 type MockModel = JsonObject & { id: string };
+type MockAiOperation = {
+  polls: number;
+  terminal: "complete" | "rejected" | "expired";
+};
+
 type OtaUpload = {
   version?: unknown;
   size?: unknown;
@@ -41,6 +46,8 @@ const mutation = (status: string, detail: string, accepted = true) => ({
 
 export function mockRouterApi(): Plugin {
   const otaUploads = new Map<string, OtaUpload>();
+  const aiOperations = new Map<string, MockAiOperation>();
+  let nextAiOperationId = 1;
   let savedWifiNetworks = [
     { ssid: "MockHome", connected: true },
     { ssid: "MockGuest", connected: false },
@@ -331,18 +338,86 @@ export function mockRouterApi(): Plugin {
           return;
         }
 
-        if (request.method === "POST" && url.pathname === "/api/v1/ai/chat") {
-          const body = await readJson(request);
+        if (request.method === "GET" && url.pathname === "/api/v1/ai/chat") {
+          const operationId = url.searchParams.get("operation_id") ?? "";
+          const operation = aiOperations.get(operationId);
+          if (!operation) {
+            json(response, 404, {
+              accepted: false,
+              operation_id: "",
+              status: "AI_CHAT_OPERATION_NOT_FOUND",
+              reply: "AI chat operation is unavailable.",
+              actions: [],
+            });
+            return;
+          }
+          operation.polls += 1;
+          const status =
+            operation.polls === 1
+              ? "approval_required"
+              : operation.polls === 2
+                ? "executing"
+                : operation.terminal;
+          const approvalRequired = status === "approval_required";
+          const terminal =
+            status === "complete" ||
+            status === "rejected" ||
+            status === "expired";
+          const action = {
+            tool: "SetOnOff",
+            detail: approvalRequired
+              ? "Turn on the living-room lights"
+              : "Executed locally; result withheld from the browser.",
+            state: approvalRequired ? "proposed" : status,
+          };
           json(response, 200, {
             accepted: true,
-            status: "completed",
-            reply: `Mock response for: ${String(body.message ?? "").slice(0, 160)}. I can list hub status/devices/scenes in the dev router.`,
-            actions: [
-              {
-                tool: "GetHubStatus",
-                result_json: JSON.stringify({ status: "mock-ready" }),
-              },
-            ],
+            operation_id: operationId,
+            status,
+            reply: terminal
+              ? status === "complete"
+                ? "The living-room lights were turned on."
+                : status === "rejected"
+                  ? "Approval rejected"
+                  : "Approval expired"
+              : "",
+            approval_required: approvalRequired,
+            actions: [action],
+            ...(approvalRequired
+              ? {
+                  proposal: {
+                    id: operationId,
+                    local_summary:
+                      "Turn on the living-room lights. This summary was generated locally by Core Pilot.",
+                    effect: "physical",
+                    state: "proposed",
+                    expires_in_seconds: 120,
+                    actions: [action],
+                  },
+                }
+              : {}),
+          });
+          return;
+        }
+
+        if (request.method === "POST" && url.pathname === "/api/v1/ai/chat") {
+          const body = await readJson(request);
+          const message = String(body.message ?? "").toLowerCase();
+          const operationId = String(nextAiOperationId++);
+          aiOperations.set(operationId, {
+            polls: 0,
+            terminal: message.includes("expire")
+              ? "expired"
+              : message.includes("reject")
+                ? "rejected"
+                : "complete",
+          });
+          json(response, 200, {
+            accepted: true,
+            operation_id: operationId,
+            status: "processing",
+            reply: "",
+            actions: [],
           });
           return;
         }

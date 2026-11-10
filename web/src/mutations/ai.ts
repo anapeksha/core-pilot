@@ -8,6 +8,7 @@ import {
   sendAiChat,
   setupAiProvider,
   type AiChatRequest,
+  type AiChatResponse,
   type AiMemoryUpdateRequest,
   type AiPromptUpdateRequest,
   type AiProviderSetupRequest,
@@ -35,11 +36,16 @@ export function aiProviderMutation() {
   }));
 }
 
+export type AiChatMutationInput = {
+  request: AiChatRequest;
+  onStatus: (response: AiChatResponse) => void;
+};
+
 export function aiChatMutation() {
   return createMutation(() => ({
     mutationKey: ["ai", "chat"],
-    mutationFn: async (request: AiChatRequest) =>
-      requireAccepted(await sendAiChat(request)),
+    mutationFn: async ({ request, onStatus }: AiChatMutationInput) =>
+      requireAccepted(await sendAiChat(request, onStatus)),
   }));
 }
 

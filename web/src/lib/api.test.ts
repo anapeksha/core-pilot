@@ -258,6 +258,79 @@ describe("api client", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("polls approval-required chat operations through execution to terminal", async () => {
+    vi.useFakeTimers();
+    const statuses: api.AiChatOperationStatus[] = [];
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          accepted: true,
+          operation_id: "42",
+          status: "processing",
+          reply: "",
+          actions: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          accepted: true,
+          operation_id: "42",
+          status: "approval_required",
+          reply: "",
+          approval_required: true,
+          actions: [],
+          proposal: {
+            id: "9",
+            local_summary: "Turn on the lights.",
+            effect: "physical",
+            state: "proposed",
+            expires_in_seconds: 120,
+            actions: [],
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          accepted: true,
+          operation_id: "42",
+          status: "executing",
+          reply: "",
+          approval_required: false,
+          actions: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          accepted: true,
+          operation_id: "42",
+          status: "complete",
+          reply: "Lights turned on.",
+          approval_required: false,
+          actions: [],
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = api.sendAiChat({ message: "Turn on the lights" }, (update) =>
+      statuses.push(update.status),
+    );
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    await expect(result).resolves.toMatchObject({ status: "complete" });
+    expect(statuses).toEqual([
+      "processing",
+      "approval_required",
+      "executing",
+      "complete",
+    ]);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      "/api/v1/ai/chat?operation_id=42",
+      expect.objectContaining({ headers: { accept: "application/json" } }),
+    );
+  });
+
   it("normalizes legacy AI status without provider transport metadata", async () => {
     vi.stubGlobal(
       "fetch",
