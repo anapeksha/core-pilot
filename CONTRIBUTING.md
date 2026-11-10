@@ -120,10 +120,10 @@ These test builds use normal test configuration and do not use the development a
 
 Hardware-dependent changes require testing on a positively identified device. Record the device, action, expected result, observed result, and pass/fail status. Redact all sensitive values from logs and screenshots.
 
-Host-side tools use the locked, dependency-free `uv` project at the repository root:
+Host-side tools use the locked, dependency-free `uv` project under `tools/`:
 
 ```sh
-uv run --locked python -m unittest discover -s tools/tests -p 'test_*.py' -v
+uv run --project tools --locked python -m unittest discover -s tools/tests -p 'test_*.py' -v
 ```
 
 Matter lifecycle validation is destructive and runs only against a development-auth build. Select the currently registered accessory explicitly and keep its setup payload in process memory; never put either value in repository-wide documentation or logs:
@@ -132,10 +132,10 @@ Matter lifecycle validation is destructive and runs only against a development-a
 export MATTER_SETUP_CODE='<accessory setup payload>'
 export CORE_PILOT_MATTER_NODE_ID='<current node id>'
 export CORE_PILOT_BEARER='<RAM session token>'
-uv run --locked python tools/test.py lifecycle <core-s3-ip> --confirm-destructive --lifecycle-cycles 3 --matter-transport wifi
+uv run --project tools --locked python tools/test.py lifecycle <core-s3-ip> --confirm-destructive --lifecycle-cycles 3 --matter-transport wifi
 ```
 
-Each cycle verifies an idempotent command, reboot and subscription recovery, another command, asynchronous unpairing, encrypted registry removal, recommissioning, CASE, and subscriptions. Validate the limiter contract separately with `uv run --locked python tools/test.py rate-limit <core-s3-ip>`; this intentionally exhausts the source bucket and waits for the advertised retry interval before checking recovery.
+Each cycle verifies an idempotent command, reboot and subscription recovery, another command, asynchronous unpairing, encrypted registry removal, recommissioning, CASE, and subscriptions. Validate the limiter contract separately with `uv run --project tools --locked python tools/test.py rate-limit <core-s3-ip>`; this intentionally exhausts the source bucket and waits for the advertised retry interval before checking recovery.
 
 ## Pull requests
 

@@ -20,12 +20,15 @@ jobs:
     name: Python tooling
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tools
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
         with:
           enable-cache: true
-      - run: uv run --locked python -m unittest discover -s tools/tests -p 'test_*.py' -v
+      - run: uv run --locked python -m unittest discover -s tests -p 'test_*.py' -v
 
   web:
     name: web
