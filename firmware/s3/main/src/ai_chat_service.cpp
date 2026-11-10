@@ -5,9 +5,12 @@
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
+#include "esp_random.h"
+#include "esp_timer.h"
 #include "http_server.hpp"
 #include "mbedtls/platform_util.h"
 #include "mcp_service.hpp"
+#include "psa/crypto.h"
 
 #include <cerrno>
 #include <cstdio>
@@ -25,6 +28,7 @@ constexpr std::size_t kMaxToolNameBytes = 64;
 constexpr std::size_t kMaxToolArgumentsBytes = 4096;
 
 constexpr std::uint8_t kMaxIdenticalCalls = 3;
+constexpr std::int64_t kApprovalLifetimeUs = 60LL * 1000 * 1000;
 
 class Lock final {
 public:
@@ -119,6 +123,14 @@ bool add_message(cJSON* messages, const char* role, const char* content,
   return true;
 }
 
+bool sha256(const char* value, std::uint8_t (&digest)[32]) {
+  std::size_t digest_size = 0;
+  return value != nullptr && psa_crypto_init() == PSA_SUCCESS &&
+         psa_hash_compute(PSA_ALG_SHA_256, reinterpret_cast<const std::uint8_t*>(value),
+                          std::strlen(value), digest, sizeof digest, &digest_size) == PSA_SUCCESS &&
+         digest_size == sizeof digest;
+}
+
 bool print_bounded(const cJSON* value, char* output, std::size_t capacity) {
   return value != nullptr && output != nullptr && capacity > 1 &&
          cJSON_PrintPreallocated(const_cast<cJSON*>(value), output, static_cast<int>(capacity),
@@ -169,6 +181,42 @@ cJSON* provider_tools(ai::ProviderBackend backend) {
   }
   cJSON_Delete(registry);
   return result;
+}
+
+bool proposal_summary(const char* tool, const cJSON* arguments, char* output,
+                      std::size_t capacity) {
+  if (tool == nullptr || !cJSON_IsObject(arguments) || output == nullptr || capacity == 0)
+    return false;
+  const cJSON* device = cJSON_GetObjectItemCaseSensitive(arguments, "device_id");
+  const cJSON* endpoint = cJSON_GetObjectItemCaseSensitive(arguments, "endpoint_id");
+  const cJSON* id = cJSON_GetObjectItemCaseSensitive(arguments, "id");
+  const cJSON* name = cJSON_GetObjectItemCaseSensitive(arguments, "name");
+  int written = -1;
+  if (std::strcmp(tool, "SetOnOff") == 0) {
+    const cJSON* on = cJSON_GetObjectItemCaseSensitive(arguments, "on");
+    if (cJSON_IsString(device) && cJSON_IsNumber(endpoint) && cJSON_IsBool(on))
+      written = std::snprintf(output, capacity, "Turn device %.16s endpoint %u %s",
+                              device->valuestring, static_cast<unsigned>(endpoint->valuedouble),
+                              cJSON_IsTrue(on) ? "on" : "off");
+  } else if (std::strcmp(tool, "SetLevel") == 0 || std::strcmp(tool, "SetColorTemperature") == 0) {
+    const char* key = std::strcmp(tool, "SetLevel") == 0 ? "level" : "mireds";
+    const cJSON* value = cJSON_GetObjectItemCaseSensitive(arguments, key);
+    if (cJSON_IsString(device) && cJSON_IsNumber(endpoint) && cJSON_IsNumber(value))
+      written = std::snprintf(output, capacity, "%s device %.16s endpoint %u to %u",
+                              std::strcmp(tool, "SetLevel") == 0 ? "Set level on" : "Set color on",
+                              device->valuestring, static_cast<unsigned>(endpoint->valuedouble),
+                              static_cast<unsigned>(value->valuedouble));
+  } else if (std::strcmp(tool, "RemoveMatterDevice") == 0 && cJSON_IsString(device)) {
+    written = std::snprintf(output, capacity, "Remove Matter device %.16s", device->valuestring);
+  } else if ((std::strcmp(tool, "CreateRoom") == 0 || std::strcmp(tool, "CreateGroup") == 0 ||
+              std::strcmp(tool, "CreateScene") == 0 ||
+              std::strcmp(tool, "CreateAutomation") == 0) &&
+             cJSON_IsString(name)) {
+    written = std::snprintf(output, capacity, "%s named %.64s", tool, name->valuestring);
+  } else if (cJSON_IsString(id)) {
+    written = std::snprintf(output, capacity, "%s %.48s", tool, id->valuestring);
+  }
+  return written > 0 && static_cast<std::size_t>(written) < capacity;
 }
 
 bool same_call(const char* left_tool, const char* left_arguments, const char* right_tool,
@@ -234,6 +282,7 @@ struct AiChatService::RequestSlot final {
 struct AiChatService::Runtime final {
   Snapshot snapshot{};
   Snapshot work{};
+  char proposal_arguments[kMaxToolArgumentsBytes + 1]{};
   char prior_ids[kMaxActions][129]{};
   char prior_tools[kMaxActions][kMaxToolNameBytes + 1]{};
   char prior_arguments[kMaxActions][kMaxToolArgumentsBytes + 1]{};
@@ -293,7 +342,7 @@ esp_err_t AiChatService::start() {
   if (started_)
     return ESP_OK;
   mutex_ = xSemaphoreCreateMutexStatic(&mutex_storage_);
-  queue_ = xQueueCreateStatic(kQueueDepth, sizeof(std::uint64_t), queue_buffer_, &queue_storage_);
+  queue_ = xQueueCreateStatic(kQueueDepth, sizeof(WorkItem), queue_buffer_, &queue_storage_);
   if (mutex_ == nullptr || queue_ == nullptr)
     return ESP_ERR_NO_MEM;
   started_ = true;
@@ -342,7 +391,9 @@ AiChatService::SubmitResult AiChatService::submit(const Request& input,
     return SubmitResult::busy;
   if (!ensureWorker())
     return SubmitResult::no_memory;
-  if (runtime_->snapshot.state == State::queued || runtime_->snapshot.state == State::processing)
+  if (runtime_->snapshot.state == State::queued || runtime_->snapshot.state == State::processing ||
+      runtime_->snapshot.state == State::approval_required ||
+      runtime_->snapshot.state == State::executing)
     return SubmitResult::busy;
 
   mbedtls_platform_zeroize(request_, sizeof(*request_));
@@ -364,7 +415,8 @@ AiChatService::SubmitResult AiChatService::submit(const Request& input,
   runtime_->snapshot.state = State::queued;
   runtime_->snapshot.operation_id = request_->operation_id;
   operation_id = request_->operation_id;
-  if (xQueueSend(queue_, &operation_id, 0) != pdTRUE) {
+  const WorkItem work{WorkItem::Kind::request, ApprovalDecision::reject, operation_id, 0};
+  if (xQueueSend(queue_, &work, 0) != pdTRUE) {
     set_failure(runtime_->snapshot, Error::internal, "queue unavailable");
     return SubmitResult::busy;
   }
@@ -389,28 +441,131 @@ bool AiChatService::status(std::uint64_t operation_id, Snapshot& output, char* r
   return true;
 }
 
+bool AiChatService::latestApproval(Snapshot& output) const {
+  Lock lock(mutex_);
+  if (!lock.held() || runtime_ == nullptr || runtime_->snapshot.state != State::approval_required)
+    return false;
+  output = runtime_->snapshot;
+  return true;
+}
+
+AiChatService::DecisionResult AiChatService::decide(std::uint64_t operation_id,
+                                                    std::uint64_t proposal_id,
+                                                    ApprovalDecision decision) {
+  if (!started_ || queue_ == nullptr || mutex_ == nullptr)
+    return DecisionResult::not_ready;
+  Lock lock(mutex_);
+  if (!lock.held())
+    return DecisionResult::busy;
+  if (runtime_ == nullptr || operation_id == 0 || proposal_id == 0 ||
+      runtime_->snapshot.state != State::approval_required ||
+      runtime_->snapshot.operation_id != operation_id ||
+      runtime_->snapshot.proposal.proposal_id != proposal_id)
+    return DecisionResult::stale;
+  const WorkItem item{WorkItem::Kind::decision, decision, operation_id, proposal_id};
+  if (xQueueSend(queue_, &item, 0) != pdTRUE)
+    return DecisionResult::busy;
+  runtime_->snapshot.state = State::executing;
+  return DecisionResult::queued;
+}
+
 void AiChatService::taskEntry(void* context) {
   static_cast<AiChatService*>(context)->taskLoop();
 }
 
 void AiChatService::taskLoop() {
   while (true) {
-    std::uint64_t operation_id{};
-    if (xQueueReceive(queue_, &operation_id, portMAX_DELAY) != pdTRUE)
+    WorkItem item{};
+    if (xQueueReceive(queue_, &item, portMAX_DELAY) != pdTRUE)
       continue;
+    if (item.kind == WorkItem::Kind::decision) {
+      processDecision(item);
+      continue;
+    }
     {
       Lock lock(mutex_);
-      if (!lock.held() || runtime_->snapshot.operation_id != operation_id)
+      if (!lock.held() || runtime_->snapshot.operation_id != item.operation_id)
         continue;
       runtime_->snapshot.state = State::processing;
     }
-    process(operation_id);
+    process(item.operation_id);
     mbedtls_platform_zeroize(request_, sizeof(*request_));
     mbedtls_platform_zeroize(runtime_->endpoint, sizeof runtime_->endpoint);
     mbedtls_platform_zeroize(runtime_->system_context, sizeof runtime_->system_context);
     mbedtls_platform_zeroize(runtime_->request_json, sizeof runtime_->request_json);
     mbedtls_platform_zeroize(runtime_->response_json, sizeof runtime_->response_json);
   }
+}
+
+void AiChatService::processDecision(const WorkItem& item) {
+  char tool[kMaxToolNameBytes + 1]{};
+  char arguments_json[kMaxToolArgumentsBytes + 1]{};
+  McpService::Effect effect = McpService::Effect::read_only;
+  std::int64_t expires_at_us = 0;
+  std::uint8_t expected_digest[32]{};
+  {
+    Lock lock(mutex_);
+    if (!lock.held() || runtime_->snapshot.state != State::executing ||
+        runtime_->snapshot.operation_id != item.operation_id ||
+        runtime_->snapshot.proposal.proposal_id != item.proposal_id)
+      return;
+    std::snprintf(tool, sizeof tool, "%s", runtime_->snapshot.proposal.tool);
+    std::snprintf(arguments_json, sizeof arguments_json, "%s", runtime_->proposal_arguments);
+    effect = runtime_->snapshot.proposal.effect;
+    expires_at_us = runtime_->snapshot.proposal.expires_at_us;
+    std::memcpy(expected_digest, runtime_->snapshot.proposal.arguments_digest,
+                sizeof expected_digest);
+    mbedtls_platform_zeroize(runtime_->proposal_arguments, sizeof runtime_->proposal_arguments);
+    mbedtls_platform_zeroize(&runtime_->snapshot.proposal, sizeof runtime_->snapshot.proposal);
+    mbedtls_platform_zeroize(&runtime_->work.proposal, sizeof runtime_->work.proposal);
+  }
+
+  Snapshot terminal{};
+  terminal.operation_id = item.operation_id;
+  terminal.action_count = 1;
+  std::snprintf(terminal.actions[0].tool, sizeof terminal.actions[0].tool, "%s", tool);
+  if (item.decision == ApprovalDecision::reject) {
+    terminal.state = State::rejected;
+    std::snprintf(terminal.error_detail, sizeof terminal.error_detail, "Action rejected on CoreS3");
+  } else if (item.decision == ApprovalDecision::expire || esp_timer_get_time() > expires_at_us) {
+    terminal.state = State::expired;
+    std::snprintf(terminal.error_detail, sizeof terminal.error_detail, "Approval expired");
+  } else {
+    std::uint8_t actual_digest[32]{};
+    const bool hashed = sha256(arguments_json, actual_digest);
+    cJSON* arguments = hashed ? cJSON_Parse(arguments_json) : nullptr;
+    McpService::Effect current_effect = McpService::Effect::read_only;
+    cJSON* invocation = nullptr;
+    const bool bound =
+        hashed && std::memcmp(actual_digest, expected_digest, sizeof actual_digest) == 0 &&
+        McpService::preflight(tool, current_effect) == ESP_OK && current_effect == effect &&
+        McpService::requiresLocalApproval(effect) && cJSON_IsObject(arguments);
+    const esp_err_t invoked = bound
+                                  ? McpService::invoke(*http_runtime_, tool, arguments, invocation)
+                                  : ESP_ERR_INVALID_STATE;
+    cJSON_Delete(arguments);
+    if (invoked == ESP_OK && invocation != nullptr) {
+      terminal.state = State::complete;
+      const char reply[] = "Approved action submitted locally.";
+      terminal.response_length = sizeof(reply) - 1;
+      std::memcpy(runtime_->result, reply, sizeof(reply));
+      print_bounded(invocation, terminal.actions[0].result_json,
+                    sizeof terminal.actions[0].result_json);
+    } else {
+      terminal.state = State::failed;
+      terminal.error = Error::actions_unsupported;
+      std::snprintf(terminal.error_detail, sizeof terminal.error_detail,
+                    "Approved action could not be executed");
+    }
+    cJSON_Delete(invocation);
+    mbedtls_platform_zeroize(actual_digest, sizeof actual_digest);
+  }
+  mbedtls_platform_zeroize(expected_digest, sizeof expected_digest);
+  mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
+  mbedtls_platform_zeroize(tool, sizeof tool);
+  Lock lock(mutex_);
+  if (lock.held() && runtime_->snapshot.operation_id == item.operation_id)
+    runtime_->snapshot = terminal;
 }
 
 void AiChatService::process(std::uint64_t operation_id) {
@@ -799,16 +954,36 @@ void AiChatService::process(std::uint64_t operation_id) {
         cJSON* invocation = nullptr;
         esp_err_t invoked = ESP_OK;
         if (McpService::requiresLocalApproval(runtime_->prior_effects[index])) {
-          invocation = cJSON_CreateObject();
-          if (invocation != nullptr) {
-            cJSON_AddStringToObject(invocation, "status", "proposed");
-            cJSON_AddBoolToObject(invocation, "approval_required", true);
-            cJSON_AddStringToObject(invocation, "approval_source", "independent_local_user");
+          Proposal& proposal = result.proposal;
+          proposal.proposal_id = (static_cast<std::uint64_t>(esp_random()) << 32U) | esp_random();
+          if (proposal.proposal_id == 0)
+            proposal.proposal_id = 1;
+          proposal.effect = runtime_->prior_effects[index];
+          proposal.expires_at_us = esp_timer_get_time() + kApprovalLifetimeUs;
+          std::snprintf(proposal.tool, sizeof proposal.tool, "%s", runtime_->prior_tools[index]);
+          if (!proposal_summary(proposal.tool, arguments, proposal.summary,
+                                sizeof proposal.summary) ||
+              !sha256(runtime_->prior_arguments[index], proposal.arguments_digest)) {
+            cJSON_Delete(arguments);
+            calls_valid = false;
+            failure_error = Error::internal;
+            failure_detail = "AI proposal digest failed";
+            break;
           }
-        } else {
-          invoked = McpService::invoke(*http_runtime_, runtime_->prior_tools[index], arguments,
-                                       invocation);
+          std::snprintf(runtime_->proposal_arguments, sizeof runtime_->proposal_arguments, "%s",
+                        runtime_->prior_arguments[index]);
+          Action& action = result.actions[result.action_count++];
+          std::snprintf(action.tool, sizeof action.tool, "%s", proposal.tool);
+          std::snprintf(action.result_json, sizeof action.result_json,
+                        "{\"status\":\"proposed\",\"approval_required\":true}");
+          result.state = State::approval_required;
+          result.error = Error::none;
+          complete = true;
+          cJSON_Delete(arguments);
+          break;
         }
+        invoked =
+            McpService::invoke(*http_runtime_, runtime_->prior_tools[index], arguments, invocation);
         cJSON_Delete(arguments);
         if (invocation == nullptr) {
           invocation = cJSON_CreateObject();
@@ -855,7 +1030,7 @@ void AiChatService::process(std::uint64_t operation_id) {
 
   cJSON_Delete(request_root);
   mbedtls_platform_zeroize(runtime_->prior_arguments, sizeof runtime_->prior_arguments);
-  if (result.state != State::complete)
+  if (result.state != State::complete && result.state != State::approval_required)
     set_failure(result, failure_error,
                 failure_detail == nullptr ? "AI chat failed" : failure_detail);
 

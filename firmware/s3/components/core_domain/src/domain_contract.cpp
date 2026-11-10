@@ -89,7 +89,7 @@ constexpr RouteContract routes[] = {
      "persistence:s provider_transport:v provider_transport_requirements:a"},
     {"POST", "/api/v1/ai/provider", "provider:o", "accepted:b status:s detail:s"},
     {"GET", "/api/v1/ai/chat", nullptr, "accepted:b operation_id:s status:s reply:s actions:a"},
-    {"POST", "/api/v1/ai/chat", "message:s history:a chat_id:s?",
+    {"POST", "/api/v1/ai/chat", "message:s history:a* chat_id:s?",
      "accepted:b operation_id:s status:s reply:s actions:a"},
     {"GET", "/api/v1/ai/memory", nullptr, "sections:a encrypted:b detail:s"},
     {"POST", "/api/v1/ai/memory/section", "id:s markdown:s", "accepted:b status:s detail:s"},

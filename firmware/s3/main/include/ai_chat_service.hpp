@@ -26,7 +26,19 @@ public:
 
   enum class Role : std::uint8_t { user, assistant, tool };
   enum class ToolDecision : std::uint8_t { execute, propose, reject };
-  enum class State : std::uint8_t { idle, queued, processing, complete, failed };
+  enum class State : std::uint8_t {
+    idle,
+    queued,
+    processing,
+    approval_required,
+    executing,
+    complete,
+    rejected,
+    expired,
+    failed
+  };
+  enum class ApprovalDecision : std::uint8_t { approve, reject, expire };
+  enum class DecisionResult : std::uint8_t { queued, invalid, stale, busy, not_ready };
   enum class SubmitResult : std::uint8_t {
     queued,
     invalid,
@@ -70,6 +82,15 @@ public:
     char result_json[2049]{};
   };
 
+  struct Proposal final {
+    std::uint64_t proposal_id{};
+    McpService::Effect effect{McpService::Effect::read_only};
+    std::int64_t expires_at_us{};
+    char tool[65]{};
+    char summary[97]{};
+    std::uint8_t arguments_digest[32]{};
+  };
+
   struct Snapshot final {
     State state{State::idle};
     std::uint64_t operation_id{};
@@ -78,6 +99,7 @@ public:
     std::size_t response_length{};
     std::uint8_t action_count{};
     Action actions[kMaxActions]{};
+    Proposal proposal{};
   };
 
   // Client history is untrusted context, not an execution transcript. Only user-authored
@@ -108,24 +130,40 @@ public:
   bool status(std::uint64_t operation_id, Snapshot& output, char* response,
               std::size_t response_capacity) const;
 
+  // Enqueues a physical decision for the AI owner task. Both identifiers must match the
+  // currently displayed proposal, preventing stale touch events from approving newer work.
+  DecisionResult decide(std::uint64_t operation_id, std::uint64_t proposal_id,
+                        ApprovalDecision decision);
+
+  // Returns the single pending proposal without exposing its arguments.
+  bool latestApproval(Snapshot& output) const;
+
 private:
   struct RequestSlot;
   struct Runtime;
+  struct WorkItem final {
+    enum class Kind : std::uint8_t { request, decision };
+    Kind kind{Kind::request};
+    ApprovalDecision decision{ApprovalDecision::reject};
+    std::uint64_t operation_id{};
+    std::uint64_t proposal_id{};
+  };
 
-  static constexpr UBaseType_t kQueueDepth = 1;
+  static constexpr UBaseType_t kQueueDepth = 2;
   static constexpr std::uint32_t kTaskStackBytes = 12288;
 
   static void taskEntry(void* context);
   bool ensureWorker();
   void taskLoop();
   void process(std::uint64_t operation_id);
+  void processDecision(const WorkItem& item);
 
   ai::AiStorageService& storage_;
   const HttpRuntime* http_runtime_{};
   mutable StaticSemaphore_t mutex_storage_{};
   mutable SemaphoreHandle_t mutex_{};
   StaticQueue_t queue_storage_{};
-  std::uint8_t queue_buffer_[kQueueDepth * sizeof(std::uint64_t)]{};
+  std::uint8_t queue_buffer_[kQueueDepth * sizeof(WorkItem)]{};
   QueueHandle_t queue_{};
   StaticTask_t task_storage_{};
   StackType_t* task_stack_{};

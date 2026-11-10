@@ -2491,8 +2491,16 @@ const char* aiChatState(AiChatService::State state) {
   case AiChatService::State::queued:
   case AiChatService::State::processing:
     return "processing";
+  case AiChatService::State::approval_required:
+    return "approval_required";
+  case AiChatService::State::executing:
+    return "executing";
   case AiChatService::State::complete:
     return "complete";
+  case AiChatService::State::rejected:
+    return "rejected";
+  case AiChatService::State::expired:
+    return "expired";
   case AiChatService::State::failed:
     return "failed";
   }
@@ -2543,17 +2551,44 @@ esp_err_t sendAiChatStatus(httpd_req_t* request, HttpRuntime& runtime) {
                 static_cast<unsigned long long>(operation_id));
   cJSON_AddStringToObject(response, "operation_id", operation_text);
   cJSON_AddStringToObject(response, "status", aiChatState(snapshot->state));
+  const bool terminal_detail = snapshot->state == AiChatService::State::failed ||
+                               snapshot->state == AiChatService::State::rejected ||
+                               snapshot->state == AiChatService::State::expired;
   cJSON_AddStringToObject(response, "reply",
                           snapshot->state == AiChatService::State::complete ? reply.data()
-                          : snapshot->state == AiChatService::State::failed ? snapshot->error_detail
+                          : terminal_detail                                 ? snapshot->error_detail
                                                                             : "");
+  const bool approval_required = snapshot->state == AiChatService::State::approval_required;
+  cJSON_AddBoolToObject(response, "approval_required", approval_required);
   cJSON* actions = cJSON_AddArrayToObject(response, "actions");
   for (std::size_t index = 0; index < snapshot->action_count; ++index) {
     cJSON* action = cJSON_CreateObject();
     cJSON_AddStringToObject(action, "tool", snapshot->actions[index].tool);
     cJSON_AddStringToObject(action, "detail",
-                            "Executed locally; result withheld from the browser.");
+                            approval_required
+                                ? snapshot->proposal.summary
+                                : "Executed locally; result withheld from the browser.");
+    cJSON_AddStringToObject(action, "state",
+                            approval_required ? "proposed" : aiChatState(snapshot->state));
     cJSON_AddItemToArray(actions, action);
+  }
+  if (approval_required) {
+    cJSON* proposal = cJSON_AddObjectToObject(response, "proposal");
+    char proposal_id[24]{};
+    std::snprintf(proposal_id, sizeof proposal_id, "%llu",
+                  static_cast<unsigned long long>(snapshot->proposal.proposal_id));
+    cJSON_AddStringToObject(proposal, "id", proposal_id);
+    cJSON_AddStringToObject(proposal, "local_summary", snapshot->proposal.summary);
+    const char* effect = snapshot->proposal.effect == McpService::Effect::physical ? "physical"
+                         : snapshot->proposal.effect == McpService::Effect::persistent
+                             ? "persistent"
+                             : "destructive";
+    cJSON_AddStringToObject(proposal, "effect", effect);
+    cJSON_AddStringToObject(proposal, "state", "proposed");
+    const std::int64_t remaining_us = snapshot->proposal.expires_at_us - esp_timer_get_time();
+    const std::int64_t remaining_seconds = remaining_us > 0 ? (remaining_us + 999999) / 1000000 : 0;
+    cJSON_AddNumberToObject(proposal, "expires_in_seconds", static_cast<double>(remaining_seconds));
+    cJSON_AddItemToObject(proposal, "actions", cJSON_Duplicate(actions, true));
   }
   mbedtls_platform_zeroize(snapshot, sizeof(*snapshot));
   heap_caps_free(snapshot);
@@ -2572,19 +2607,28 @@ esp_err_t aiChatHandler(httpd_req_t* request) {
   if (!body || readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_413_CONTENT_TOO_LARGE, "Chat request is too large");
   cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  static constexpr const char* message_field[] = {"message"};
   static constexpr const char* fields[] = {"message", "history"};
   static constexpr const char* fields_with_id[] = {"message", "history", "chat_id"};
+  static constexpr const char* fields_with_id_only[] = {"message", "chat_id"};
   const bool has_chat_id =
       cJSON_IsObject(document) && cJSON_GetObjectItemCaseSensitive(document, "chat_id") != nullptr;
-  bool valid = exactObject(document, has_chat_id ? fields_with_id : fields, has_chat_id ? 3 : 2);
+  const bool has_history =
+      cJSON_IsObject(document) && cJSON_GetObjectItemCaseSensitive(document, "history") != nullptr;
+  const char* const* accepted_fields = has_chat_id
+                                           ? (has_history ? fields_with_id : fields_with_id_only)
+                                           : (has_history ? fields : message_field);
+  const std::size_t accepted_count = (has_chat_id ? 2U : 1U) + (has_history ? 1U : 0U);
+  bool valid = exactObject(document, accepted_fields, accepted_count);
   const cJSON* chat_id = cJSON_GetObjectItemCaseSensitive(document, "chat_id");
   if (has_chat_id)
     valid = valid && cJSON_IsString(chat_id) && nonWhitespace(chat_id->valuestring) &&
             std::strlen(chat_id->valuestring) <= core_domain::max_id;
   const cJSON* message = cJSON_GetObjectItemCaseSensitive(document, "message");
   const cJSON* history = cJSON_GetObjectItemCaseSensitive(document, "history");
-  const int history_count = cJSON_IsArray(history) ? cJSON_GetArraySize(history) : -1;
-  valid = valid && cJSON_IsString(message) && cJSON_IsArray(history) && history_count >= 0 &&
+  const int history_count = has_history && cJSON_IsArray(history) ? cJSON_GetArraySize(history) : 0;
+  valid = valid && cJSON_IsString(message) && (!has_history || cJSON_IsArray(history)) &&
+          history_count >= 0 &&
           history_count <= static_cast<int>(AiChatService::kMaxHistoryEntries);
   AiChatService::HistoryEntry entries[AiChatService::kMaxHistoryEntries]{};
   for (int index = 0; valid && index < history_count; ++index) {

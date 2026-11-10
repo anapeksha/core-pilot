@@ -17,6 +17,21 @@ TEST_CASE("RTC calendar policy accepts only real bounded calendar values", "[cor
   TEST_ASSERT_FALSE(valid_calendar({2024, 1, 1, 0, 0, 60}));
 }
 
+TEST_CASE("AI approval touch targets are explicit and separated", "[core_display]") {
+  TEST_ASSERT_EQUAL(static_cast<int>(ApprovalAction::reject),
+                    static_cast<int>(approval_action(16, 184)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ApprovalAction::reject),
+                    static_cast<int>(approval_action(151, 227)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ApprovalAction::approve),
+                    static_cast<int>(approval_action(168, 184)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ApprovalAction::approve),
+                    static_cast<int>(approval_action(303, 227)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ApprovalAction::none),
+                    static_cast<int>(approval_action(160, 200)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ApprovalAction::none),
+                    static_cast<int>(approval_action(200, 183)));
+}
+
 TEST_CASE("upgrade screen is gated until boot partition activation", "[core_display]") {
   TEST_ASSERT_FALSE(upgrade_screen_allowed(UpgradePhase::prepared));
   TEST_ASSERT_FALSE(upgrade_screen_allowed(UpgradePhase::staging));

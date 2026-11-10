@@ -21,6 +21,18 @@ struct Upgrade final {
   bool restart_after_update;
 };
 
+enum class ApprovalAction : std::uint8_t { none, approve, reject };
+
+[[nodiscard]] constexpr ApprovalAction approval_action(int x, int y) {
+  if (y < 184 || y >= 228)
+    return ApprovalAction::none;
+  if (x >= 16 && x < 152)
+    return ApprovalAction::reject;
+  if (x >= 168 && x < 304)
+    return ApprovalAction::approve;
+  return ApprovalAction::none;
+}
+
 struct Calendar final {
   int year;
   int month;

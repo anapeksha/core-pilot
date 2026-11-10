@@ -453,6 +453,10 @@ void Application::run() {
   constexpr TickType_t kDiscoveryRetryDelay = pdMS_TO_TICKS(15000);
   bool matter_ready_reported = false;
   bool ota_update_shown = false;
+  std::uint64_t displayed_ai_operation = 0;
+  std::uint64_t displayed_ai_proposal = 0;
+  static AiChatService::Snapshot ai_snapshot{};
+  static char ai_response[AiChatService::kMaxResponseBytes + 1]{};
   std::uint64_t reconciled_terminal_sequence = 0;
   std::uint64_t last_removed_node_id = 0;
   while (true) {
@@ -645,8 +649,34 @@ void Application::run() {
       }
     }
 
+    if (displayed_ai_operation != 0 &&
+        ai_chat.status(displayed_ai_operation, ai_snapshot, ai_response, sizeof ai_response)) {
+      if (ai_snapshot.state == AiChatService::State::approval_required) {
+        if (esp_timer_get_time() >= ai_snapshot.proposal.expires_at_us) {
+          ai_chat.decide(displayed_ai_operation, displayed_ai_proposal,
+                         AiChatService::ApprovalDecision::expire);
+        }
+      } else {
+        display.clearApproval();
+        displayed_ai_operation = 0;
+        displayed_ai_proposal = 0;
+      }
+    } else if (displayed_ai_operation == 0 && ai_chat.latestApproval(ai_snapshot)) {
+      displayed_ai_operation = ai_snapshot.operation_id;
+      displayed_ai_proposal = ai_snapshot.proposal.proposal_id;
+      display.approval(ai_snapshot.proposal.summary);
+    }
+
     const auto display_action = display.poll();
-    if (display_action == CoreDisplay::Action::generate_access_code) {
+    if (display_action == CoreDisplay::Action::approve_ai_action ||
+        display_action == CoreDisplay::Action::reject_ai_action) {
+      const auto decision = display_action == CoreDisplay::Action::approve_ai_action
+                                ? AiChatService::ApprovalDecision::approve
+                                : AiChatService::ApprovalDecision::reject;
+      if (ai_chat.decide(displayed_ai_operation, displayed_ai_proposal, decision) !=
+          AiChatService::DecisionResult::queued)
+        ESP_LOGW(kTag, "stale or unavailable AI approval decision ignored");
+    } else if (display_action == CoreDisplay::Action::generate_access_code) {
       display.accessState(CoreDisplay::AccessState::unavailable);
       if (regenerateHttpAccessFromPhysicalPresence() != ESP_OK)
         ESP_LOGE(kTag, "physical access-code regeneration failed");
