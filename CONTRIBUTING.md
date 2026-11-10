@@ -120,15 +120,22 @@ These test builds use normal test configuration and do not use the development a
 
 Hardware-dependent changes require testing on a positively identified device. Record the device, action, expected result, observed result, and pass/fail status. Redact all sensitive values from logs and screenshots.
 
-Matter lifecycle validation requires the accessory setup payload in process memory and refuses to mutate device state when it is absent. Never pass the payload on the command line or write it to a log:
+The hardware runner has standard-library unit coverage:
 
 ```sh
-export CORE_PILOT_MATTER_SETUP_PAYLOAD='<accessory setup payload>'
-export CORE_PILOT_BEARER='<RAM session token>'
-python tools/test.py lifecycle <core-s3-ip> --lifecycle-cycles 3 --matter-transport wifi
+python -m unittest discover -s tools/tests -p 'test_*.py' -v
 ```
 
-Each cycle verifies asynchronous unpair completion, encrypted registry removal, recommissioning, registry restoration, CASE, and subscriptions. Run the standard stress and soak commands after lifecycle mutation to validate the recovered state.
+Matter lifecycle validation is destructive and runs only against a development-auth build. Select the currently registered accessory explicitly and keep its setup payload in process memory; never put either value in repository-wide documentation or logs:
+
+```sh
+export MATTER_SETUP_CODE='<accessory setup payload>'
+export CORE_PILOT_MATTER_NODE_ID='<current node id>'
+export CORE_PILOT_BEARER='<RAM session token>'
+python tools/test.py lifecycle <core-s3-ip> --confirm-destructive --lifecycle-cycles 3 --matter-transport wifi
+```
+
+Each cycle verifies an idempotent command, reboot and subscription recovery, another command, asynchronous unpairing, encrypted registry removal, recommissioning, CASE, and subscriptions. Validate the limiter contract separately with `python tools/test.py rate-limit <core-s3-ip>`; this intentionally exhausts the source bucket and waits for the advertised retry interval before checking recovery.
 
 ## Pull requests
 
