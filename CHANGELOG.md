@@ -4,18 +4,12 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.1.0-rc.2] - 2026-11-11
+
 ### Added
 
 - Physical CoreS3 approval for AI-proposed physical, persistent, and destructive actions.
 - Dashboard proposal cards with local-approval guidance, effect labels, and expiry state.
-
-### Security
-
-- Bound each AI approval to a short-lived, one-use proposal and the exact canonical tool arguments.
-- Rejected fabricated assistant and tool history before it can influence local action execution.
-
-### Added
-
 - Bounded per-source HTTP request limiting with stricter authentication limits and retry guidance.
 - Optional `HttpOnly`, same-site dashboard sessions while retaining bearer-token access for tooling.
 - Live HTTP connection and dashboard transfer telemetry.
@@ -39,6 +33,16 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Rolled back Thread datasets and Wi-Fi profiles when live or encrypted persistence commits fail.
 - Bounded Wi-Fi scans, HTTP transfers, and SMTP DNS resolution.
 - Rejected duplicate JSON members and wiped sensitive parse trees on failure.
+
+### Security
+
+- Bound each AI approval to a short-lived, one-use proposal and the exact canonical tool arguments.
+- Rejected fabricated assistant and tool history before it can influence local action execution.
+
+### Known limitations
+
+- Matter-over-Thread and Thread Border Router readiness have not yet been demonstrated on hardware.
+- This release candidate is not CSA Matter certified and does not claim formal Matter specification compliance.
 
 ## [0.1.0-rc.1] - 2026-11-06
 
@@ -91,5 +95,6 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Matter-over-Thread and Thread Border Router readiness have not yet been demonstrated on hardware.
 - This release candidate is not CSA Matter certified and does not claim formal Matter specification compliance.
 
-[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.1...HEAD
+[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.2...HEAD
+[0.1.0-rc.2]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.1...v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/anapeksha/core-pilot/releases/tag/v0.1.0-rc.1
