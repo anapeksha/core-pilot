@@ -16,6 +16,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  python:
+    name: Python tooling
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - run: uv run --locked python -m unittest discover -s tools/tests -p 'test_*.py' -v
+
   web:
     name: web
     runs-on: ubuntu-latest
@@ -60,8 +71,7 @@ jobs:
         run: |
           . "$IDF_PATH/export.sh"
           echo "PATH=$PATH" >> "$GITHUB_ENV"
-      - name: Test hardware validation tools
-        run: python -m unittest discover -s tools/tests -p 'test_*.py' -v
+
       - name: Configure native host tests
         run: cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - name: Build native host tests
@@ -154,11 +164,12 @@ jobs:
   required:
     name: required
     if: always()
-    needs: [web, host_tests, esp32s3_test_image, firmware]
+    needs: [python, web, host_tests, esp32s3_test_image, firmware]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs
         if: >-
+          needs.python.result != 'success' ||
           needs.web.result != 'success' ||
           needs.host_tests.result != 'success' ||
           needs.esp32s3_test_image.result != 'success' ||

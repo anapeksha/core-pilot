@@ -11,17 +11,24 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Live HTTP connection and dashboard transfer telemetry.
 - Actionable, non-secret Matter commissioning failure categories.
 - Guarded hardware runners for full Matter lifecycle and HTTP rate-limit recovery validation.
+- Locked `uv` environment and portable CI job for host-side Python tools.
 
 ### Changed
 
 - Moved forced local Matter record removal to the core-0 application owner.
 - Reduced production BLE scanner verbosity while retaining detailed development diagnostics.
+- Bound OTA chunks to opaque upload sessions and carried those sessions through the dashboard.
+- Treated AI context and model tool calls as untrusted, with effectful calls held for independent local approval.
 
 ### Fixed
 
 - Prevented a second unpair request from overwriting an unresolved late completion callback.
 - Reconciled confirmed unpair completion with encrypted local registry state.
 - Compared stress and soak recovery against pre-test reset state and transport-specific readiness.
+- Quarantined timed-out Matter invoke callbacks and rejected late or duplicate completions safely.
+- Rolled back Thread datasets and Wi-Fi profiles when live or encrypted persistence commits fail.
+- Bounded Wi-Fi scans, HTTP transfers, and SMTP DNS resolution.
+- Rejected duplicate JSON members and wiped sensitive parse trees on failure.
 
 ## [0.1.0-rc.1] - 2026-11-06
 
