@@ -452,7 +452,8 @@ async function handleMutation(
   if (path === "/api/v1/ai/chat") {
     return json(route, {
       accepted: true,
-      status: "ok",
+      operation_id: "1",
+      status: "complete",
       reply: "Core Pilot status looks healthy.",
       actions: [],
     });

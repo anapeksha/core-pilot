@@ -439,7 +439,7 @@ export const aiChatRequestSchema = z
       .array(
         z
           .object({
-            role: z.enum(["user", "assistant", "tool"]),
+            role: z.literal("user"),
             content: bytesAtMost(
               entityLimits.chatHistoryEntry,
               "History entry is too long.",
@@ -447,7 +447,8 @@ export const aiChatRequestSchema = z
           })
           .strict(),
       )
-      .max(entityLimits.chatHistory),
+      .max(entityLimits.chatHistory)
+      .optional(),
     chat_id: modelId.optional(),
   })
   .strict()
