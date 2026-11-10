@@ -537,5 +537,6 @@ export const otaChunkRequestSchema = z
     offset: z.number().int().min(0).max(0xffff_ffff),
     data_base64: base64.max(3072),
     final_chunk: z.boolean(),
+    upload_token: z.string().regex(/^[0-9a-f]{64}$/),
   })
   .strict();

@@ -717,11 +717,13 @@ export default function System() {
     offset: number,
     chunk: Uint8Array,
     finalChunk: boolean,
+    uploadToken: string,
   ) => {
     const request = {
       offset,
       data_base64: bytesToBase64(chunk),
       final_chunk: finalChunk,
+      upload_token: uploadToken,
     };
     const expectedEndOffset = offset + chunk.length;
     let lastError: unknown;
@@ -801,6 +803,9 @@ export default function System() {
         toast.error(message);
         return;
       }
+      const uploadToken = prepared.upload_token ?? "";
+      if (!/^[0-9a-f]{64}$/.test(uploadToken))
+        throw new Error("Device returned an invalid OTA upload session.");
       await sleep(500);
       const chunkCount = Math.ceil(file.size / OTA_CHUNK_BYTES);
       let offset = 0;
@@ -815,6 +820,7 @@ export default function System() {
           offset,
           chunk,
           stagedBytes >= file.size,
+          uploadToken,
         );
         if (!response.accepted) {
           const message = response.detail || "Chunk rejected";

@@ -349,6 +349,7 @@ export type MutationResponse = {
   accepted: boolean;
   status: string;
   detail: string;
+  upload_token?: string;
 };
 
 /** Converts a firmware-level rejection into a mutation error. */
@@ -527,6 +528,7 @@ export type OtaChunkRequest = {
   offset: number;
   data_base64: string;
   final_chunk: boolean;
+  upload_token: string;
 };
 
 export type OtaPhase =

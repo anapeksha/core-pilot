@@ -164,6 +164,10 @@ bool header(httpd_req_t* req, const char* name, char* out, size_t capacity) {
   return httpd_req_get_hdr_value_str(req, name, out, capacity) == ESP_OK;
 }
 
+bool unambiguousHeader(httpd_req_t* req, const char* name, char* out, size_t capacity) {
+  return header(req, name, out, capacity) && std::strchr(out, ',') == nullptr;
+}
+
 bool validToken(const char* token) {
   if (token == nullptr || std::strlen(token) != 64)
     return false;
@@ -177,7 +181,7 @@ bool validToken(const char* token) {
 
 bool cookieToken(httpd_req_t* request, char (&token)[65]) {
   char cookies[256]{};
-  if (!header(request, "Cookie", cookies, sizeof(cookies)))
+  if (!unambiguousHeader(request, "Cookie", cookies, sizeof(cookies)))
     return false;
   constexpr char prefix[] = "core_pilot_session=";
   char* current = cookies;
@@ -206,7 +210,7 @@ bool authorizeRequest(httpd_req_t* request, std::uint64_t timestamp) {
   char bearer[80]{};
   char cookie[65]{};
   bool allowed = false;
-  if (header(request, "Authorization", bearer, sizeof(bearer)) &&
+  if (unambiguousHeader(request, "Authorization", bearer, sizeof(bearer)) &&
       std::strncmp(bearer, "Bearer ", 7) == 0 && validToken(bearer + 7)) {
     allowed = auth.authorize(bearer + 7, timestamp);
   } else if (cookieToken(request, cookie)) {
@@ -263,7 +267,7 @@ esp_err_t authHandler(httpd_req_t* req) {
   if (!valid) {
     if (code && cJSON_IsString(code))
       mbedtls_platform_zeroize(code->valuestring, std::strlen(code->valuestring));
-    cJSON_Delete(document);
+    core_domain::delete_json_sensitive(document);
     mbedtls_platform_zeroize(body, sizeof(body));
     return rejectAuth(req, "400 Bad Request", "invalid_request", "Invalid session request.");
   }
@@ -276,7 +280,7 @@ esp_err_t authHandler(httpd_req_t* req) {
       result = auth.exchange(code->valuestring, *random_source, now(), token);
   }
   mbedtls_platform_zeroize(code->valuestring, std::strlen(code->valuestring));
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   mbedtls_platform_zeroize(body, sizeof(body));
 
   if (result != core_security::ExchangeResult::ok) {
@@ -320,7 +324,7 @@ esp_err_t logoutHandler(httpd_req_t* req) {
   bool revoked = false;
   {
     AuthLock lock;
-    if (lock.held() && header(req, "Authorization", bearer, sizeof(bearer)) &&
+    if (lock.held() && unambiguousHeader(req, "Authorization", bearer, sizeof(bearer)) &&
         std::strncmp(bearer, "Bearer ", 7) == 0 && validToken(bearer + 7)) {
       revoked = auth.revoke(bearer + 7);
     } else if (lock.held() && cookieToken(req, cookie)) {
@@ -346,9 +350,10 @@ esp_err_t dispatch(httpd_req_t* req) {
   httpd_resp_set_hdr(req, "Cross-Origin-Resource-Policy", "same-origin");
   httpd_resp_set_hdr(req, "X-Frame-Options", "DENY");
   char site[32]{}, origin[160]{}, host[128]{};
-  if (!header(req, "Sec-Fetch-Site", site, sizeof(site)) || !std::strcmp(site, "cross-site") ||
-      !header(req, "Origin", origin, sizeof(origin)) || !header(req, "Host", host, sizeof(host)) ||
-      !device_host_allowed(host) ||
+  if (!unambiguousHeader(req, "Sec-Fetch-Site", site, sizeof(site)) ||
+      !std::strcmp(site, "cross-site") ||
+      !unambiguousHeader(req, "Origin", origin, sizeof(origin)) ||
+      !unambiguousHeader(req, "Host", host, sizeof(host)) || !device_host_allowed(host) ||
       core_domain::same_origin_mutation_allowed(origin[0] ? origin : nullptr, host) !=
           core_domain::ApiError::ok)
     return reject(req, "403 Forbidden", "Origin rejected");
@@ -366,7 +371,7 @@ esp_err_t dispatch(httpd_req_t* req) {
     return rejectRateLimited(req, rate.retry_after_seconds);
   if (req->method == HTTP_POST || req->method == HTTP_PATCH) {
     char type[64]{};
-    if (!header(req, "Content-Type", type, sizeof(type)) ||
+    if (!unambiguousHeader(req, "Content-Type", type, sizeof(type)) ||
         std::strcmp(type, "application/json") != 0)
       return reject(req, "415 Unsupported Media Type", "Expected application/json");
   }

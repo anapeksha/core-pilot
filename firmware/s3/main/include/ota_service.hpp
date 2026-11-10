@@ -16,7 +16,7 @@ namespace core_pilot {
 class OtaService final {
 public:
   esp_err_t start();
-  CoreOta::Result prepare(const core_domain::OtaPrepare& request);
+  CoreOta::Result prepare(const core_domain::OtaPrepare& request, char (&upload_token)[65]);
   CoreOta::Result write(const core_domain::OtaChunk& request);
   CoreOta::Status status() const;
   bool deferRestart();
@@ -28,6 +28,7 @@ private:
     core_domain::OtaPrepare prepare{};
     core_domain::OtaChunk chunk{};
     CoreOta::Result result{};
+    CoreOta::SessionId session{};
   };
 
   static constexpr UBaseType_t kQueueDepth = 1;

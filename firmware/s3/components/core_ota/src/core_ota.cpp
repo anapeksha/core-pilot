@@ -2,7 +2,9 @@
 
 #include "core_ota_policy.hpp"
 #include "esp_app_desc.h"
+#include "esp_random.h"
 #include "esp_timer.h"
+#include "mbedtls/platform_util.h"
 
 #include <cstring>
 
@@ -78,9 +80,9 @@ void CoreOta::clear_upload_locked() {
     hash_active_ = false;
   }
   partition_ = nullptr;
-  session_ = 0;
+  mbedtls_platform_zeroize(&session_, sizeof session_);
   last_activity_us_ = 0;
-  std::memset(expected_digest_, 0, sizeof expected_digest_);
+  mbedtls_platform_zeroize(expected_digest_, sizeof expected_digest_);
 }
 
 CoreOta::Result CoreOta::fail_locked(Error error, esp_err_t esp_error) {
@@ -95,8 +97,8 @@ CoreOta::Result CoreOta::fail_locked(Error error, esp_err_t esp_error) {
     hash_active_ = false;
   }
   partition_ = nullptr;
-  std::memset(expected_digest_, 0, sizeof expected_digest_);
-  session_ = 0;
+  mbedtls_platform_zeroize(expected_digest_, sizeof expected_digest_);
+  mbedtls_platform_zeroize(&session_, sizeof session_);
   last_activity_us_ = 0;
   status_.state = State::failed;
   status_.last_error = error;
@@ -114,16 +116,12 @@ void CoreOta::expire_locked() {
     fail_locked(Error::expired, ESP_ERR_TIMEOUT);
 }
 
-CoreOta::Result CoreOta::prepare(const Prepare& request) {
-  return prepare_impl(request, nullptr);
-}
-
 CoreOta::Result CoreOta::prepare(const Prepare& request, SessionId& session) {
-  session = 0;
-  return prepare_impl(request, &session);
+  session = {};
+  return prepare_impl(request, session);
 }
 
-CoreOta::Result CoreOta::prepare_impl(const Prepare& request, SessionId* session) {
+CoreOta::Result CoreOta::prepare_impl(const Prepare& request, SessionId& session) {
   Lock lock(mutex_);
   if (!lock.held())
     return {Error::no_memory, ESP_ERR_NO_MEM};
@@ -165,20 +163,15 @@ CoreOta::Result CoreOta::prepare_impl(const Prepare& request, SessionId* session
   status_ = {};
   status_.state = State::prepared;
   last_activity_us_ = esp_timer_get_time();
-  if (session != nullptr) {
-    next_session_ = ota_policy::next_session(next_session_);
-    session_ = next_session_;
-    *session = session_;
-  }
+  do {
+    esp_fill_random(session_.bytes, sizeof session_.bytes);
+  } while (!ota_policy::session_matches(session_.bytes, session_.bytes, sizeof session_.bytes));
+  session = session_;
   status_.assurance = Assurance::signed_update;
   status_.size_bytes = request.size_bytes;
   status_.restart_after_update = request.restart_after_update;
   std::memcpy(status_.version, request.version, std::strlen(request.version) + 1);
   return {};
-}
-
-CoreOta::Result CoreOta::write(const Chunk& chunk) {
-  return write_impl(chunk, 0);
 }
 
 CoreOta::Result CoreOta::write(const Chunk& chunk, SessionId session) {
@@ -191,22 +184,22 @@ CoreOta::Result CoreOta::write_impl(const Chunk& chunk, SessionId session) {
     return {Error::no_memory, ESP_ERR_NO_MEM};
   expire_locked();
   if ((status_.state != State::prepared && status_.state != State::staging) ||
-      !ota_policy::session_matches(session, session_))
+      !ota_policy::session_matches(session.bytes, session_.bytes, sizeof session_.bytes))
     return {Error::invalid_state, ESP_ERR_INVALID_STATE};
   const auto chunk_error =
       ota_policy::validate_chunk(chunk.data, chunk.size, kMaxChunkBytes, chunk.offset,
                                  status_.written_bytes, status_.size_bytes, chunk.final_chunk);
   switch (chunk_error) {
   case ota_policy::ChunkError::invalid_argument:
-    return fail_locked(Error::invalid_argument, ESP_ERR_INVALID_ARG);
+    return {Error::invalid_argument, ESP_ERR_INVALID_ARG};
   case ota_policy::ChunkError::chunk_too_large:
-    return fail_locked(Error::chunk_too_large, ESP_ERR_INVALID_SIZE);
+    return {Error::chunk_too_large, ESP_ERR_INVALID_SIZE};
   case ota_policy::ChunkError::offset_mismatch:
-    return fail_locked(Error::offset_mismatch, ESP_ERR_INVALID_ARG);
+    return {Error::offset_mismatch, ESP_ERR_INVALID_ARG};
   case ota_policy::ChunkError::image_too_large:
-    return fail_locked(Error::image_too_large, ESP_ERR_INVALID_SIZE);
+    return {Error::image_too_large, ESP_ERR_INVALID_SIZE};
   case ota_policy::ChunkError::final_mismatch:
-    return fail_locked(Error::final_mismatch, ESP_ERR_INVALID_SIZE);
+    return {Error::final_mismatch, ESP_ERR_INVALID_SIZE};
   case ota_policy::ChunkError::ok:
     break;
   }
@@ -260,9 +253,9 @@ CoreOta::Result CoreOta::write_impl(const Chunk& chunk, SessionId session) {
     return fail_locked(Error::boot_partition_failed, error);
 
   partition_ = nullptr;
-  session_ = 0;
+  mbedtls_platform_zeroize(&session_, sizeof session_);
   last_activity_us_ = 0;
-  std::memset(expected_digest_, 0, sizeof expected_digest_);
+  mbedtls_platform_zeroize(expected_digest_, sizeof expected_digest_);
   status_.state = State::activated;
   status_.digest_verified = true;
   status_.last_error = Error::ok;
@@ -270,13 +263,7 @@ CoreOta::Result CoreOta::write_impl(const Chunk& chunk, SessionId session) {
   return {};
 }
 
-CoreOta::Result CoreOta::abort() {
-  return abort_impl(0);
-}
-
 CoreOta::Result CoreOta::abort(SessionId session) {
-  if (session == 0)
-    return {Error::invalid_argument, ESP_ERR_INVALID_ARG};
   return abort_impl(session);
 }
 
@@ -285,8 +272,8 @@ CoreOta::Result CoreOta::abort_impl(SessionId session) {
   if (!lock.held())
     return {Error::no_memory, ESP_ERR_NO_MEM};
   expire_locked();
-  if (session != session_ ||
-      (session != 0 && status_.state != State::prepared && status_.state != State::staging))
+  if (!ota_policy::session_matches(session.bytes, session_.bytes, sizeof session_.bytes) ||
+      (status_.state != State::prepared && status_.state != State::staging))
     return {Error::invalid_state, ESP_ERR_INVALID_STATE};
   esp_err_t error = ESP_OK;
   if (handle_open_)
@@ -298,9 +285,9 @@ CoreOta::Result CoreOta::abort_impl(SessionId session) {
     hash_active_ = false;
   }
   partition_ = nullptr;
-  session_ = 0;
+  mbedtls_platform_zeroize(&session_, sizeof session_);
   last_activity_us_ = 0;
-  std::memset(expected_digest_, 0, sizeof expected_digest_);
+  mbedtls_platform_zeroize(expected_digest_, sizeof expected_digest_);
   status_ = {};
   if (error != ESP_OK) {
     status_.state = State::failed;
