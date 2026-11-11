@@ -4,6 +4,8 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.1.0-rc.3] - 2026-11-11
+
 ### Added
 
 - Bounded Matter operation history and per-device subscription health in the authenticated API and dashboard.
@@ -106,6 +108,7 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Matter-over-Thread and Thread Border Router readiness have not yet been demonstrated on hardware.
 - This release candidate is not CSA Matter certified and does not claim formal Matter specification compliance.
 
-[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.2...HEAD
+[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.3...HEAD
+[0.1.0-rc.3]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.2...v0.1.0-rc.3
 [0.1.0-rc.2]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.1...v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/anapeksha/core-pilot/releases/tag/v0.1.0-rc.1
