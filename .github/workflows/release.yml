@@ -122,10 +122,17 @@ jobs:
             0xf000 build/ota_data_initial.bin \
             0x20000 build/core_pilot.bin
           cp build/core_pilot.bin "${ota}"
+          python ../../tools/release.py package-manifest \
+            --release-dir release \
+            --partitions partitions.csv \
+            --version "${VERSION}" \
+            --source-commit "${GITHUB_SHA}" \
+            --idf-version "6.0.2"
           cd release
           checksums="core-pilot-${VERSION}-SHA256SUMS"
           sha256sum "core-pilot-${VERSION}.bin" \
-            "core-pilot-${VERSION}-ota.bin" > "${checksums}"
+            "core-pilot-${VERSION}-ota.bin" \
+            "core-pilot-${VERSION}-manifest.json" > "${checksums}"
       - uses: actions/upload-artifact@v7
         with:
           name: release-files
@@ -133,6 +140,7 @@ jobs:
             firmware/s3/release/core-pilot-${{ env.VERSION }}.bin
             firmware/s3/release/core-pilot-${{ env.VERSION }}-ota.bin
             firmware/s3/release/core-pilot-${{ env.VERSION }}-SHA256SUMS
+            firmware/s3/release/core-pilot-${{ env.VERSION }}-manifest.json
           if-no-files-found: error
           retention-days: 1
 
@@ -154,3 +162,4 @@ jobs:
           files: |
             release/core-pilot-*.bin
             release/core-pilot-*-SHA256SUMS
+            release/core-pilot-*-manifest.json
