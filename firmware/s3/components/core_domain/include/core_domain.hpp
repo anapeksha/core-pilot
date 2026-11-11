@@ -129,6 +129,11 @@ struct ActivityPageRequest {
   uint8_t limit = 0;
 };
 ApiError parse_activity_page_request(const cJSON* object, ActivityPageRequest& result);
+struct MatterOperationPageRequest {
+  uint64_t cursor = 0;
+  uint8_t limit = 8;
+};
+ApiError parse_matter_operation_page_query(const char* query, MatterOperationPageRequest& result);
 
 // An RAII lease around a shared atomic counter; noncopyable to avoid double
 // release.

@@ -182,6 +182,46 @@ bool serialize_mutation_response(bool accepted, const char* status, const char* 
     output[0] = '\0';
   return ok;
 }
+ApiError parse_matter_operation_page_query(const char* query, MatterOperationPageRequest& result) {
+  MatterOperationPageRequest temp{};
+  if (query == nullptr || query[0] == '\0') {
+    result = temp;
+    return ApiError::ok;
+  }
+  bool cursor_seen = false;
+  bool limit_seen = false;
+  const char* field = query;
+  while (*field != '\0') {
+    const char* end = std::strchr(field, '&');
+    const size_t length = end == nullptr ? std::strlen(field) : static_cast<size_t>(end - field);
+    const char* equals = static_cast<const char*>(std::memchr(field, '=', length));
+    if (equals == nullptr || equals == field || equals + 1 == field + length)
+      return ApiError::invalid_json;
+    const size_t name_length = static_cast<size_t>(equals - field);
+    uint64_t value = 0;
+    for (const char* digit = equals + 1; digit != field + length; ++digit) {
+      if (*digit < '0' || *digit > '9' || value > (UINT64_MAX - (*digit - '0')) / 10)
+        return ApiError::invalid_json;
+      value = value * 10 + static_cast<uint64_t>(*digit - '0');
+    }
+    if (name_length == 6 && std::memcmp(field, "cursor", 6) == 0 && !cursor_seen) {
+      temp.cursor = value;
+      cursor_seen = true;
+    } else if (name_length == 5 && std::memcmp(field, "limit", 5) == 0 && !limit_seen &&
+               value >= 1 && value <= 8) {
+      temp.limit = static_cast<uint8_t>(value);
+      limit_seen = true;
+    } else {
+      return ApiError::invalid_json;
+    }
+    field = end == nullptr ? field + length : end + 1;
+    if (*field == '\0' && end != nullptr)
+      return ApiError::invalid_json;
+  }
+  result = temp;
+  return ApiError::ok;
+}
+
 ApiError parse_activity_page_request(const cJSON* object, ActivityPageRequest& result) {
   if (!cJSON_IsObject(object))
     return ApiError::invalid_json;
