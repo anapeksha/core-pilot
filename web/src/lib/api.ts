@@ -230,6 +230,24 @@ export type MatterRuntimeSnapshot = {
   last_terminal: MatterOperation | null;
 };
 
+export type MatterTerminalOperation = {
+  cursor: string;
+  operation_id: number;
+  kind: string;
+  state: string;
+  device_id: string | null;
+  endpoint_id: number | null;
+  error: string;
+};
+
+export type MatterOperationPage = {
+  operations: MatterTerminalOperation[];
+  cursor: string;
+  limit: number;
+  retained: number;
+  detail: string;
+};
+
 export type MatterStatus = {
   implementation: string;
   commissioned: boolean;
@@ -596,6 +614,15 @@ export type SystemStatus = {
   dashboard_max_transfer_ms?: number;
 };
 
+export type MatterSubscription = {
+  health: "active" | "recovering" | "not_configured" | "inactive" | "unknown";
+  case_ready: boolean;
+  recovery_pending: boolean;
+  configured: boolean;
+  active: boolean;
+  report_known: boolean;
+};
+
 export type Device = {
   id: string | { 0: string };
   name: string;
@@ -607,6 +634,7 @@ export type Device = {
   last_seen: number | { 0: number };
   node_id?: string;
   endpoint_id?: number;
+  subscription?: MatterSubscription;
 };
 
 export type DevicesResponse = {
@@ -1380,6 +1408,15 @@ export function loadAutomationOperation(
 
 export function loadMatter(signal?: AbortSignal): Promise<MatterStatus> {
   return loadJson<MatterStatus>("/api/v1/matter", signal);
+}
+
+export function loadMatterOperations(
+  signal?: AbortSignal,
+): Promise<MatterOperationPage> {
+  return loadJson<MatterOperationPage>(
+    "/api/v1/matter/operations?limit=8",
+    signal,
+  );
 }
 
 export function commissionMatter(

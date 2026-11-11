@@ -224,8 +224,8 @@ export default function AccessGate(props: ParentProps) {
             </Card>
 
             <p class="mt-5 text-center text-xs leading-relaxed text-muted-foreground">
-              Your access session stays in this browser tab and expires after
-              eight hours.
+              Your access session stays in this browser tab and expires after 30
+              minutes.
             </p>
           </div>
         </main>

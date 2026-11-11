@@ -4,6 +4,17 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+### Added
+
+- Bounded Matter operation history and per-device subscription health in the authenticated API and dashboard.
+- Deterministic release manifests with image digests, flash layout metadata, and application headroom checks.
+- Global dashboard connectivity status with bounded recovery after the browser reconnects.
+
+### Changed
+
+- Updated GitHub Actions to their current friendly major versions.
+- Added explicit dashboard logout, corrected session-duration guidance, and cleared cached device data when access ends.
+
 ## [0.1.0-rc.2] - 2026-11-11
 
 ### Added

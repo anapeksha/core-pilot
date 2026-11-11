@@ -1378,6 +1378,24 @@ esp_err_t devicesHandler(httpd_req_t* request, const HttpRuntime& runtime) {
       cJSON_AddItemToArray(state, on_off);
     }
     cJSON_AddStringToObject(item, "availability", device.reachable ? "online" : "unknown");
+    CoreMatter::NodeSnapshot node{};
+    CoreMatter::EndpointSnapshot endpoint{};
+    const bool has_node = runtime.matter.nodeSnapshot(device.node_id, node);
+    const bool has_endpoint =
+        device.endpoint_id != 0 &&
+        runtime.matter.endpointSnapshot(device.node_id, device.endpoint_id, endpoint);
+    cJSON* subscription = cJSON_AddObjectToObject(item, "subscription");
+    cJSON_AddStringToObject(subscription, "health",
+                            !has_node                      ? "unknown"
+                            : node.recovery_pending        ? "recovering"
+                            : !has_endpoint                ? "not_configured"
+                            : endpoint.subscription_active ? "active"
+                                                           : "inactive");
+    cJSON_AddBoolToObject(subscription, "case_ready", has_node && node.case_ready);
+    cJSON_AddBoolToObject(subscription, "recovery_pending", has_node && node.recovery_pending);
+    cJSON_AddBoolToObject(subscription, "configured", has_endpoint && endpoint.configured);
+    cJSON_AddBoolToObject(subscription, "active", has_endpoint && endpoint.subscription_active);
+    cJSON_AddBoolToObject(subscription, "report_known", has_endpoint && endpoint.report_known);
     cJSON_AddNumberToObject(item, "last_seen", 0);
     cJSON_AddNumberToObject(item, "endpoint_id", device.endpoint_id);
     char node_id[17]{};
@@ -1806,6 +1824,62 @@ esp_err_t matterHandler(httpd_req_t* request, const HttpRuntime& runtime) {
                           : ready
                               ? "Matter controller is ready to commission a device."
                               : "Matter controller is unavailable; dashboard remains operational.");
+  return sendJson(request, response);
+}
+
+esp_err_t matterOperationsHandler(httpd_req_t* request) {
+  const auto* runtime = static_cast<const HttpRuntime*>(request->user_ctx);
+  if (runtime == nullptr)
+    return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR, "Missing runtime");
+
+  char query[96]{};
+  const std::size_t query_length = httpd_req_get_url_query_len(request);
+  if (query_length >= sizeof query ||
+      (query_length != 0 && httpd_req_get_url_query_str(request, query, sizeof query) != ESP_OK))
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid operation page query");
+  core_domain::MatterOperationPageRequest page{};
+  if (core_domain::parse_matter_operation_page_query(query_length == 0 ? nullptr : query, page) !=
+      core_domain::ApiError::ok)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid operation page query");
+
+  CoreMatter::TerminalCommand terminals[8]{};
+  const std::size_t count =
+      runtime->matter.terminalCommandsAfter(page.cursor, terminals, page.limit);
+  std::uint64_t cursor = page.cursor;
+  cJSON* response = cJSON_CreateObject();
+  cJSON* operations = cJSON_AddArrayToObject(response, "operations");
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto& terminal = terminals[index];
+    cursor = terminal.sequence;
+    cJSON* operation = cJSON_CreateObject();
+    char operation_cursor[21]{};
+    std::snprintf(operation_cursor, sizeof operation_cursor, "%llu",
+                  static_cast<unsigned long long>(terminal.sequence));
+    cJSON_AddStringToObject(operation, "cursor", operation_cursor);
+    cJSON_AddNumberToObject(operation, "operation_id", terminal.status.operation_id);
+    cJSON_AddStringToObject(operation, "kind", commandKind(terminal.status.kind));
+    cJSON_AddStringToObject(operation, "state", commandState(terminal.status.state));
+    if (terminal.status.node_id == 0) {
+      cJSON_AddNullToObject(operation, "device_id");
+      cJSON_AddNullToObject(operation, "endpoint_id");
+    } else {
+      char node_id[17]{};
+      std::snprintf(node_id, sizeof node_id, "%016llx",
+                    static_cast<unsigned long long>(terminal.status.node_id));
+      cJSON_AddStringToObject(operation, "device_id", node_id);
+      cJSON_AddNumberToObject(operation, "endpoint_id", terminal.status.endpoint_id);
+    }
+    cJSON_AddStringToObject(operation, "error", esp_err_to_name(terminal.status.last_error));
+    cJSON_AddItemToArray(operations, operation);
+  }
+  char next_cursor[21]{};
+  std::snprintf(next_cursor, sizeof next_cursor, "%llu", static_cast<unsigned long long>(cursor));
+  cJSON_AddStringToObject(response, "cursor", next_cursor);
+  cJSON_AddNumberToObject(response, "limit", page.limit);
+  cJSON_AddNumberToObject(response, "retained", count);
+  cJSON_AddStringToObject(response, "detail",
+                          count == 0 ? "No newer Matter terminal operations are retained."
+                                     : "Matter terminal operations returned.");
   return sendJson(request, response);
 }
 
@@ -2970,6 +3044,10 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                               .method = HTTP_POST,
                               .handler = otaMutationHandler,
                               .user_ctx = const_cast<HttpRuntime*>(&runtime)};
+  const httpd_uri_t matter_operations{.uri = "/api/v1/matter/operations",
+                                      .method = HTTP_GET,
+                                      .handler = matterOperationsHandler,
+                                      .user_ctx = const_cast<HttpRuntime*>(&runtime)};
   const httpd_uri_t commission{.uri = "/api/v1/matter/commission",
                                .method = HTTP_POST,
                                .handler = commissionHandler,
@@ -3097,6 +3175,7 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
       registerHttpAccessRoute(server, &reboot) != ESP_OK ||
       registerHttpAccessRoute(server, &ota_prepare) != ESP_OK ||
       registerHttpAccessRoute(server, &ota_chunk) != ESP_OK ||
+      registerHttpAccessRoute(server, &matter_operations) != ESP_OK ||
       registerHttpAccessRoute(server, &commission) != ESP_OK ||
       registerHttpAccessRoute(server, &thread_dataset) != ESP_OK ||
       registerHttpAccessRoute(server, &automation_run) != ESP_OK ||

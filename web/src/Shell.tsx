@@ -2,6 +2,7 @@ import { A, useLocation, useNavigate } from "@solidjs/router";
 import { createEffect, For, onMount, Show, type ParentProps } from "solid-js";
 import {
   HiOutlineAdjustmentsHorizontal,
+  HiOutlineArrowRightStartOnRectangle,
   HiOutlineBolt,
   HiOutlineCpuChip,
   HiOutlineHome,
@@ -11,7 +12,9 @@ import {
   HiOutlineXMark,
 } from "solid-icons/hi";
 
+import { Button } from "~/components/button";
 import { CommandPalette } from "~/components/command-palette";
+import ConnectionStatus from "~/components/connection-status";
 import { Flex } from "~/components/flex";
 import {
   Sidebar,
@@ -29,6 +32,7 @@ import {
   useSidebar,
 } from "~/components/sidebar";
 import { TooltipIconButton } from "~/components/tooltip";
+import { logoutAccess } from "~/lib/auth";
 import { pageByPath, pages, type Page } from "~/lib/pages";
 import { routePaths } from "~/lib/routePaths";
 
@@ -166,7 +170,18 @@ export default function Shell(props: ParentProps) {
                 Core Pilot
               </div>
             </div>
+            <ConnectionStatus />
             <CommandPalette />
+            <Button
+              variant="ghost"
+              size="sm"
+              class="shrink-0 gap-2"
+              onClick={() => void logoutAccess()}
+            >
+              <HiOutlineArrowRightStartOnRectangle aria-hidden="true" />
+              <span class="hidden sm:inline">Log out</span>
+              <span class="sr-only sm:hidden">Log out</span>
+            </Button>
           </Flex>
         </header>
         <main

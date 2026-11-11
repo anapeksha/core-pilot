@@ -39,6 +39,7 @@ import {
   SheetTitle,
 } from "~/components/sheet";
 import { Skeleton } from "~/components/skeleton";
+import { StatusBadge, type StatusTone } from "~/components/status";
 import { Stepper } from "~/components/stepper";
 import {
   TextField,
@@ -56,7 +57,11 @@ import {
   matterCommissionCancelMutation,
   matterCommissionMutation,
 } from "~/mutations/matter";
-import { matterQuery as createMatterQuery } from "~/queries/matter";
+import {
+  fallbackMatterOperations,
+  matterOperationsQuery as createMatterOperationsQuery,
+  matterQuery as createMatterQuery,
+} from "~/queries/matter";
 
 const setupCodeSchema = z
   .string()
@@ -74,6 +79,20 @@ const threadCommissioningSchema = commissioningSchema;
 type WifiCommissioningValues = z.input<typeof wifiCommissioningSchema>;
 type ThreadCommissioningValues = z.input<typeof threadCommissioningSchema>;
 type CommissioningSheet = MatterTransport | null;
+
+function operationTone(state: string): StatusTone {
+  if (state === "complete") return "ok";
+  if (state === "failed") return "error";
+  if (state === "cancelled") return "muted";
+  return "unavailable";
+}
+
+function operationLabel(value: string): string {
+  return value
+    .split("_")
+    .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
+    .join(" ");
+}
 
 function statusToneClass(tone: StatusItem["tone"]): string {
   return tone === "muted" ? "text-muted-foreground" : "text-foreground";
@@ -172,9 +191,12 @@ function MatterDiagnosticsSkeleton() {
 
 export default function MatterDiagnostics() {
   const matterQuery = createMatterQuery();
+  const operationsQuery = createMatterOperationsQuery();
   const commissionMutation = matterCommissionMutation();
   const cancelMutation = matterCommissionCancelMutation();
   const matter = () => matterQuery.data ?? fallbackMatter;
+  const operationHistory = () =>
+    operationsQuery.data ?? fallbackMatterOperations;
   const [commissioningSheet, setCommissioningSheet] =
     createSignal<CommissioningSheet>(null);
   const [submittedOperationId, setSubmittedOperationId] = createSignal<
@@ -411,6 +433,65 @@ export default function MatterDiagnostics() {
                 );
               }}
             </Show>
+            <Card aria-labelledby="matter-operation-history-title">
+              <CardHeader class="pb-3">
+                <CardTitle id="matter-operation-history-title" class="text-sm">
+                  Recent Matter operations
+                </CardTitle>
+                <CardDescription>
+                  Up to eight terminal device commands retained by the
+                  controller.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <Show
+                  when={!operationsQuery.isError}
+                  fallback={
+                    <p role="status" class="text-sm text-muted-foreground">
+                      Operation history is unavailable.
+                    </p>
+                  }
+                >
+                  <Show
+                    when={operationHistory().operations.length > 0}
+                    fallback={
+                      <p class="text-sm text-muted-foreground">
+                        {operationsQuery.isFetching
+                          ? "Loading operation history…"
+                          : "No terminal Matter operations are retained."}
+                      </p>
+                    }
+                  >
+                    <ul class="divide-y" aria-label="Recent Matter operations">
+                      <For each={operationHistory().operations.slice(0, 8)}>
+                        {(operation) => (
+                          <li class="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="min-w-0">
+                              <p class="text-sm font-medium">
+                                {operationLabel(operation.kind)}
+                              </p>
+                              <p class="text-xs text-muted-foreground">
+                                Operation {operation.operation_id}
+                                {operation.device_id
+                                  ? ` · Device ${operation.device_id}${operation.endpoint_id === null ? "" : ` · Endpoint ${operation.endpoint_id}`}`
+                                  : " · Controller"}
+                                {operation.error !== "ESP_OK"
+                                  ? ` · ${operation.error}`
+                                  : ""}
+                              </p>
+                            </div>
+                            <StatusBadge
+                              tone={operationTone(operation.state)}
+                              label={operationLabel(operation.state)}
+                            />
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </Show>
+                </Show>
+              </CardContent>
+            </Card>
             <Accordion collapsible class="rounded-lg border bg-muted/20">
               <AccordionItem value="commissioning-diagnostics" class="border-0">
                 <AccordionTrigger class="px-4 py-3 text-left hover:no-underline">

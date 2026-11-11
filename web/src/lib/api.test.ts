@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as api from "./api";
 import { accessGranted, clearAccess, unlockAccess } from "./auth";
+import { queryClient } from "./queryClient";
 import {
   loadActivityPage,
+  loadMatterOperations,
   loadNetwork,
   MAX_OTA_IMAGE_BYTES,
   prepareOta,
@@ -25,6 +27,7 @@ describe("api client", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    queryClient.clear();
   });
 
   it("uses same-origin credentials and clears cookie access on 401 without replay", async () => {
@@ -38,6 +41,7 @@ describe("api client", () => {
     vi.stubGlobal("fetch", fetchMock);
     await unlockAccess("0123456789abcdef");
     await loadNetwork();
+    queryClient.setQueryData(["sensitive"], { secret: "cached" });
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       "/api/v1/network",
@@ -48,6 +52,7 @@ describe("api client", () => {
     );
     await expect(api.rebootSystem()).rejects.toThrow("401");
     expect(accessGranted()).toBe(false);
+    expect(queryClient.getQueryData(["sensitive"])).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
@@ -93,6 +98,34 @@ describe("api client", () => {
     });
     expect(fetchMock).toHaveBeenCalledWith(
       "/api/v1/network",
+      expect.objectContaining({ headers: { accept: "application/json" } }),
+    );
+  });
+
+  it("loads a firmware-bounded Matter operation page", async () => {
+    const page = {
+      operations: [
+        {
+          cursor: "7",
+          operation_id: 42,
+          kind: "set_on_off",
+          state: "complete",
+          device_id: "0000000000001234",
+          endpoint_id: 1,
+          error: "ESP_OK",
+        },
+      ],
+      cursor: "7",
+      limit: 8,
+      retained: 1,
+      detail: "Matter terminal operations returned.",
+    };
+    const fetchMock = vi.fn(() => Promise.resolve(jsonResponse(page)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(loadMatterOperations()).resolves.toEqual(page);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/v1/matter/operations?limit=8",
       expect.objectContaining({ headers: { accept: "application/json" } }),
     );
   });

@@ -111,6 +111,23 @@ function createFirmwareState() {
       },
       provider_transport_requirements: [],
     },
+    matterOperations: {
+      operations: [
+        {
+          cursor: "7",
+          operation_id: 42,
+          kind: "set_on_off",
+          state: "complete",
+          device_id: "0000000000001234",
+          endpoint_id: 1,
+          error: "ESP_OK",
+        },
+      ],
+      cursor: "7",
+      limit: 8,
+      retained: 1,
+      detail: "Matter terminal operations returned.",
+    },
     devices: [
       {
         id: "matter-light-1",
@@ -121,6 +138,14 @@ function createFirmwareState() {
         capabilities: ["On/Off", "Level"],
         node_id: "0000000000001234",
         endpoint_id: 1,
+        subscription: {
+          health: "active",
+          case_ready: true,
+          recovery_pending: false,
+          configured: true,
+          active: true,
+          report_known: true,
+        },
       },
     ],
     rooms: [{ id: "lab", name: "Lab" }],
@@ -574,6 +599,8 @@ async function mockFirmwareApi(page: Page, options: MockFirmwareOptions = {}) {
     if (path === "/api/v1/time") return json(route, state.time);
     if (path === "/api/v1/storage") return json(route, state.storage);
     if (path === "/api/v1/matter") return json(route, state.matter);
+    if (path === "/api/v1/matter/operations")
+      return json(route, state.matterOperations);
     if (path === "/api/v1/ai") return json(route, state.ai);
     if (path === "/api/v1/ai/memory") return json(route, state.aiMemory);
     if (path === "/api/v1/ai/prompts") return json(route, state.aiPrompts);
@@ -632,6 +659,29 @@ test("routes every dashboard feature page and renders live firmware status", asy
     await page.goto(path);
     await expectHeading(page, heading);
   }
+});
+
+test("exposes connection status and logs out visibly", async ({
+  page,
+  context,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/");
+  await expectHeading(page, "Home");
+
+  const logout = page.getByRole("button", { name: "Log out" });
+  await expect(logout).toBeVisible();
+  await expect(page.getByRole("status", { name: "Online" })).toBeVisible();
+
+  await context.setOffline(true);
+  await expect(page.getByRole("status", { name: "Offline" })).toBeVisible();
+  await context.setOffline(false);
+  await expect(page.getByRole("status", { name: "Online" })).toBeVisible();
+
+  await logout.click();
+  await expect(
+    page.getByRole("heading", { name: "Unlock your dashboard" }),
+  ).toBeVisible();
 });
 
 test("shows Home card skeletons until its APIs resolve", async ({ page }) => {
@@ -1310,9 +1360,14 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   state.matter.thread_commissioning_ready = true;
 
   await page.goto("/#/devices");
-  await expect(page.getByText("Bench Lamp")).toBeVisible();
+  await expect(page.getByText("Bench Lamp", { exact: true })).toBeVisible();
   await expect(page.getByText("On/Off", { exact: true })).toBeVisible();
   await expect(page.getByText("Level", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .locator('[data-device-id="matter-light-1"]')
+      .getByText("Active", { exact: true }),
+  ).toBeVisible();
 
   await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(
     0,
@@ -1335,6 +1390,14 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   await expect(page.getByText("Matter setup is modeled")).toBeVisible();
 
   await page.goto("/#/devices/add");
+  await expect(
+    page.getByRole("heading", { name: "Recent Matter operations" }),
+  ).toBeVisible();
+  await expect(page.getByText("Set On Off", { exact: true })).toBeVisible();
+  await expect(page.getByText("Complete", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Device 0000000000001234 · Endpoint 1", { exact: false }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Start Wi‑Fi journey" }).click();
   const wifiSheet = page.getByRole("dialog", { name: "Matter over Wi‑Fi" });
   await wifiSheet

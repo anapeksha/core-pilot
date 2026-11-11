@@ -38,6 +38,8 @@ it("does not mount dashboard content before access and hides it on expiry", asyn
   );
   expect(mounted).toBe(false);
   await vi.waitFor(() => expect(root.textContent).toContain("Bootstrap code"));
+  expect(root.textContent).toContain("expires after 30 minutes");
+  expect(root.textContent).not.toContain("eight hours");
   await unlockAccess("0123456789abcdef");
   expect(root.textContent).toContain("Protected dashboard");
   clearAccess();

@@ -26,17 +26,17 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || github.sha }}
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npm run build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dashboard-dist
           path: dist
@@ -49,10 +49,10 @@ jobs:
     runs-on: ubuntu-latest
     container: espressif/idf:v6.0.2
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.release.tag_name || github.sha }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: dashboard-dist
           path: dist
@@ -122,17 +122,25 @@ jobs:
             0xf000 build/ota_data_initial.bin \
             0x20000 build/core_pilot.bin
           cp build/core_pilot.bin "${ota}"
+          python ../../tools/release.py package-manifest \
+            --release-dir release \
+            --partitions partitions.csv \
+            --version "${VERSION}" \
+            --source-commit "${GITHUB_SHA}" \
+            --idf-version "6.0.2"
           cd release
           checksums="core-pilot-${VERSION}-SHA256SUMS"
           sha256sum "core-pilot-${VERSION}.bin" \
-            "core-pilot-${VERSION}-ota.bin" > "${checksums}"
-      - uses: actions/upload-artifact@v4
+            "core-pilot-${VERSION}-ota.bin" \
+            "core-pilot-${VERSION}-manifest.json" > "${checksums}"
+      - uses: actions/upload-artifact@v7
         with:
           name: release-files
           path: |
             firmware/s3/release/core-pilot-${{ env.VERSION }}.bin
             firmware/s3/release/core-pilot-${{ env.VERSION }}-ota.bin
             firmware/s3/release/core-pilot-${{ env.VERSION }}-SHA256SUMS
+            firmware/s3/release/core-pilot-${{ env.VERSION }}-manifest.json
           if-no-files-found: error
           retention-days: 1
 
@@ -144,13 +152,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: release-files
           path: release
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.event.release.tag_name }}
           files: |
             release/core-pilot-*.bin
             release/core-pilot-*-SHA256SUMS
+            release/core-pilot-*-manifest.json

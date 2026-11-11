@@ -24,8 +24,8 @@ jobs:
       run:
         working-directory: tools
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
         with:
           enable-cache: true
       - run: uv run --locked python -m unittest discover -s tests -p 'test_*.py' -v
@@ -38,8 +38,8 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
           cache: npm
@@ -56,7 +56,7 @@ jobs:
       - run: npm run test:browser
       - run: npm run build
       - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dashboard-dist
           path: dist
@@ -69,7 +69,7 @@ jobs:
     timeout-minutes: 10
     container: espressif/idf:v6.0.2
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Export ESP-IDF environment
         run: |
           . "$IDF_PATH/export.sh"
@@ -88,7 +88,7 @@ jobs:
     timeout-minutes: 20
     container: espressif/idf:v6.0.2
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Export ESP-IDF environment
         run: |
           . "$IDF_PATH/export.sh"
@@ -105,7 +105,7 @@ jobs:
         run: >-
           idf.py -C firmware/s3/test/esp32s3
           -B firmware/s3/test/esp32s3/build build
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: core-pilot-esp32s3-test-image
           path: |
@@ -125,8 +125,8 @@ jobs:
     needs: web
     container: espressif/idf:v6.0.2
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           name: dashboard-dist
           path: dist
@@ -150,7 +150,12 @@ jobs:
         run: python tools/lint.py build-clang
       - name: Build firmware
         run: idf.py -C firmware/s3 -B firmware/s3/build build
-      - uses: actions/upload-artifact@v4
+      - name: Enforce firmware release budget
+        run: >-
+          python tools/release.py inspect-build
+          --build-dir firmware/s3/build
+          --partitions firmware/s3/partitions.csv
+      - uses: actions/upload-artifact@v7
         with:
           name: core-pilot-firmware
           path: |

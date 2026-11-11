@@ -68,6 +68,7 @@ function DevicesSkeleton() {
               <TableHead>Protocol</TableHead>
               <TableHead>Availability</TableHead>
               <TableHead>Capabilities</TableHead>
+              <TableHead>Subscription</TableHead>
               <TableHead>Power</TableHead>
             </TableRow>
           </TableHeader>
@@ -75,7 +76,7 @@ function DevicesSkeleton() {
             <For each={Array.from({ length: 3 })}>
               {() => (
                 <TableRow>
-                  <For each={["w-32", "w-20", "w-24", "w-40", "w-20"]}>
+                  <For each={["w-32", "w-20", "w-24", "w-40", "w-24", "w-20"]}>
                     {(width) => (
                       <TableCell>
                         <Skeleton class={cn("h-4", width)} />
@@ -94,6 +95,47 @@ function DevicesSkeleton() {
 
 function deviceKey(device: { id: string | { 0: string } }): string {
   return typeof device.id === "string" ? device.id : device.id[0];
+}
+
+function subscriptionTone(device: Device): StatusTone {
+  switch (device.subscription?.health) {
+    case "active":
+      return "ok";
+    case "recovering":
+      return "pending";
+    case "inactive":
+      return "warn";
+    case "not_configured":
+      return "muted";
+    default:
+      return "unavailable";
+  }
+}
+
+function subscriptionLabel(device: Device): string {
+  switch (device.subscription?.health) {
+    case "active":
+      return "Active";
+    case "recovering":
+      return "Recovering";
+    case "inactive":
+      return "Inactive";
+    case "not_configured":
+      return "Not configured";
+    default:
+      return "Unknown";
+  }
+}
+
+function subscriptionDescription(device: Device): string {
+  const subscription = device.subscription;
+  if (!subscription)
+    return `Subscription health for ${device.name} is unknown.`;
+  const report = subscription.report_known
+    ? "report received"
+    : "no report received";
+  const session = subscription.case_ready ? "CASE ready" : "CASE unavailable";
+  return `Subscription for ${device.name}: ${subscriptionLabel(device)}, ${session}, ${report}.`;
 }
 
 function availabilityTone(availability: string): StatusTone {
@@ -339,6 +381,7 @@ export default function Devices() {
                           <TableHead>Protocol</TableHead>
                           <TableHead>Availability</TableHead>
                           <TableHead>Capabilities</TableHead>
+                          <TableHead>Subscription</TableHead>
                           <TableHead>Power</TableHead>
                         </TableRow>
                       </TableHeader>
@@ -423,6 +466,15 @@ export default function Devices() {
                                     }}
                                   </For>
                                 </div>
+                              </TableCell>
+                              <TableCell>
+                                <StatusBadge
+                                  tone={subscriptionTone(device)}
+                                  label={subscriptionLabel(device)}
+                                />
+                                <span class="sr-only">
+                                  {subscriptionDescription(device)}
+                                </span>
                               </TableCell>
                               <TableCell>
                                 <Show when={supportsMatterOnOff(device)}>

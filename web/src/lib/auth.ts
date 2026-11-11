@@ -26,6 +26,12 @@ const [granted, setGranted] = createSignal(false);
 export const accessToken = token;
 export const accessGranted = granted;
 let expiry: ReturnType<typeof setTimeout> | undefined;
+const accessClearedListeners = new Set<() => void>();
+
+export function onAccessCleared(listener: () => void): () => void {
+  accessClearedListeners.add(listener);
+  return () => accessClearedListeners.delete(listener);
+}
 
 function isBootstrapState(value: unknown): value is BootstrapState {
   return (
@@ -76,6 +82,7 @@ export function clearAccess() {
   expiry = undefined;
   setToken(null);
   setGranted(false);
+  for (const listener of accessClearedListeners) listener();
 }
 
 export function authHeaders(): Record<string, string> {

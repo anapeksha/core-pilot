@@ -78,6 +78,27 @@ TEST_CASE("common API DTOs preserve wire keys and numeric bounds", "[core_domain
   cJSON_Delete(json);
 }
 
+TEST_CASE("Matter operation page query enforces cursor and bounded limit", "[core_domain]") {
+  MatterOperationPageRequest request{};
+  TEST_ASSERT_EQUAL(static_cast<int>(ApiError::ok),
+                    static_cast<int>(parse_matter_operation_page_query(nullptr, request)));
+  TEST_ASSERT_EQUAL_UINT64(0, request.cursor);
+  TEST_ASSERT_EQUAL_UINT8(8, request.limit);
+  TEST_ASSERT_EQUAL(static_cast<int>(ApiError::ok),
+                    static_cast<int>(parse_matter_operation_page_query(
+                        "cursor=18446744073709551615&limit=1", request)));
+  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, request.cursor);
+  TEST_ASSERT_EQUAL_UINT8(1, request.limit);
+  TEST_ASSERT_EQUAL(static_cast<int>(ApiError::invalid_json),
+                    static_cast<int>(parse_matter_operation_page_query("limit=9", request)));
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(ApiError::invalid_json),
+      static_cast<int>(parse_matter_operation_page_query("cursor=1&cursor=2", request)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ApiError::invalid_json),
+                    static_cast<int>(parse_matter_operation_page_query("unknown=1", request)));
+  TEST_ASSERT_EQUAL_UINT64(UINT64_MAX, request.cursor); // failures leave output unchanged
+}
+
 TEST_CASE("connection slots release on scope exit and cannot exceed three", "[core_domain]") {
   std::atomic<uint8_t> active{0};
   {

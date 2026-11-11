@@ -13,6 +13,10 @@ describe("query client defaults", () => {
       refetchOnReconnect: false,
       refetchOnWindowFocus: false,
     });
+    expect(queryClient.getDefaultOptions().mutations).toMatchObject({
+      networkMode: "always",
+      retry: false,
+    });
     expect(queryClient.getDefaultOptions().queries?.refetchOnMount).not.toBe(
       true,
     );

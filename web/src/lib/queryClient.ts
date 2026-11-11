@@ -1,4 +1,5 @@
 import { QueryClient } from "@tanstack/solid-query";
+import { onAccessCleared } from "./auth";
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -12,5 +13,13 @@ export const queryClient = new QueryClient({
       refetchOnReconnect: false,
       refetchOnWindowFocus: false,
     },
+    mutations: {
+      // Execute once even when the browser reports offline. Pausing would replay a
+      // stale command when connectivity returns.
+      networkMode: "always",
+      retry: false,
+    },
   },
 });
+
+onAccessCleared(() => queryClient.clear());
