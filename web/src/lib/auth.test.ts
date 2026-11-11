@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { queryClient } from "./queryClient";
 import {
   accessGranted,
   accessToken,
@@ -14,6 +15,7 @@ afterEach(() => {
   sessionStorage.clear();
   vi.unstubAllGlobals();
   vi.useRealTimers();
+  queryClient.clear();
 });
 it("creates a bounded same-origin cookie session and expires local access", async () => {
   vi.useFakeTimers();
@@ -39,6 +41,24 @@ it("creates a bounded same-origin cookie session and expires local access", asyn
   expect(accessToken()).toBeNull();
 });
 
+it("clears sensitive query data when access expires", async () => {
+  vi.useFakeTimers();
+  vi.stubGlobal(
+    "fetch",
+    vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ authenticated: true, expires_in: 1800 })),
+      ),
+  );
+  queryClient.setQueryData(["sensitive"], { secret: "cached" });
+
+  await unlockAccess("0123456789abcdef");
+  vi.advanceTimersByTime(1_800_000);
+
+  expect(queryClient.getQueryData(["sensitive"])).toBeUndefined();
+});
+
 it("revokes the cookie session before clearing local access", async () => {
   const fetcher = vi
     .fn()
@@ -49,8 +69,10 @@ it("revokes the cookie session before clearing local access", async () => {
   vi.stubGlobal("fetch", fetcher);
 
   await unlockAccess("0123456789abcdef");
+  queryClient.setQueryData(["sensitive"], { secret: "cached" });
   await logoutAccess();
 
+  expect(queryClient.getQueryData(["sensitive"])).toBeUndefined();
   expect(fetcher).toHaveBeenNthCalledWith(2, "/api/v1/auth/logout", {
     method: "POST",
     credentials: "same-origin",
