@@ -280,7 +280,7 @@ private:
                                  CommandRejection* rejection = nullptr);
   bool finishCommand(std::uint32_t operation_id, CommandState state, esp_err_t error);
 
-  enum class InvokeContextState : std::uint8_t { available, pending, quarantined };
+  enum class InvokeContextState : std::uint8_t { available, pending };
   struct InvokeCallbackContext final {
     std::uint32_t operation_id;
     std::uint32_t generation;
@@ -290,7 +290,7 @@ private:
   static_assert(std::is_trivially_copyable_v<InvokeCallbackContext>);
   void* allocateInvokeCallback(std::uint32_t operation_id);
   void releaseInvokeCallback(void* token);
-  void quarantineInvokeCallback(std::uint32_t operation_id);
+  void reclaimInvokeCallback(std::uint32_t operation_id);
   static void completeInvokeCallback(void* token, bool succeeded, esp_err_t error);
 
   static constexpr UBaseType_t kQueueDepth = 8;
