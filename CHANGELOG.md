@@ -4,8 +4,12 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-12
+
 ### Added
 
+- A coordinated vulnerability disclosure policy using GitHub Private Vulnerability Reporting.
+- Production stack-smashing protection, allocation-failure aborts, and FreeRTOS stack-overflow watchpoints, with automatic stack-variable initialization and light heap poisoning in development builds.
 - Bounded raw TCP security probes for ambiguous headers, malformed framing, route normalization, pipelining, slow clients, and connection-slot recovery.
 
 ### Changed
@@ -24,6 +28,11 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 - Kept physical bootstrap rotation local to the display while preserving active authenticated sessions.
 - Rejected direct physical, persistent, and destructive MCP calls regardless of client-supplied arguments or confirmation text.
+
+### Known limitations
+
+- Matter-over-Thread and Thread Border Router readiness have not yet been demonstrated on hardware.
+- This release is not CSA Matter certified and does not claim formal Matter specification compliance.
 
 ## [0.1.0-rc.3] - 2026-11-11
 
@@ -129,7 +138,8 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Matter-over-Thread and Thread Border Router readiness have not yet been demonstrated on hardware.
 - This release candidate is not CSA Matter certified and does not claim formal Matter specification compliance.
 
-[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.3...HEAD
+[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.3...v0.1.0
 [0.1.0-rc.3]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.2...v0.1.0-rc.3
 [0.1.0-rc.2]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.1...v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/anapeksha/core-pilot/releases/tag/v0.1.0-rc.1

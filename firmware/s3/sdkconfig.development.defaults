@@ -1,3 +1,4 @@
 # Explicit local hardware-development overlay. Never use for production or release builds.
 CONFIG_CORE_PILOT_DEVELOPMENT_AUTH_BYPASS=y
 CONFIG_BT_NIMBLE_LOG_LEVEL_INFO=y
+CONFIG_HEAP_POISONING_LIGHT=y
