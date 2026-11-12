@@ -9,6 +9,7 @@ class SecurityConfigurationTests(unittest.TestCase):
     def test_production_memory_hardening_is_enabled(self) -> None:
         defaults = (ROOT / "firmware/s3/sdkconfig.defaults").read_text()
         required = (
+            "CONFIG_COMPILER_OPTIMIZATION_SIZE=y",
             "CONFIG_HEAP_ABORT_WHEN_ALLOCATION_FAILS=y",
             "CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y",
             "CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y",

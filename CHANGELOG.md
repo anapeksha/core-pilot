@@ -14,6 +14,7 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ### Changed
 
+- Optimized production firmware for size while preserving the enforced OTA headroom reserve.
 - Disabled AI tools by default and disclosed when enabled read-only results leave the device for the configured provider.
 
 ### Fixed
