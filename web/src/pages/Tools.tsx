@@ -321,7 +321,10 @@ const Tools: Component = () => {
                                   </CardHeader>
                                   <CardContent class="flex flex-col gap-3">
                                     <CardDescription>
-                                      {tool.description}
+                                      {tool.description} Enabling this tool
+                                      allows the configured AI provider to
+                                      request it during chat. Read-only tool
+                                      results are sent to that provider.
                                     </CardDescription>
                                   </CardContent>
                                 </Card>

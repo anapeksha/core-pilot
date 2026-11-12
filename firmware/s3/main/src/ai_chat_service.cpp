@@ -466,6 +466,9 @@ AiChatService::DecisionResult AiChatService::decide(std::uint64_t operation_id,
   if (xQueueSend(queue_, &item, 0) != pdTRUE)
     return DecisionResult::busy;
   runtime_->snapshot.state = State::executing;
+  for (std::size_t index = 0; index < runtime_->snapshot.action_count; ++index)
+    if (runtime_->snapshot.actions[index].state == ActionState::proposed)
+      runtime_->snapshot.actions[index].state = ActionState::executing;
   return DecisionResult::queued;
 }
 
@@ -503,6 +506,7 @@ void AiChatService::processDecision(const WorkItem& item) {
   McpService::Effect effect = McpService::Effect::read_only;
   std::int64_t expires_at_us = 0;
   std::uint8_t expected_digest[32]{};
+  Snapshot terminal{};
   {
     Lock lock(mutex_);
     if (!lock.held() || runtime_->snapshot.state != State::executing ||
@@ -515,20 +519,42 @@ void AiChatService::processDecision(const WorkItem& item) {
     expires_at_us = runtime_->snapshot.proposal.expires_at_us;
     std::memcpy(expected_digest, runtime_->snapshot.proposal.arguments_digest,
                 sizeof expected_digest);
+    terminal = runtime_->snapshot;
+    mbedtls_platform_zeroize(&terminal.proposal, sizeof terminal.proposal);
+    terminal.response_length = 0;
+    terminal.error = Error::none;
+    terminal.error_detail[0] = '\0';
     mbedtls_platform_zeroize(runtime_->proposal_arguments, sizeof runtime_->proposal_arguments);
     mbedtls_platform_zeroize(&runtime_->snapshot.proposal, sizeof runtime_->snapshot.proposal);
     mbedtls_platform_zeroize(&runtime_->work.proposal, sizeof runtime_->work.proposal);
   }
 
-  Snapshot terminal{};
   terminal.operation_id = item.operation_id;
-  terminal.action_count = 1;
-  std::snprintf(terminal.actions[0].tool, sizeof terminal.actions[0].tool, "%s", tool);
+  Action* approved_action = nullptr;
+  for (std::size_t index = 0; index < terminal.action_count; ++index)
+    if (std::strcmp(terminal.actions[index].tool, tool) == 0 &&
+        terminal.actions[index].state == ActionState::executing)
+      approved_action = &terminal.actions[index];
+  if (approved_action == nullptr && terminal.action_count < kMaxActions) {
+    approved_action = &terminal.actions[terminal.action_count++];
+    std::snprintf(approved_action->tool, sizeof approved_action->tool, "%s", tool);
+  }
+  if (approved_action == nullptr) {
+    terminal.state = State::failed;
+    terminal.error = Error::internal;
+    std::snprintf(terminal.error_detail, sizeof terminal.error_detail,
+                  "Approved action record missing");
+  } else
+    approved_action->state = ActionState::executing;
   if (item.decision == ApprovalDecision::reject) {
     terminal.state = State::rejected;
+    if (approved_action != nullptr)
+      approved_action->state = ActionState::rejected;
     std::snprintf(terminal.error_detail, sizeof terminal.error_detail, "Action rejected on CoreS3");
   } else if (item.decision == ApprovalDecision::expire || esp_timer_get_time() > expires_at_us) {
     terminal.state = State::expired;
+    if (approved_action != nullptr)
+      approved_action->state = ActionState::expired;
     std::snprintf(terminal.error_detail, sizeof terminal.error_detail, "Approval expired");
   } else {
     std::uint8_t actual_digest[32]{};
@@ -540,19 +566,28 @@ void AiChatService::processDecision(const WorkItem& item) {
         hashed && std::memcmp(actual_digest, expected_digest, sizeof actual_digest) == 0 &&
         McpService::preflight(tool, current_effect) == ESP_OK && current_effect == effect &&
         McpService::requiresLocalApproval(effect) && cJSON_IsObject(arguments);
-    const esp_err_t invoked = bound
-                                  ? McpService::invoke(*http_runtime_, tool, arguments, invocation)
-                                  : ESP_ERR_INVALID_STATE;
+    const esp_err_t invoked =
+        bound ? McpService::invokeApproved(*http_runtime_, tool, arguments, invocation)
+              : ESP_ERR_INVALID_STATE;
     cJSON_Delete(arguments);
     if (invoked == ESP_OK && invocation != nullptr) {
       terminal.state = State::complete;
+      const cJSON* invocation_status = cJSON_GetObjectItemCaseSensitive(invocation, "status");
+      if (approved_action != nullptr)
+        approved_action->state = cJSON_IsString(invocation_status) &&
+                                         std::strcmp(invocation_status->valuestring, "queued") == 0
+                                     ? ActionState::queued
+                                     : ActionState::complete;
       const char reply[] = "Approved action submitted locally.";
       terminal.response_length = sizeof(reply) - 1;
       std::memcpy(runtime_->result, reply, sizeof(reply));
-      print_bounded(invocation, terminal.actions[0].result_json,
-                    sizeof terminal.actions[0].result_json);
+      if (approved_action != nullptr)
+        print_bounded(invocation, approved_action->result_json,
+                      sizeof approved_action->result_json);
     } else {
       terminal.state = State::failed;
+      if (approved_action != nullptr)
+        approved_action->state = ActionState::failed;
       terminal.error = Error::actions_unsupported;
       std::snprintf(terminal.error_detail, sizeof terminal.error_detail,
                     "Approved action could not be executed");
@@ -974,6 +1009,7 @@ void AiChatService::process(std::uint64_t operation_id) {
                         runtime_->prior_arguments[index]);
           Action& action = result.actions[result.action_count++];
           std::snprintf(action.tool, sizeof action.tool, "%s", proposal.tool);
+          action.state = ActionState::proposed;
           std::snprintf(action.result_json, sizeof action.result_json,
                         "{\"status\":\"proposed\",\"approval_required\":true}");
           result.state = State::approval_required;
@@ -992,6 +1028,7 @@ void AiChatService::process(std::uint64_t operation_id) {
         }
         Action& action = result.actions[result.action_count++];
         std::snprintf(action.tool, sizeof action.tool, "%s", runtime_->prior_tools[index]);
+        action.state = invoked == ESP_OK ? ActionState::complete : ActionState::failed;
         if (!print_bounded(invocation, action.result_json, sizeof action.result_json)) {
           cJSON_Delete(invocation);
           calls_valid = false;
