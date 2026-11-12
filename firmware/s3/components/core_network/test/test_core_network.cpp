@@ -56,6 +56,21 @@ TEST_CASE("association identity rejects stale and mismatched events", "[core_net
                                         sizeof(expected_ssid) - 1, expected_bssid));
 }
 
+TEST_CASE("scan events cannot cross a cancellation boundary", "[core_network]") {
+  TEST_ASSERT_EQUAL(static_cast<int>(ScanEventAction::publish),
+                    static_cast<int>(scan_event_action(true, false)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ScanEventAction::ignore),
+                    static_cast<int>(scan_event_action(false, false)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ScanEventAction::finish_cancellation),
+                    static_cast<int>(scan_event_action(false, true)));
+  TEST_ASSERT_EQUAL(static_cast<int>(ScanEventAction::finish_cancellation),
+                    static_cast<int>(scan_event_action(true, true)));
+  TEST_ASSERT_TRUE(scan_result_is_current(true, false, 7, 7));
+  TEST_ASSERT_FALSE(scan_result_is_current(true, true, 7, 7));
+  TEST_ASSERT_FALSE(scan_result_is_current(false, false, 7, 7));
+  TEST_ASSERT_FALSE(scan_result_is_current(true, false, 8, 7));
+}
+
 TEST_CASE("scan timeout policy is bounded", "[core_network]") {
   TEST_ASSERT_GREATER_THAN_UINT32(kJoinTimeoutMs, kScanTimeoutMs);
   TEST_ASSERT_LESS_THAN_UINT32(kBootJoinBudgetMs, kScanTimeoutMs);
