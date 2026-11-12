@@ -11,6 +11,7 @@ class Auth final {
 public:
   static constexpr uint64_t kBootstrapSeconds = 300;
   static constexpr uint8_t kBootstrapAttemptLimit = 8;
+  static constexpr uint64_t kBootstrapCooldownSeconds = 2;
 
   static constexpr uint64_t kSessionSeconds = 30ULL * 60;
   using BootstrapSink = void (*)(const char* code, uint64_t expires_at);
@@ -34,11 +35,14 @@ private:
     uint64_t expires{};
   };
   void close_bootstrap(BootstrapState state);
+  Status rotate_bootstrap(RandomSource& random, uint64_t now, bool revoke_sessions);
 
   char code_[17]{};
   uint64_t bootstrap_expires_{};
 
   uint8_t failed_attempts_{};
+  uint64_t bootstrap_retry_at_{};
+  BootstrapSink physical_sink_{};
 
   BootstrapState bootstrap_state_{BootstrapState::unavailable};
   Session sessions_[4]{};

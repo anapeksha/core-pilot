@@ -30,6 +30,13 @@ constexpr std::size_t kMaxToolArgumentsBytes = 4096;
 constexpr std::uint8_t kMaxIdenticalCalls = 3;
 constexpr std::int64_t kApprovalLifetimeUs = 60LL * 1000 * 1000;
 
+cJSON* parseStrictJson(const char* text, std::size_t length, std::size_t maximum) {
+  cJSON* document = nullptr;
+  return core_domain::parse_json(text, length, maximum, document) == core_domain::ApiError::ok
+             ? document
+             : nullptr;
+}
+
 class Lock final {
 public:
   explicit Lock(SemaphoreHandle_t mutex)
@@ -101,12 +108,12 @@ bool add_message(cJSON* messages, const char* role, const char* content,
                  std::size_t content_length) {
   cJSON* message = cJSON_CreateObject();
   if (message == nullptr || cJSON_AddStringToObject(message, "role", role) == nullptr) {
-    cJSON_Delete(message);
+    core_domain::delete_json_sensitive(message);
     return false;
   }
   char* copy = static_cast<char*>(cJSON_malloc(content_length + 1));
   if (copy == nullptr) {
-    cJSON_Delete(message);
+    core_domain::delete_json_sensitive(message);
     return false;
   }
   std::memcpy(copy, content, content_length);
@@ -115,7 +122,7 @@ bool add_message(cJSON* messages, const char* role, const char* content,
   mbedtls_platform_zeroize(copy, content_length + 1);
   cJSON_free(copy);
   if (content_json == nullptr) {
-    cJSON_Delete(message);
+    core_domain::delete_json_sensitive(message);
     return false;
   }
   cJSON_AddItemToObject(message, "content", content_json);
@@ -158,9 +165,9 @@ cJSON* provider_tools(ai::ProviderBackend backend) {
     cJSON* item = cJSON_CreateObject();
     cJSON* schema_copy = cJSON_Duplicate(schema, true);
     if (item == nullptr || schema_copy == nullptr) {
-      cJSON_Delete(item);
-      cJSON_Delete(schema_copy);
-      cJSON_Delete(result);
+      core_domain::delete_json_sensitive(item);
+      core_domain::delete_json_sensitive(schema_copy);
+      core_domain::delete_json_sensitive(result);
       result = nullptr;
       break;
     }
@@ -179,7 +186,7 @@ cJSON* provider_tools(ai::ProviderBackend backend) {
     }
     cJSON_AddItemToArray(result, item);
   }
-  cJSON_Delete(registry);
+  core_domain::delete_json_sensitive(registry);
   return result;
 }
 
@@ -466,6 +473,9 @@ AiChatService::DecisionResult AiChatService::decide(std::uint64_t operation_id,
   if (xQueueSend(queue_, &item, 0) != pdTRUE)
     return DecisionResult::busy;
   runtime_->snapshot.state = State::executing;
+  for (std::size_t index = 0; index < runtime_->snapshot.action_count; ++index)
+    if (runtime_->snapshot.actions[index].state == ActionState::proposed)
+      runtime_->snapshot.actions[index].state = ActionState::executing;
   return DecisionResult::queued;
 }
 
@@ -503,6 +513,7 @@ void AiChatService::processDecision(const WorkItem& item) {
   McpService::Effect effect = McpService::Effect::read_only;
   std::int64_t expires_at_us = 0;
   std::uint8_t expected_digest[32]{};
+  Snapshot terminal{};
   {
     Lock lock(mutex_);
     if (!lock.held() || runtime_->snapshot.state != State::executing ||
@@ -515,49 +526,82 @@ void AiChatService::processDecision(const WorkItem& item) {
     expires_at_us = runtime_->snapshot.proposal.expires_at_us;
     std::memcpy(expected_digest, runtime_->snapshot.proposal.arguments_digest,
                 sizeof expected_digest);
+    terminal = runtime_->snapshot;
+    mbedtls_platform_zeroize(&terminal.proposal, sizeof terminal.proposal);
+    terminal.response_length = 0;
+    terminal.error = Error::none;
+    terminal.error_detail[0] = '\0';
     mbedtls_platform_zeroize(runtime_->proposal_arguments, sizeof runtime_->proposal_arguments);
     mbedtls_platform_zeroize(&runtime_->snapshot.proposal, sizeof runtime_->snapshot.proposal);
     mbedtls_platform_zeroize(&runtime_->work.proposal, sizeof runtime_->work.proposal);
   }
 
-  Snapshot terminal{};
   terminal.operation_id = item.operation_id;
-  terminal.action_count = 1;
-  std::snprintf(terminal.actions[0].tool, sizeof terminal.actions[0].tool, "%s", tool);
+  Action* approved_action = nullptr;
+  for (std::size_t index = 0; index < terminal.action_count; ++index)
+    if (std::strcmp(terminal.actions[index].tool, tool) == 0 &&
+        terminal.actions[index].state == ActionState::executing)
+      approved_action = &terminal.actions[index];
+  if (approved_action == nullptr && terminal.action_count < kMaxActions) {
+    approved_action = &terminal.actions[terminal.action_count++];
+    std::snprintf(approved_action->tool, sizeof approved_action->tool, "%s", tool);
+  }
+  if (approved_action == nullptr) {
+    terminal.state = State::failed;
+    terminal.error = Error::internal;
+    std::snprintf(terminal.error_detail, sizeof terminal.error_detail,
+                  "Approved action record missing");
+  } else
+    approved_action->state = ActionState::executing;
   if (item.decision == ApprovalDecision::reject) {
     terminal.state = State::rejected;
+    if (approved_action != nullptr)
+      approved_action->state = ActionState::rejected;
     std::snprintf(terminal.error_detail, sizeof terminal.error_detail, "Action rejected on CoreS3");
   } else if (item.decision == ApprovalDecision::expire || esp_timer_get_time() > expires_at_us) {
     terminal.state = State::expired;
+    if (approved_action != nullptr)
+      approved_action->state = ActionState::expired;
     std::snprintf(terminal.error_detail, sizeof terminal.error_detail, "Approval expired");
   } else {
     std::uint8_t actual_digest[32]{};
     const bool hashed = sha256(arguments_json, actual_digest);
-    cJSON* arguments = hashed ? cJSON_Parse(arguments_json) : nullptr;
+    cJSON* arguments = hashed ? parseStrictJson(arguments_json, std::strlen(arguments_json),
+                                                kMaxToolArgumentsBytes)
+                              : nullptr;
     McpService::Effect current_effect = McpService::Effect::read_only;
     cJSON* invocation = nullptr;
     const bool bound =
         hashed && std::memcmp(actual_digest, expected_digest, sizeof actual_digest) == 0 &&
         McpService::preflight(tool, current_effect) == ESP_OK && current_effect == effect &&
         McpService::requiresLocalApproval(effect) && cJSON_IsObject(arguments);
-    const esp_err_t invoked = bound
-                                  ? McpService::invoke(*http_runtime_, tool, arguments, invocation)
-                                  : ESP_ERR_INVALID_STATE;
-    cJSON_Delete(arguments);
+    const esp_err_t invoked =
+        bound ? McpService::invokeApproved(*http_runtime_, tool, arguments, invocation)
+              : ESP_ERR_INVALID_STATE;
+    core_domain::delete_json_sensitive(arguments);
     if (invoked == ESP_OK && invocation != nullptr) {
       terminal.state = State::complete;
+      const cJSON* invocation_status = cJSON_GetObjectItemCaseSensitive(invocation, "status");
+      if (approved_action != nullptr)
+        approved_action->state = cJSON_IsString(invocation_status) &&
+                                         std::strcmp(invocation_status->valuestring, "queued") == 0
+                                     ? ActionState::queued
+                                     : ActionState::complete;
       const char reply[] = "Approved action submitted locally.";
       terminal.response_length = sizeof(reply) - 1;
       std::memcpy(runtime_->result, reply, sizeof(reply));
-      print_bounded(invocation, terminal.actions[0].result_json,
-                    sizeof terminal.actions[0].result_json);
+      if (approved_action != nullptr)
+        print_bounded(invocation, approved_action->result_json,
+                      sizeof approved_action->result_json);
     } else {
       terminal.state = State::failed;
+      if (approved_action != nullptr)
+        approved_action->state = ActionState::failed;
       terminal.error = Error::actions_unsupported;
       std::snprintf(terminal.error_detail, sizeof terminal.error_detail,
                     "Approved action could not be executed");
     }
-    cJSON_Delete(invocation);
+    core_domain::delete_json_sensitive(invocation);
     mbedtls_platform_zeroize(actual_digest, sizeof actual_digest);
   }
   mbedtls_platform_zeroize(expected_digest, sizeof expected_digest);
@@ -634,7 +678,7 @@ void AiChatService::process(std::uint64_t operation_id) {
     if (valid)
       cJSON_AddItemToObject(request_root, "messages", messages);
     else
-      cJSON_Delete(messages);
+      core_domain::delete_json_sensitive(messages);
     if (valid) {
       mbedtls_platform_zeroize(runtime_->system_context, sizeof runtime_->system_context);
       SystemContextBuilder builder{runtime_->system_context, sizeof runtime_->system_context};
@@ -666,7 +710,7 @@ void AiChatService::process(std::uint64_t operation_id) {
       } else {
         valid = cJSON_AddStringToObject(request_root, "system", builder.output) != nullptr;
       }
-      cJSON_Delete(context);
+      core_domain::delete_json_sensitive(context);
     }
     for (std::size_t index = 0; valid && index < request_->history_count; ++index) {
       const char* role = role_name(request_->history[index].role);
@@ -683,7 +727,7 @@ void AiChatService::process(std::uint64_t operation_id) {
       if (valid && cJSON_GetArraySize(tools) != 0)
         cJSON_AddItemToObject(request_root, "tools", tools);
       else
-        cJSON_Delete(tools);
+        core_domain::delete_json_sensitive(tools);
     }
     if (!valid) {
       if (failure_detail == nullptr) {
@@ -771,7 +815,8 @@ void AiChatService::process(std::uint64_t operation_id) {
         break;
       }
 
-      cJSON* response = cJSON_ParseWithLength(runtime_->response_json, accumulator.length);
+      cJSON* response =
+          parseStrictJson(runtime_->response_json, accumulator.length, kResponseJsonBytes);
       if (response == nullptr) {
         failure_error = Error::invalid_response;
         failure_detail = "provider returned invalid JSON";
@@ -827,7 +872,7 @@ void AiChatService::process(std::uint64_t operation_id) {
             answer_length += length;
           }
         }
-        cJSON_Delete(response);
+        core_domain::delete_json_sensitive(response);
         if (answer_length > kMaxResponseBytes) {
           failure_error = Error::response_too_large;
           failure_detail = "assistant response exceeds 16 KiB";
@@ -846,13 +891,13 @@ void AiChatService::process(std::uint64_t operation_id) {
         continue;
       }
       if (round >= core_domain::max_ai_tool_rounds) {
-        cJSON_Delete(response);
+        core_domain::delete_json_sensitive(response);
         failure_error = Error::actions_unsupported;
         failure_detail = "AI tool round limit exceeded";
         break;
       }
       if (call_count > static_cast<int>(kMaxActions - result.action_count)) {
-        cJSON_Delete(response);
+        core_domain::delete_json_sensitive(response);
         failure_error = Error::actions_unsupported;
         failure_detail = "AI action limit exceeded";
         break;
@@ -895,7 +940,8 @@ void AiChatService::process(std::uint64_t operation_id) {
             std::strlen(raw_arguments->valuestring) <= kMaxToolArgumentsBytes) {
           std::memcpy(arguments_json, raw_arguments->valuestring,
                       std::strlen(raw_arguments->valuestring));
-          arguments = cJSON_ParseWithLength(arguments_json, std::strlen(arguments_json));
+          arguments =
+              parseStrictJson(arguments_json, std::strlen(arguments_json), kMaxToolArgumentsBytes);
         } else if (cJSON_IsObject(raw_arguments) &&
                    print_bounded(raw_arguments, arguments_json, sizeof arguments_json)) {
           arguments = cJSON_Duplicate(raw_arguments, true);
@@ -906,7 +952,7 @@ void AiChatService::process(std::uint64_t operation_id) {
         if (id_length == 0 || id_length > 128 || name_length == 0 ||
             name_length > kMaxToolNameBytes || !cJSON_IsObject(arguments) ||
             McpService::preflight(name->valuestring, effect) != ESP_OK) {
-          cJSON_Delete(arguments);
+          core_domain::delete_json_sensitive(arguments);
           mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
           calls_valid = false;
           failure_error = Error::actions_unsupported;
@@ -919,7 +965,7 @@ void AiChatService::process(std::uint64_t operation_id) {
                         name->valuestring, arguments_json))
             ++identical;
         if (identical >= kMaxIdenticalCalls) {
-          cJSON_Delete(arguments);
+          core_domain::delete_json_sensitive(arguments);
           mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
           calls_valid = false;
           failure_error = Error::actions_unsupported;
@@ -928,7 +974,7 @@ void AiChatService::process(std::uint64_t operation_id) {
         }
         const ToolDecision decision = admitToolCall(effect, effectful_action_seen);
         if (decision == ToolDecision::reject) {
-          cJSON_Delete(arguments);
+          core_domain::delete_json_sensitive(arguments);
           mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
           calls_valid = false;
           failure_error = Error::actions_unsupported;
@@ -945,12 +991,14 @@ void AiChatService::process(std::uint64_t operation_id) {
                       sizeof runtime_->prior_arguments[prior_count], "%s", arguments_json);
         runtime_->prior_effects[prior_count] = effect;
         ++prior_count;
-        cJSON_Delete(arguments);
+        core_domain::delete_json_sensitive(arguments);
         mbedtls_platform_zeroize(arguments_json, sizeof arguments_json);
       }
 
       for (std::size_t index = pending_start; calls_valid && index < prior_count; ++index) {
-        cJSON* arguments = cJSON_Parse(runtime_->prior_arguments[index]);
+        cJSON* arguments =
+            parseStrictJson(runtime_->prior_arguments[index],
+                            std::strlen(runtime_->prior_arguments[index]), kMaxToolArgumentsBytes);
         cJSON* invocation = nullptr;
         esp_err_t invoked = ESP_OK;
         if (McpService::requiresLocalApproval(runtime_->prior_effects[index])) {
@@ -964,7 +1012,7 @@ void AiChatService::process(std::uint64_t operation_id) {
           if (!proposal_summary(proposal.tool, arguments, proposal.summary,
                                 sizeof proposal.summary) ||
               !sha256(runtime_->prior_arguments[index], proposal.arguments_digest)) {
-            cJSON_Delete(arguments);
+            core_domain::delete_json_sensitive(arguments);
             calls_valid = false;
             failure_error = Error::internal;
             failure_detail = "AI proposal digest failed";
@@ -974,17 +1022,18 @@ void AiChatService::process(std::uint64_t operation_id) {
                         runtime_->prior_arguments[index]);
           Action& action = result.actions[result.action_count++];
           std::snprintf(action.tool, sizeof action.tool, "%s", proposal.tool);
+          action.state = ActionState::proposed;
           std::snprintf(action.result_json, sizeof action.result_json,
                         "{\"status\":\"proposed\",\"approval_required\":true}");
           result.state = State::approval_required;
           result.error = Error::none;
           complete = true;
-          cJSON_Delete(arguments);
+          core_domain::delete_json_sensitive(arguments);
           break;
         }
         invoked =
             McpService::invoke(*http_runtime_, runtime_->prior_tools[index], arguments, invocation);
-        cJSON_Delete(arguments);
+        core_domain::delete_json_sensitive(arguments);
         if (invocation == nullptr) {
           invocation = cJSON_CreateObject();
           cJSON_AddStringToObject(invocation, "status", "rejected");
@@ -992,8 +1041,9 @@ void AiChatService::process(std::uint64_t operation_id) {
         }
         Action& action = result.actions[result.action_count++];
         std::snprintf(action.tool, sizeof action.tool, "%s", runtime_->prior_tools[index]);
+        action.state = invoked == ESP_OK ? ActionState::complete : ActionState::failed;
         if (!print_bounded(invocation, action.result_json, sizeof action.result_json)) {
-          cJSON_Delete(invocation);
+          core_domain::delete_json_sensitive(invocation);
           calls_valid = false;
           failure_error = Error::response_too_large;
           failure_detail = "MCP tool result exceeds the bounded action record";
@@ -1012,7 +1062,7 @@ void AiChatService::process(std::uint64_t operation_id) {
           cJSON_AddStringToObject(tool_result, "content", action.result_json);
           cJSON_AddItemToArray(anthropic_results, tool_result);
         }
-        cJSON_Delete(invocation);
+        core_domain::delete_json_sensitive(invocation);
       }
       if (calls_valid && provider.backend == ai::ProviderBackend::AnthropicCompatible) {
         cJSON* user = cJSON_CreateObject();
@@ -1021,14 +1071,14 @@ void AiChatService::process(std::uint64_t operation_id) {
         anthropic_results = nullptr;
         cJSON_AddItemToArray(continuation_messages, user);
       }
-      cJSON_Delete(anthropic_results);
-      cJSON_Delete(response);
+      core_domain::delete_json_sensitive(anthropic_results);
+      core_domain::delete_json_sensitive(response);
       if (!calls_valid)
         break;
     }
   } while (false);
 
-  cJSON_Delete(request_root);
+  core_domain::delete_json_sensitive(request_root);
   mbedtls_platform_zeroize(runtime_->prior_arguments, sizeof runtime_->prior_arguments);
   if (result.state != State::complete && result.state != State::approval_required)
     set_failure(result, failure_error,

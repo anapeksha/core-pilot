@@ -1,4 +1,6 @@
 #include "core_domain.hpp"
+#include "domain_contract.hpp"
+#include "http_connection_policy.hpp"
 #include "request_rate_limiter.hpp"
 
 #include <atomic>
@@ -200,6 +202,18 @@ TEST_CASE("automation grammar rejects invalid dates, masks, delays and levels", 
   TEST_ASSERT_FALSE(parse_action_spec("on|lamp|true", action));
 }
 
+TEST_CASE("HTTP connection policy reserves capacity from one source", "[core_domain]") {
+  HttpConnectionPolicy policy;
+  TEST_ASSERT_TRUE(policy.admit(10, 1));
+  TEST_ASSERT_TRUE(policy.admit(11, 1));
+  TEST_ASSERT_FALSE(policy.admit(12, 1));
+  TEST_ASSERT_TRUE(policy.admit(12, 2));
+  TEST_ASSERT_FALSE(policy.admit(13, 3));
+  TEST_ASSERT_TRUE(policy.release(10));
+  TEST_ASSERT_TRUE(policy.admit(13, 3));
+  TEST_ASSERT_FALSE(policy.release(99));
+}
+
 TEST_CASE("request limiter enforces global burst and refills on integer boundaries",
           "[core_domain]") {
   RequestRateLimiter limiter({3, 1}, {3, 1});
@@ -221,13 +235,14 @@ TEST_CASE("request limiter isolates source buckets", "[core_domain]") {
   TEST_ASSERT_TRUE(limiter.allow(12, 20).allowed);
 }
 
-TEST_CASE("request limiter reuses fully refilled source slots", "[core_domain]") {
+TEST_CASE("request limiter evicts the oldest source when its table is full", "[core_domain]") {
   RequestRateLimiter limiter({32, 32}, {1, 1});
   for (uint64_t source = 1; source <= RequestRateLimiter::max_sources; ++source) {
     TEST_ASSERT_TRUE(limiter.allow(source, 30).allowed);
   }
+  TEST_ASSERT_TRUE(limiter.allow(99, 30).allowed);
   TEST_ASSERT_FALSE(limiter.allow(99, 30).allowed);
-  TEST_ASSERT_TRUE(limiter.allow(99, 31).allowed);
+  TEST_ASSERT_TRUE(limiter.allow(100, 30).allowed);
 }
 
 TEST_CASE("separate request limiters support stricter policies and bounded retry",
@@ -240,6 +255,24 @@ TEST_CASE("separate request limiters support stricter policies and bounded retry
   const RateLimitResult retry = strict.allow(7, 40);
   TEST_ASSERT_FALSE(retry.allowed);
   TEST_ASSERT_EQUAL_UINT32(1, retry.retry_after_seconds);
+}
+
+TEST_CASE("route contracts reject unknown and duplicate mutation fields", "[core_domain]") {
+  const RouteContract* route = find_contract("POST", "/api/v1/time");
+  TEST_ASSERT_NOT_NULL(route);
+  cJSON* document = nullptr;
+  constexpr char valid[] = "{\"ntp_server_id\":\"cloudflare\",\"timezone_id\":\"UTC\","
+                           "\"timezone_offset_minutes\":0}";
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(ApiError::ok),
+      static_cast<int>(parse_contract_request(*route, valid, sizeof(valid) - 1, document)));
+  delete_json_sensitive(document);
+  constexpr char unknown[] = "{\"ntp_server_id\":\"cloudflare\",\"timezone_id\":\"UTC\","
+                             "\"timezone_offset_minutes\":0,\"extra\":true}";
+  TEST_ASSERT_EQUAL(
+      static_cast<int>(ApiError::invalid_json),
+      static_cast<int>(parse_contract_request(*route, unknown, sizeof(unknown) - 1, document)));
+  TEST_ASSERT_NULL(document);
 }
 
 TEST_CASE("OTA metadata and chunk offsets, padding and size are bounded", "[core_domain]") {

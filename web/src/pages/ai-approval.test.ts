@@ -7,6 +7,7 @@ import type {
   AiChatResponse,
 } from "../lib/api";
 import {
+  actionStateLabel,
   proposalExpiry,
   reconcileApprovalResponse,
   userAuthoredHistory,
@@ -51,6 +52,22 @@ describe("AI approval presentation", () => {
       { role: "user", content: "Turn on the lights" },
       { role: "user", content: "Only downstairs" },
     ]);
+  });
+
+  it.each([
+    ["proposed", "Proposed locally; not executed"],
+    ["executing", "Executing locally"],
+    ["queued", "Queued locally"],
+    ["complete", "Completed locally"],
+    ["rejected", "Rejected locally; not executed"],
+    ["expired", "Approval expired; not executed"],
+    ["failed", "Local execution failed"],
+  ] as const)("labels %s actions truthfully", (state, label) => {
+    expect(actionStateLabel(state)).toBe(label);
+  });
+
+  it("does not infer execution when action state is absent", () => {
+    expect(actionStateLabel()).toBe("Local action state unavailable");
   });
 
   it("presents expiry only while physical approval is pending", () => {

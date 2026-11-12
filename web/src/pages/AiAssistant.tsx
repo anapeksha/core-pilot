@@ -66,6 +66,7 @@ import { bytesAtMost, entityLimits } from "~/lib/request-contracts";
 import {
   fallbackAi,
   type AiApprovalProposal,
+  type AiChatActionState,
   type AiChatHistoryMessage,
   type AiChatMessage,
   type AiChatResponse,
@@ -182,6 +183,7 @@ function messageLabel(role: AiChatMessage["role"]): string {
 export type DisplayChatMessage = AiChatMessage & {
   operationId?: string;
   proposal?: AiApprovalProposal;
+  actionState?: AiChatActionState;
 };
 
 export function userAuthoredHistory(
@@ -238,6 +240,17 @@ export function reconcileApprovalResponse(
 
 function proposalStateLabel(state: AiApprovalProposal["state"]): string {
   return state.replaceAll("_", " ");
+}
+
+export function actionStateLabel(state?: AiChatActionState): string {
+  if (state === "proposed") return "Proposed locally; not executed";
+  if (state === "executing") return "Executing locally";
+  if (state === "queued") return "Queued locally";
+  if (state === "complete") return "Completed locally";
+  if (state === "rejected") return "Rejected locally; not executed";
+  if (state === "expired") return "Approval expired; not executed";
+  if (state === "failed") return "Local execution failed";
+  return "Local action state unavailable";
 }
 
 function proposalGuidance(state: AiApprovalProposal["state"]): string {
@@ -333,7 +346,7 @@ const ChatMessage: Component<{
         </Show>
         <Show when={props.message.role === "tool"}>
           <MessageFooter>
-            Executed locally; sensitive result data withheld
+            {actionStateLabel(props.message.actionState)}
           </MessageFooter>
         </Show>
       </MessageContent>
@@ -583,6 +596,7 @@ const AiAssistant: Component = () => {
                 appendChatMessage(next, {
                   role: "tool",
                   content: `${action.tool}: ${action.detail}`,
+                  actionState: action.state,
                 }),
               withAnswer,
             );

@@ -409,10 +409,19 @@ export type AiChatOperationStatus =
   | "expired"
   | "failed";
 
+export type AiChatActionState =
+  | "proposed"
+  | "executing"
+  | "queued"
+  | "complete"
+  | "rejected"
+  | "expired"
+  | "failed";
+
 export type AiChatAction = {
   tool: McpToolName;
   detail: string;
-  state?: "proposed" | AiChatOperationStatus;
+  state?: AiChatActionState;
 };
 
 export type AiApprovalProposal = {
@@ -543,6 +552,7 @@ export type McpToolDescriptor = {
   enabled: boolean;
   destructive: boolean;
   available: boolean;
+  provider_result_egress?: boolean;
   inputSchema?: Record<string, unknown>;
 };
 
@@ -1638,6 +1648,7 @@ function normalizeMcpTool(
     enabled: value.enabled === true,
     destructive: value.destructive === true,
     available: value.available === true,
+    provider_result_egress: value.provider_result_egress === true,
     ...(value.inputSchema && typeof value.inputSchema === "object"
       ? { inputSchema: value.inputSchema }
       : {}),

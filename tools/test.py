@@ -8,6 +8,7 @@ import concurrent.futures
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +23,290 @@ class Sample:
     thread_ready: bool
     case_ready: bool
     subscriptions_ready: bool
+
+
+@dataclass(frozen=True)
+class RawHttpResponse:
+    status: int
+    headers: tuple[tuple[str, str], ...]
+    body: bytes
+
+
+@dataclass(frozen=True)
+class RawSocketResult:
+    data: bytes
+    closed: bool
+    timed_out: bool
+    elapsed: float
+
+
+def parse_raw_http_response(data: bytes) -> RawHttpResponse:
+    head, separator, body = data.partition(b"\r\n\r\n")
+    if not separator:
+        raise RuntimeError("raw HTTP response omitted the header terminator")
+    lines = head.split(b"\r\n")
+    match = re.fullmatch(rb"HTTP/1\.[01] ([0-9]{3})(?: .*)?", lines[0])
+    if match is None:
+        raise RuntimeError("raw HTTP response has an invalid status line")
+    headers: list[tuple[str, str]] = []
+    for line in lines[1:]:
+        name, colon, value = line.partition(b":")
+        if not colon or not name:
+            raise RuntimeError("raw HTTP response has a malformed header")
+        headers.append((name.decode("ascii").lower(), value.strip().decode("latin-1")))
+    return RawHttpResponse(int(match.group(1)), tuple(headers), body)
+
+
+def receive_bounded(connection: socket.socket, timeout: float) -> RawSocketResult:
+    chunks: list[bytes] = []
+    size = 0
+    started = time.monotonic()
+    connection.settimeout(timeout)
+    while True:
+        try:
+            chunk = connection.recv(4096)
+        except socket.timeout:
+            return RawSocketResult(b"".join(chunks), False, True, time.monotonic() - started)
+        except (ConnectionError, OSError):
+            return RawSocketResult(b"".join(chunks), True, False, time.monotonic() - started)
+        if not chunk:
+            return RawSocketResult(b"".join(chunks), True, False, time.monotonic() - started)
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > 64 * 1024:
+            raise RuntimeError("raw HTTP response exceeded 64 KiB")
+
+
+def raw_socket_exchange(
+    host: str,
+    request_parts: tuple[bytes, ...],
+    timeout: float,
+    port: int = 80,
+    half_close: bool = False,
+) -> RawSocketResult:
+    started = time.monotonic()
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as connection:
+            for part in request_parts:
+                connection.sendall(part)
+            if half_close:
+                connection.shutdown(socket.SHUT_WR)
+            return receive_bounded(connection, timeout)
+    except (ConnectionError, OSError):
+        return RawSocketResult(b"", True, False, time.monotonic() - started)
+
+
+def raw_http_exchange(
+    host: str, request: bytes, timeout: float, port: int = 80
+) -> RawHttpResponse:
+    result = raw_socket_exchange(host, (request,), timeout, port)
+    if result.timed_out:
+        raise RuntimeError("raw HTTP response timed out")
+    return parse_raw_http_response(result.data)
+
+
+def raw_request_bytes(
+    method: str,
+    target: str,
+    headers: tuple[tuple[str, str], ...],
+    body: bytes = b"",
+) -> bytes:
+    lines = [f"{method} {target} HTTP/1.1\r\n".encode("ascii")]
+    lines.extend(f"{name}: {value}\r\n".encode("latin-1") for name, value in headers)
+    lines.append(b"\r\n")
+    lines.append(body)
+    return b"".join(lines)
+
+
+def authenticated_headers(host: str, bearer: str) -> tuple[tuple[str, str], ...]:
+    return (
+        ("Host", host),
+        ("Authorization", f"Bearer {bearer}"),
+        ("Connection", "close"),
+    )
+
+
+def rejected_or_closed(result: RawSocketResult) -> bool:
+    prompt_close = result.closed and result.elapsed <= 2.0
+    if result.data:
+        try:
+            return parse_raw_http_response(result.data).status >= 400
+        except RuntimeError:
+            return prompt_close
+    return prompt_close and not result.timed_out
+
+
+def require_rejected(name: str, result: RawSocketResult) -> None:
+    if not rejected_or_closed(result):
+        detail = "timeout" if result.timed_out else "accepted response"
+        if result.data:
+            try:
+                detail = f"HTTP {parse_raw_http_response(result.data).status}"
+            except RuntimeError:
+                detail = "unparseable response without prompt close"
+        raise RuntimeError(f"{name} was not rejected: {detail}")
+
+
+def run_raw_http_security(args: argparse.Namespace) -> int:
+    bearer = os.environ["CORE_PILOT_BEARER"]
+    timeout = min(args.timeout, 10.0)
+    auth = authenticated_headers(args.host, bearer)
+
+    def probe(name: str, request: bytes, probe_timeout: float = timeout) -> None:
+        require_rejected(
+            name, raw_socket_exchange(args.host, (request,), probe_timeout)
+        )
+
+    unknown = raw_http_exchange(
+        args.host,
+        raw_request_bytes("GET", "/api/v1/does-not-exist", auth),
+        timeout,
+    )
+    if unknown.status != 404:
+        raise RuntimeError(f"unknown API route returned HTTP {unknown.status}, expected 404")
+
+    header_cases = (
+        ("duplicate Host", auth + (("Host", args.host),)),
+        ("conflicting Host", auth + (("Host", "example.invalid"),)),
+        ("duplicate Origin", auth + (("Origin", f"http://{args.host}"),) * 2),
+        (
+            "conflicting Origin",
+            auth
+            + (
+                ("Origin", f"http://{args.host}"),
+                ("Origin", "http://example.invalid"),
+            ),
+        ),
+        ("duplicate Authorization", auth + (("Authorization", f"Bearer {bearer}"),)),
+        ("conflicting Authorization", auth + (("Authorization", "Bearer " + "0" * 64),)),
+    )
+    for name, headers in header_cases:
+        probe(name, raw_request_bytes("GET", "/api/v1/system", headers))
+
+    mutation = auth + (("Origin", f"http://{args.host}"),)
+    body = b"{}"
+    entity_cases = (
+        (
+            "duplicate Content-Type",
+            mutation + (("Content-Type", "application/json"),) * 2,
+        ),
+        (
+            "conflicting Content-Type",
+            mutation
+            + (
+                ("Content-Type", "application/json"),
+                ("Content-Type", "text/plain"),
+            ),
+        ),
+        (
+            "duplicate Content-Length",
+            mutation
+            + (
+                ("Content-Type", "application/json"),
+                ("Content-Length", "2"),
+                ("Content-Length", "2"),
+            ),
+        ),
+        (
+            "conflicting Content-Length",
+            mutation
+            + (
+                ("Content-Type", "application/json"),
+                ("Content-Length", "2"),
+                ("Content-Length", "3"),
+            ),
+        ),
+        (
+            "Content-Length plus Transfer-Encoding",
+            mutation
+            + (
+                ("Content-Type", "application/json"),
+                ("Content-Length", "2"),
+                ("Transfer-Encoding", "chunked"),
+            ),
+        ),
+    )
+    for name, headers in entity_cases:
+        probe(name, raw_request_bytes("POST", "/api/v1/activity/page", headers, body))
+
+    probe(
+        "overlong URI",
+        raw_request_bytes("GET", "/api/v1/" + "x" * 4096, auth),
+    )
+    probe(
+        "overlong header",
+        raw_request_bytes(
+            "GET", "/api/v1/system", auth + (("X-Oversized", "x" * 4096),)
+        ),
+    )
+    for target in (
+        "/api/v1/%73ystem",
+        "/api/v1/system/../health",
+        "//api/v1/system",
+        "/api/v1/system%2f..%2fhealth",
+    ):
+        probe(f"noncanonical route {target}", raw_request_bytes("GET", target, auth))
+
+    first = raw_request_bytes("GET", "/api/v1/health", (("Host", args.host),))
+    second = raw_request_bytes(
+        "GET",
+        "/api/v1/health",
+        (("Host", args.host), ("Connection", "close")),
+    )
+    pipelined = raw_socket_exchange(args.host, (first + second,), timeout)
+    if pipelined.timed_out or not pipelined.closed or pipelined.data.count(b"HTTP/1.1 ") != 1:
+        raise RuntimeError("pipelined requests were not terminated after one response")
+
+    half_closed = raw_socket_exchange(args.host, (second,), timeout, half_close=True)
+    if half_closed.timed_out or not half_closed.closed:
+        raise RuntimeError("half-closed request did not receive a bounded response and close")
+    if parse_raw_http_response(half_closed.data).status != 200:
+        raise RuntimeError("half-closed valid request was not served")
+
+    slow_timeout = min(timeout + 2.0, 12.0)
+    partial_header = raw_socket_exchange(
+        args.host,
+        (f"GET /api/v1/health HTTP/1.1\r\nHost: {args.host}\r\nX-Partial:".encode(),),
+        slow_timeout,
+    )
+    if partial_header.timed_out or not partial_header.closed:
+        raise RuntimeError("partial headers did not time out and close")
+    partial_body = raw_socket_exchange(
+        args.host,
+        (
+            raw_request_bytes(
+                "POST",
+                "/api/v1/activity/page",
+                mutation
+                + (("Content-Type", "application/json"), ("Content-Length", "10")),
+                b"{}",
+            ),
+        ),
+        slow_timeout,
+    )
+    if partial_body.timed_out or not partial_body.closed:
+        raise RuntimeError("partial body did not time out and close")
+
+    holders: list[socket.socket] = []
+    try:
+        partial = f"GET /api/v1/health HTTP/1.1\r\nHost: {args.host}\r\n".encode()
+        for _ in range(2):
+            connection = socket.create_connection((args.host, 80), timeout=timeout)
+            connection.settimeout(timeout)
+            connection.sendall(partial)
+            holders.append(connection)
+        for attempt in range(3):
+            result = raw_socket_exchange(args.host, (partial,), timeout)
+            require_rejected(f"connection-slot monopolization attempt {attempt + 1}", result)
+    finally:
+        for connection in holders:
+            connection.close()
+
+    recovered = raw_http_exchange(args.host, second, timeout)
+    if recovered.status != 200:
+        raise RuntimeError("HTTP admission did not recover after slow clients closed")
+    print("PASS bounded raw HTTP parser, timeout, routing, and admission security", flush=True)
+    return 0
 
 
 def opener() -> urllib.request.OpenerDirector:
@@ -611,7 +896,7 @@ def run_soak(args: argparse.Namespace, base_url: str, with_stress: bool) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "mode", choices=("stress", "rate-limit", "soak", "both", "lifecycle")
+        "mode", choices=("stress", "rate-limit", "soak", "both", "lifecycle", "raw-http")
     )
     parser.add_argument(
         "host", help="Hostname, IPv4 address, or bracketed IPv6 address"
@@ -665,6 +950,10 @@ def main() -> int:
             "set MATTER_SETUP_CODE and CORE_PILOT_MATTER_NODE_ID for lifecycle testing"
         )
     base_url = f"{args.scheme}://{args.host}"
+    if args.mode == "raw-http":
+        if args.scheme != "http":
+            parser.error("raw-http validation supports the documented HTTP endpoint only")
+        return run_raw_http_security(args)
     if args.mode == "stress":
         return run_stress(args, base_url)
     if args.mode == "lifecycle":

@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "http_connection_policy.hpp"
 #include "http_server.hpp"
 #include "lwip/sockets.h"
 #include "mbedtls/platform_util.h"
@@ -41,6 +42,8 @@ std::atomic<std::uint32_t> connection_errors{};
 std::atomic<std::uint32_t> dashboard_transfers{};
 std::atomic<std::uint32_t> dashboard_last_transfer_ms{};
 std::atomic<std::uint32_t> dashboard_max_transfer_ms{};
+core_domain::HttpConnectionPolicy connection_policy;
+portMUX_TYPE connection_policy_lock = portMUX_INITIALIZER_UNLOCKED;
 
 class AuthLock final {
 public:
@@ -67,10 +70,10 @@ uint64_t now() {
   return esp_timer_get_time() / 1000000;
 }
 
-std::uint64_t requestSource(httpd_req_t* request) {
+std::uint64_t socketSource(int socket) {
   sockaddr_storage peer{};
   socklen_t length = sizeof(peer);
-  if (getpeername(httpd_req_to_sockfd(request), reinterpret_cast<sockaddr*>(&peer), &length) != 0)
+  if (getpeername(socket, reinterpret_cast<sockaddr*>(&peer), &length) != 0)
     return 0;
   const std::uint8_t* bytes = nullptr;
   std::size_t byte_count = 0;
@@ -91,6 +94,10 @@ std::uint64_t requestSource(httpd_req_t* request) {
     hash *= 1099511628211ULL;
   }
   return hash == 0 ? 1 : hash;
+}
+
+std::uint64_t requestSource(httpd_req_t* request) {
+  return socketSource(httpd_req_to_sockfd(request));
 }
 
 esp_err_t rejectRateLimited(httpd_req_t* request, std::uint32_t retry_after) {
@@ -300,25 +307,50 @@ esp_err_t authHandler(httpd_req_t* req) {
   }
 
   char response[128]{};
+  char cookie[160]{};
   if (cookie_mode) {
-    char cookie[160]{};
     std::snprintf(cookie, sizeof(cookie),
                   "core_pilot_session=%s; HttpOnly; SameSite=Strict; Path=/; Max-Age=1800", token);
-    httpd_resp_set_hdr(req, "Set-Cookie", cookie);
+    if (httpd_resp_set_hdr(req, "Set-Cookie", cookie) != ESP_OK) {
+      mbedtls_platform_zeroize(cookie, sizeof(cookie));
+      mbedtls_platform_zeroize(token, sizeof(token));
+      return ESP_FAIL;
+    }
     std::snprintf(response, sizeof(response), "{\"authenticated\":true,\"expires_in\":%llu}",
                   static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
-    mbedtls_platform_zeroize(cookie, sizeof(cookie));
   } else {
     std::snprintf(response, sizeof(response), "{\"token\":\"%s\",\"expires_in\":%llu}", token,
                   static_cast<unsigned long long>(core_security::Auth::kSessionSeconds));
   }
   const auto sent = httpd_resp_sendstr(req, response);
+  mbedtls_platform_zeroize(cookie, sizeof(cookie));
   mbedtls_platform_zeroize(token, sizeof(token));
   mbedtls_platform_zeroize(response, sizeof(response));
   return sent;
 }
 
 esp_err_t logoutHandler(httpd_req_t* req) {
+  char body[16]{};
+  if (req->content_len == 0 || req->content_len >= sizeof(body))
+    return rejectAuth(req, "400 Bad Request", "invalid_request", "Invalid logout request.");
+  size_t received = 0;
+  while (received < req->content_len) {
+    const int count = httpd_req_recv(req, body + received, req->content_len - received);
+    if (count <= 0) {
+      mbedtls_platform_zeroize(body, sizeof(body));
+      return ESP_FAIL;
+    }
+    received += static_cast<size_t>(count);
+  }
+  cJSON* document = nullptr;
+  const auto parsed = core_domain::parse_json(body, received, sizeof(body) - 1, document);
+  const bool valid =
+      parsed == core_domain::ApiError::ok && cJSON_IsObject(document) && document->child == nullptr;
+  core_domain::delete_json_sensitive(document);
+  mbedtls_platform_zeroize(body, sizeof(body));
+  if (!valid)
+    return rejectAuth(req, "400 Bad Request", "invalid_request", "Invalid logout request.");
+
   char bearer[80]{};
   char cookie[65]{};
   bool revoked = false;
@@ -455,15 +487,35 @@ esp_err_t registerHttpAccessRoute(httpd_handle_t server, const httpd_uri_t* rout
   return httpd_register_uri_handler(server, &wrapped);
 }
 
-esp_err_t trackHttpConnectionOpen(httpd_handle_t, int) {
+esp_err_t trackHttpConnectionOpen(httpd_handle_t, int socket) {
+  const std::uint64_t source = socketSource(socket);
+  taskENTER_CRITICAL(&connection_policy_lock);
+  const bool admitted = connection_policy.admit(socket, source);
+  taskEXIT_CRITICAL(&connection_policy_lock);
+  if (!admitted) {
+    connection_errors.fetch_add(1);
+    return ESP_FAIL;
+  }
+  const timeval timeout{.tv_sec = 5, .tv_usec = 0};
+  if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) != 0 ||
+      setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) != 0) {
+    taskENTER_CRITICAL(&connection_policy_lock);
+    connection_policy.release(socket);
+    taskEXIT_CRITICAL(&connection_policy_lock);
+    connection_errors.fetch_add(1);
+    return ESP_FAIL;
+  }
   accepted_connections.fetch_add(1);
   active_connections.fetch_add(1);
   return ESP_OK;
 }
 
 void trackHttpConnectionClose(httpd_handle_t, int socket) {
+  taskENTER_CRITICAL(&connection_policy_lock);
+  const bool tracked = connection_policy.release(socket);
+  taskEXIT_CRITICAL(&connection_policy_lock);
   std::uint32_t active = active_connections.load();
-  while (active != 0 && !active_connections.compare_exchange_weak(active, active - 1)) {
+  while (tracked && active != 0 && !active_connections.compare_exchange_weak(active, active - 1)) {
   }
   close(socket);
 }

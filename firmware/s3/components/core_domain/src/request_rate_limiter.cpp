@@ -45,6 +45,7 @@ RateLimitResult RequestRateLimiter::allow(uint64_t source, uint64_t now_seconds)
 
   SourceBucket* selected = nullptr;
   SourceBucket* reusable = nullptr;
+  SourceBucket* oldest = nullptr;
   for (auto& entry : sources_) {
     if (entry.used) {
       refill(entry.bucket, source_policy_, now_seconds);
@@ -56,20 +57,15 @@ RateLimitResult RequestRateLimiter::allow(uint64_t source, uint64_t now_seconds)
           (reusable == nullptr || entry.bucket.updated_at < reusable->bucket.updated_at)) {
         reusable = &entry;
       }
+      if (oldest == nullptr || entry.bucket.updated_at < oldest->bucket.updated_at)
+        oldest = &entry;
     } else if (reusable == nullptr) {
       reusable = &entry;
     }
   }
 
   if (selected == nullptr) {
-    selected = reusable;
-    if (selected == nullptr) {
-      uint32_t retry = 1;
-      for (const auto& entry : sources_) {
-        retry = std::max(retry, retry_after(entry.bucket, source_policy_));
-      }
-      return {false, retry};
-    }
+    selected = reusable != nullptr ? reusable : oldest;
     selected->source = source;
     selected->bucket = {source_policy_.capacity, now_seconds};
     selected->used = true;

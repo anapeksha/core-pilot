@@ -57,11 +57,13 @@ TEST_CASE("session revocation immediately zeroizes the matching bearer", "[core_
   TEST_ASSERT_FALSE(auth.revoke(token));
 }
 
-TEST_CASE("failed bootstrap guesses require physical regeneration", "[core_security]") {
+TEST_CASE("failed bootstrap guesses rotate the code after a bounded cooldown", "[core_security]") {
   Random random;
   core_security::Auth auth;
   char token[65]{};
   TEST_ASSERT_EQUAL(0, static_cast<int>(auth.begin(random, 400, capture)));
+  char old_code[17]{};
+  std::memcpy(old_code, physical_code, sizeof(old_code));
 
   for (unsigned attempt = 1; attempt < core_security::Auth::kBootstrapAttemptLimit; ++attempt) {
     TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::incorrect),
@@ -69,19 +71,12 @@ TEST_CASE("failed bootstrap guesses require physical regeneration", "[core_secur
   }
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
                     static_cast<int>(auth.exchange("0000000000000000", random, 401, token)));
-  TEST_ASSERT_EQUAL_STRING("", token);
-  TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::attempts_exhausted),
-                    static_cast<int>(auth.bootstrap_state(450)));
+  TEST_ASSERT_NOT_EQUAL(0, std::strcmp(old_code, physical_code));
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::attempts_exhausted),
-                    static_cast<int>(auth.exchange(physical_code, random, 450, token)));
-  TEST_ASSERT_EQUAL_STRING("", token);
-
-  TEST_ASSERT_EQUAL(0, static_cast<int>(auth.regenerate(random, 460, capture)));
+                    static_cast<int>(auth.exchange(physical_code, random, 402, token)));
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::ok),
-                    static_cast<int>(auth.exchange(physical_code, random, 461, token)));
-  TEST_ASSERT_TRUE(auth.authorize(token, 461));
-  TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::consumed),
-                    static_cast<int>(auth.bootstrap_state(461)));
+                    static_cast<int>(auth.exchange(physical_code, random, 403, token)));
+  TEST_ASSERT_TRUE(auth.authorize(token, 403));
 }
 
 TEST_CASE("bootstrap expiry closes an exhausted exchange", "[core_security]") {
@@ -93,12 +88,12 @@ TEST_CASE("bootstrap expiry closes an exhausted exchange", "[core_security]") {
   for (unsigned attempt = 0; attempt < core_security::Auth::kBootstrapAttemptLimit; ++attempt)
     auth.exchange("0000000000000000", random, 300, token);
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::attempts_exhausted),
-                    static_cast<int>(auth.bootstrap_state(309)));
+                    static_cast<int>(auth.bootstrap_state(301)));
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::ExchangeResult::expired),
-                    static_cast<int>(auth.exchange(physical_code, random, 310, token)));
+                    static_cast<int>(auth.exchange(physical_code, random, 600, token)));
   TEST_ASSERT_EQUAL_STRING("", token);
   TEST_ASSERT_EQUAL(static_cast<int>(core_security::BootstrapState::expired),
-                    static_cast<int>(auth.bootstrap_state(330)));
+                    static_cast<int>(auth.bootstrap_state(600)));
 }
 
 TEST_CASE("physical regeneration revokes existing sessions", "[core_security]") {

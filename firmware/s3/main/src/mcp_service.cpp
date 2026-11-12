@@ -115,11 +115,9 @@ constexpr McpService::Effect toolEffect(const Tool& tool) {
 }
 
 constexpr std::uint32_t defaultPermissions() {
-  std::uint32_t mask = 0;
-  for (std::size_t index = 0; index < std::size(kTools); ++index)
-    if (kTools[index].available && readOnlyDefault(kTools[index]))
-      mask |= 1U << index;
-  return mask;
+  // Tool results are sent to the configured external provider during model tool rounds.
+  // Require an explicit encrypted permission for every tool, including read-only inventory.
+  return 0;
 }
 
 std::size_t toolIndex(const Tool* tool) {
@@ -192,6 +190,7 @@ cJSON* descriptor(const Tool& tool) {
   cJSON_AddBoolToObject(item, "enabled", toolEnabled(tool));
   cJSON_AddBoolToObject(item, "destructive", tool.destructive);
   cJSON_AddBoolToObject(item, "available", tool.available);
+  cJSON_AddBoolToObject(item, "provider_result_egress", readOnlyDefault(tool));
   cJSON* schema = cJSON_AddObjectToObject(item, "inputSchema");
   cJSON_AddStringToObject(schema, "type", "object");
   cJSON* properties = cJSON_AddObjectToObject(schema, "properties");
@@ -749,13 +748,21 @@ bool McpService::requiresLocalApproval(Effect effect) {
   return effect != Effect::read_only;
 }
 
-esp_err_t McpService::invoke(const HttpRuntime& runtime, const char* tool_name,
-                             const cJSON* arguments, cJSON*& result) {
+bool McpService::invocationAuthorized(Effect effect, bool approved_local) {
+  return requiresLocalApproval(effect) == approved_local;
+}
+
+namespace {
+esp_err_t invokeWithAuthority(const HttpRuntime& runtime, const char* tool_name,
+                              const cJSON* arguments, cJSON*& result, bool approved_local) {
   result = nullptr;
   const Tool* tool = findTool(tool_name);
   if (tool == nullptr || !tool->available || arguments == nullptr || !cJSON_IsObject(arguments) ||
       !toolEnabled(*tool))
     return ESP_ERR_NOT_SUPPORTED;
+  const McpService::Effect effect = toolEffect(*tool);
+  if (!McpService::invocationAuthorized(effect, approved_local))
+    return ESP_ERR_NOT_ALLOWED;
 
   if (std::strcmp(tool->name, "GetHubStatus") == 0) {
     if (arguments->child != nullptr)
@@ -932,6 +939,17 @@ esp_err_t McpService::invoke(const HttpRuntime& runtime, const char* tool_name,
     cJSON_AddNumberToObject(result, "operation_id", operation_id);
   }
   return result == nullptr ? ESP_ERR_NOT_SUPPORTED : ESP_OK;
+}
+} // namespace
+
+esp_err_t McpService::invoke(const HttpRuntime& runtime, const char* tool_name,
+                             const cJSON* arguments, cJSON*& result) {
+  return invokeWithAuthority(runtime, tool_name, arguments, result, false);
+}
+
+esp_err_t McpService::invokeApproved(const HttpRuntime& runtime, const char* tool_name,
+                                     const cJSON* arguments, cJSON*& result) {
+  return invokeWithAuthority(runtime, tool_name, arguments, result, true);
 }
 
 cJSON* McpService::jsonRpc(const HttpRuntime& runtime, const cJSON* request, bool& has_response) {

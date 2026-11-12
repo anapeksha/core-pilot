@@ -86,6 +86,7 @@ private:
   mutable portMUX_TYPE lock_ = portMUX_INITIALIZER_UNLOCKED;
   Status state_{};
   ScanSnapshot scan_{};
+  bool scan_cancellation_pending_ = false;
   EventGroupHandle_t events_ = nullptr;
   esp_netif_t* sta_ = nullptr;
   esp_netif_t* ap_ = nullptr;

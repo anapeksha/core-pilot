@@ -38,26 +38,38 @@ Auth::~Auth() {
 void Auth::close_bootstrap(BootstrapState state) {
   mbedtls_platform_zeroize(code_, sizeof(code_));
   bootstrap_expires_ = 0;
+  bootstrap_retry_at_ = 0;
   failed_attempts_ = 0;
   bootstrap_state_ = state;
 }
 
+Status Auth::rotate_bootstrap(RandomSource& random, uint64_t now, bool revoke_sessions) {
+  mbedtls_platform_zeroize(code_, sizeof(code_));
+  failed_attempts_ = 0;
+  bootstrap_retry_at_ = 0;
+  if (revoke_sessions)
+    mbedtls_platform_zeroize(sessions_, sizeof(sessions_));
+  const auto result = randomHex(random, code_, 8);
+  if (result != Status::Ok) {
+    close_bootstrap(BootstrapState::unavailable);
+    return result;
+  }
+  bootstrap_expires_ = now + kBootstrapSeconds;
+  bootstrap_state_ = BootstrapState::open;
+  if (physical_sink_)
+    physical_sink_(code_, bootstrap_expires_);
+  return Status::Ok;
+}
+
 Status Auth::begin(RandomSource& random, uint64_t now, BootstrapSink sink) {
-  mbedtls_platform_zeroize(sessions_, sizeof(sessions_));
-  return regenerate(random, now, sink);
+  physical_sink_ = sink;
+  return rotate_bootstrap(random, now, true);
 }
 
 Status Auth::regenerate(RandomSource& random, uint64_t now, BootstrapSink sink) {
-  close_bootstrap(BootstrapState::unavailable);
-  mbedtls_platform_zeroize(sessions_, sizeof(sessions_));
-  const auto result = randomHex(random, code_, 8);
-  if (result != Status::Ok)
-    return result;
-  bootstrap_expires_ = now + kBootstrapSeconds;
-  bootstrap_state_ = BootstrapState::open;
   if (sink)
-    sink(code_, bootstrap_expires_);
-  return Status::Ok;
+    physical_sink_ = sink;
+  return rotate_bootstrap(random, now, true);
 }
 
 BootstrapState Auth::bootstrap_state(uint64_t now) {
@@ -65,6 +77,9 @@ BootstrapState Auth::bootstrap_state(uint64_t now) {
        bootstrap_state_ == BootstrapState::attempts_exhausted) &&
       now >= bootstrap_expires_) {
     close_bootstrap(BootstrapState::expired);
+  } else if (bootstrap_state_ == BootstrapState::attempts_exhausted && now >= bootstrap_retry_at_) {
+    bootstrap_retry_at_ = 0;
+    bootstrap_state_ = BootstrapState::open;
   }
   return bootstrap_state_;
 }
@@ -125,6 +140,9 @@ ExchangeResult Auth::exchange(const char* code, RandomSource& random, uint64_t n
   if (!equal(code, code_, 16)) {
     ++failed_attempts_;
     if (failed_attempts_ >= kBootstrapAttemptLimit) {
+      if (rotate_bootstrap(random, now, false) != Status::Ok)
+        return ExchangeResult::unavailable;
+      bootstrap_retry_at_ = now + kBootstrapCooldownSeconds;
       bootstrap_state_ = BootstrapState::attempts_exhausted;
       return ExchangeResult::attempts_exhausted;
     }

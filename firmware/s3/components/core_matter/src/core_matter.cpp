@@ -1192,11 +1192,11 @@ void CoreMatter::releaseInvokeCallback(void* token) {
   taskEXIT_CRITICAL(&status_lock_);
 }
 
-void CoreMatter::quarantineInvokeCallback(std::uint32_t operation_id) {
+void CoreMatter::reclaimInvokeCallback(std::uint32_t operation_id) {
   taskENTER_CRITICAL(&status_lock_);
   for (auto& context : invoke_callback_contexts_) {
     if (context.operation_id == operation_id && context.state == InvokeContextState::pending) {
-      context.state = InvokeContextState::quarantined;
+      context = {};
       break;
     }
   }
@@ -1213,8 +1213,9 @@ void CoreMatter::completeInvokeCallback(void* token, bool succeeded, esp_err_t e
   std::uint32_t operation_id = 0;
   taskENTER_CRITICAL(&matter->status_lock_);
   auto& context = matter->invoke_callback_contexts_[decoded.slot];
-  if (context.generation == decoded.generation && context.state != InvokeContextState::available &&
-      !context.completion_claimed) {
+  if (detail::invokeCallbackCanComplete(value, kQueueDepth, decoded.slot, context.generation,
+                                        context.state == InvokeContextState::available,
+                                        context.completion_claimed)) {
     context.completion_claimed = true;
     operation_id = context.operation_id;
   }
@@ -1471,9 +1472,9 @@ void CoreMatter::run() {
       }
       taskEXIT_CRITICAL(&status_lock_);
       if (invoke_timed_out) {
-        // The transport owns the callback token until it delivers a terminal callback. Keep the
-        // slot quarantined rather than risk reuse while a late callback can still reference it.
-        quarantineInvokeCallback(invoke_operation_id);
+        // Tokens carry a generation, so reclaiming the slot makes late callbacks harmless even
+        // after the slot is reused by a newer invoke.
+        reclaimInvokeCallback(invoke_operation_id);
         finishCommand(invoke_operation_id, CommandState::failed, ESP_ERR_TIMEOUT);
       }
       if (unpair_timed_out) {

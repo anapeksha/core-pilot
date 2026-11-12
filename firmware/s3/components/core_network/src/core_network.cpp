@@ -52,9 +52,13 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
   auto& self = *static_cast<CoreNetwork*>(arg);
   if (base == WIFI_EVENT && id == WIFI_EVENT_SCAN_DONE) {
     portENTER_CRITICAL(&self.lock_);
-    const bool requested = self.scan_.state == ScanState::scanning;
+    const auto action = network_policy::scan_event_action(self.scan_.state == ScanState::scanning,
+                                                          self.scan_cancellation_pending_);
+    const std::uint32_t generation = self.scan_.generation;
+    if (action == network_policy::ScanEventAction::finish_cancellation)
+      self.scan_cancellation_pending_ = false;
     portEXIT_CRITICAL(&self.lock_);
-    if (!requested)
+    if (action != network_policy::ScanEventAction::publish)
       return;
     wifi_ap_record_t records[kMaxScanResults]{};
     std::uint16_t count = kMaxScanResults;
@@ -63,13 +67,19 @@ void CoreNetwork::on_event(void* arg, esp_event_base_t base, int32_t id, void* d
     if (result == ESP_OK && mode == Mode::setup_ap)
       result = esp_wifi_set_mode(WIFI_MODE_AP);
     portENTER_CRITICAL(&self.lock_);
-    self.scan_.last_error = result;
-    self.scan_.count = result == ESP_OK ? count : 0;
-    self.scan_.state = result == ESP_OK ? ScanState::complete : ScanState::failed;
-    if (result == ESP_OK)
-      std::memcpy(self.scan_.records, records, count * sizeof(records[0]));
+    const bool current = network_policy::scan_result_is_current(
+        self.scan_.state == ScanState::scanning, self.scan_cancellation_pending_,
+        self.scan_.generation, generation);
+    if (current) {
+      self.scan_.last_error = result;
+      self.scan_.count = result == ESP_OK ? count : 0;
+      self.scan_.state = result == ESP_OK ? ScanState::complete : ScanState::failed;
+      if (result == ESP_OK)
+        std::memcpy(self.scan_.records, records, count * sizeof(records[0]));
+    }
     portEXIT_CRITICAL(&self.lock_);
-    xEventGroupSetBits(self.events_, kScanDone);
+    if (current)
+      xEventGroupSetBits(self.events_, kScanDone);
   } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
     const auto* event = static_cast<wifi_event_sta_disconnected_t*>(data);
     portENTER_CRITICAL(&self.lock_);
@@ -412,16 +422,17 @@ esp_err_t CoreNetwork::requestScan() {
   const Mode mode = status().mode;
   if (mode != Mode::station && mode != Mode::setup_ap)
     return ESP_ERR_INVALID_STATE;
+  portENTER_CRITICAL(&lock_);
+  const bool unavailable = scan_.state == ScanState::scanning || scan_cancellation_pending_;
+  portEXIT_CRITICAL(&lock_);
+  if (unavailable)
+    return ESP_ERR_INVALID_STATE;
   if (mode == Mode::setup_ap) {
     const esp_err_t mode_result = esp_wifi_set_mode(WIFI_MODE_APSTA);
     if (mode_result != ESP_OK)
       return mode_result;
   }
   portENTER_CRITICAL(&lock_);
-  if (scan_.state == ScanState::scanning) {
-    portEXIT_CRITICAL(&lock_);
-    return ESP_ERR_INVALID_STATE;
-  }
   scan_.state = ScanState::scanning;
   scan_.last_error = ESP_OK;
   scan_.count = 0;
@@ -461,6 +472,7 @@ esp_err_t CoreNetwork::waitForScan(std::uint32_t generation, TickType_t timeout)
   scan_.state = ScanState::failed;
   scan_.last_error = ESP_ERR_TIMEOUT;
   scan_.count = 0;
+  scan_cancellation_pending_ = true;
   const Mode mode = state_.mode;
   portEXIT_CRITICAL(&lock_);
   esp_wifi_scan_stop();
@@ -493,6 +505,12 @@ esp_err_t CoreNetwork::connectProfile(const network_policy::Profile& profile) {
   if (join_generation_ == 0)
     ++join_generation_;
   const std::uint32_t generation = join_generation_;
+  if (scan_.state == ScanState::scanning) {
+    scan_.state = ScanState::failed;
+    scan_.last_error = ESP_ERR_INVALID_STATE;
+    scan_.count = 0;
+    scan_cancellation_pending_ = true;
+  }
   portEXIT_CRITICAL(&lock_);
   esp_wifi_scan_stop();
   esp_wifi_disconnect();
@@ -609,6 +627,12 @@ esp_err_t CoreNetwork::restoreSetupAp() {
   portENTER_CRITICAL(&lock_);
   reconnect_enabled_ = false;
   transition_in_progress_ = true;
+  if (scan_.state == ScanState::scanning) {
+    scan_.state = ScanState::failed;
+    scan_.last_error = ESP_ERR_INVALID_STATE;
+    scan_.count = 0;
+    scan_cancellation_pending_ = true;
+  }
   portEXIT_CRITICAL(&lock_);
   esp_wifi_scan_stop();
   esp_wifi_disconnect();
@@ -677,6 +701,10 @@ void CoreNetwork::stop() {
     events_ = nullptr;
   }
   mbedtls_platform_zeroize(setup_password_, sizeof(setup_password_));
+  portENTER_CRITICAL(&lock_);
+  scan_ = {};
+  scan_cancellation_pending_ = false;
+  portEXIT_CRITICAL(&lock_);
   set_mode(Mode::stopped);
 }
 

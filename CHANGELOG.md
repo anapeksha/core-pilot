@@ -4,6 +4,27 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+### Added
+
+- Bounded raw TCP security probes for ambiguous headers, malformed framing, route normalization, pipelining, slow clients, and connection-slot recovery.
+
+### Changed
+
+- Disabled AI tools by default and disclosed when enabled read-only results leave the device for the configured provider.
+
+### Fixed
+
+- Required CoreS3 approval for every effectful MCP invocation path and reported proposed, queued, rejected, expired, and failed AI actions truthfully.
+- Reclaimed timed-out Matter invoke callbacks without allowing stale or duplicate callbacks to complete reused slots.
+- Isolated Wi-Fi scan generations across timeout, cancellation, and profile transitions.
+- Applied strict duplicate-free JSON schemas and recursive secret cleanup to privileged mutation routes.
+- Prevented source-table rate-limit exhaustion, preserved bootstrap availability under failed guesses, and reserved HTTP capacity from same-source slow clients.
+
+### Security
+
+- Kept physical bootstrap rotation local to the display while preserving active authenticated sessions.
+- Rejected direct physical, persistent, and destructive MCP calls regardless of client-supplied arguments or confirmation text.
+
 ## [0.1.0-rc.3] - 2026-11-11
 
 ### Added

@@ -41,6 +41,12 @@ struct InvokeToken final {
          decoded.generation == generation;
 }
 
+[[nodiscard]] constexpr bool invokeCallbackCanComplete(std::uintptr_t token, std::size_t capacity,
+                                                       std::size_t slot, std::uint32_t generation,
+                                                       bool available, bool completion_claimed) {
+  return !available && !completion_claimed && invokeTokenMatches(token, capacity, slot, generation);
+}
+
 [[nodiscard]] constexpr bool unpairCallbackSlotAvailable(std::uint32_t operation_id) {
   return operation_id == 0;
 }
