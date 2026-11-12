@@ -8,6 +8,7 @@ import concurrent.futures
 import json
 import os
 import re
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +23,75 @@ class Sample:
     thread_ready: bool
     case_ready: bool
     subscriptions_ready: bool
+
+
+@dataclass(frozen=True)
+class RawHttpResponse:
+    status: int
+    headers: tuple[tuple[str, str], ...]
+    body: bytes
+
+
+def parse_raw_http_response(data: bytes) -> RawHttpResponse:
+    head, separator, body = data.partition(b"\r\n\r\n")
+    if not separator:
+        raise RuntimeError("raw HTTP response omitted the header terminator")
+    lines = head.split(b"\r\n")
+    match = re.fullmatch(rb"HTTP/1\.[01] ([0-9]{3})(?: .*)?", lines[0])
+    if match is None:
+        raise RuntimeError("raw HTTP response has an invalid status line")
+    headers: list[tuple[str, str]] = []
+    for line in lines[1:]:
+        name, colon, value = line.partition(b":")
+        if not colon or not name:
+            raise RuntimeError("raw HTTP response has a malformed header")
+        headers.append((name.decode("ascii").lower(), value.strip().decode("latin-1")))
+    return RawHttpResponse(int(match.group(1)), tuple(headers), body)
+
+
+def raw_http_exchange(host: str, request: bytes, timeout: float, port: int = 80) -> RawHttpResponse:
+    chunks: list[bytes] = []
+    with socket.create_connection((host, port), timeout=timeout) as connection:
+        connection.settimeout(timeout)
+        connection.sendall(request)
+        while True:
+            chunk = connection.recv(4096)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if sum(map(len, chunks)) > 64 * 1024:
+                raise RuntimeError("raw HTTP response exceeded 64 KiB")
+    return parse_raw_http_response(b"".join(chunks))
+
+
+def raw_request(host: str, target: str, bearer: str, timeout: float, extra: bytes = b"") -> RawHttpResponse:
+    request = (
+        f"GET {target} HTTP/1.1\r\nHost: {host}\r\n"
+        f"Authorization: Bearer {bearer}\r\nConnection: close\r\n"
+    ).encode() + extra + b"\r\n"
+    return raw_http_exchange(host, request, timeout)
+
+
+def run_raw_http_security(args: argparse.Namespace) -> int:
+    bearer = os.environ["CORE_PILOT_BEARER"]
+    unknown = raw_request(args.host, "/api/v1/does-not-exist", bearer, args.timeout)
+    if unknown.status != 404:
+        raise RuntimeError(f"unknown API route returned HTTP {unknown.status}, expected 404")
+    duplicate_host = raw_request(
+        args.host, "/api/v1/system", bearer, args.timeout, f"Host: {args.host}\r\n".encode()
+    )
+    if duplicate_host.status < 400:
+        raise RuntimeError("duplicate Host header was accepted")
+    wrong_method = raw_http_exchange(
+        args.host,
+        (f"DELETE /api/v1/health HTTP/1.1\r\nHost: {args.host}\r\n"
+         "Connection: close\r\n\r\n").encode(),
+        args.timeout,
+    )
+    if wrong_method.status < 400:
+        raise RuntimeError("unsupported route method was accepted")
+    print("PASS raw HTTP route and ambiguous-header rejection", flush=True)
+    return 0
 
 
 def opener() -> urllib.request.OpenerDirector:
@@ -611,7 +681,7 @@ def run_soak(args: argparse.Namespace, base_url: str, with_stress: bool) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "mode", choices=("stress", "rate-limit", "soak", "both", "lifecycle")
+        "mode", choices=("stress", "rate-limit", "soak", "both", "lifecycle", "raw-http")
     )
     parser.add_argument(
         "host", help="Hostname, IPv4 address, or bracketed IPv6 address"
@@ -665,6 +735,10 @@ def main() -> int:
             "set MATTER_SETUP_CODE and CORE_PILOT_MATTER_NODE_ID for lifecycle testing"
         )
     base_url = f"{args.scheme}://{args.host}"
+    if args.mode == "raw-http":
+        if args.scheme != "http":
+            parser.error("raw-http validation supports the documented HTTP endpoint only")
+        return run_raw_http_security(args)
     if args.mode == "stress":
         return run_stress(args, base_url)
     if args.mode == "lifecycle":

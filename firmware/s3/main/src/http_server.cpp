@@ -102,14 +102,9 @@ RequestBody::~RequestBody() {
 
 class SensitiveJsonDocument final {
 public:
-  SensitiveJsonDocument(cJSON* document, const char* field_name)
-      : document_(document), field_name_(field_name) {}
+  SensitiveJsonDocument(cJSON* document, const char*) : document_(document) {}
   ~SensitiveJsonDocument() {
-    const cJSON* field =
-        document_ == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document_, field_name_);
-    if (cJSON_IsString(field))
-      mbedtls_platform_zeroize(field->valuestring, std::strlen(field->valuestring));
-    cJSON_Delete(document_);
+    core_domain::delete_json_sensitive(document_);
   }
   SensitiveJsonDocument(const SensitiveJsonDocument&) = delete;
   SensitiveJsonDocument& operator=(const SensitiveJsonDocument&) = delete;
@@ -119,7 +114,6 @@ public:
 
 private:
   cJSON* document_;
-  const char* field_name_;
 };
 
 void onTimeSync(struct timeval* value) {
@@ -229,6 +223,13 @@ esp_err_t sendJson(httpd_req_t* request, cJSON* response) {
 }
 
 bool copyJsonString(const cJSON* item, char* output, std::size_t capacity);
+
+cJSON* strictJson(const char* body, std::size_t length) {
+  cJSON* document = nullptr;
+  return core_domain::parse_json(body, length, length, document) == core_domain::ApiError::ok
+             ? document
+             : nullptr;
+}
 
 bool exactObject(const cJSON* object, const char* const* names, std::size_t count) {
   if (!cJSON_IsObject(object))
@@ -388,6 +389,15 @@ esp_err_t scheduleRestart() {
 }
 
 esp_err_t rebootHandler(httpd_req_t* request) {
+  RequestBody body(16);
+  std::size_t received = 0;
+  if (!body || readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid reboot request");
+  cJSON* document = strictJson(body.data(), received);
+  const bool valid = cJSON_IsObject(document) && document->child == nullptr;
+  core_domain::delete_json_sensitive(document);
+  if (!valid)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid reboot request");
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", true);
   cJSON_AddStringToObject(response, "status", "rebooting");
@@ -411,13 +421,21 @@ esp_err_t activityPageHandler(httpd_req_t* request) {
   if (!body || readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
   }
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   core_domain::ActivityPageRequest page{};
+  const bool has_before = cJSON_GetObjectItemCaseSensitive(document, "before_sequence") != nullptr;
+  const bool has_limit = cJSON_GetObjectItemCaseSensitive(document, "limit") != nullptr;
+  static constexpr const char* before_fields[] = {"before_sequence"};
+  static constexpr const char* limit_fields[] = {"limit"};
+  static constexpr const char* all_fields[] = {"before_sequence", "limit"};
+  const char* const* fields =
+      has_before ? (has_limit ? all_fields : before_fields) : (has_limit ? limit_fields : nullptr);
+  const std::size_t field_count = static_cast<std::size_t>(has_before) + has_limit;
   const bool valid =
-      document != nullptr &&
+      exactObject(document, fields, field_count) &&
       core_domain::parse_activity_page_request(document, page) == core_domain::ApiError::ok &&
       (!page.has_limit || (page.limit >= 1 && page.limit <= 32));
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   if (!valid) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid activity page request");
   }
@@ -529,8 +547,12 @@ esp_err_t otaMutationHandler(httpd_req_t* request) {
   bool restart_after_response = false;
   char upload_token[65]{};
   if (prepare) {
+    static constexpr const char* fields[] = {"version", "size_bytes", "sha256_hex",
+                                             "restart_after_update"};
     core_domain::OtaPrepare parsed{};
-    const auto parse_result = core_domain::parse_ota_prepare(document, parsed);
+    const auto parse_result = exactObject(document, fields, 4)
+                                  ? core_domain::parse_ota_prepare(document, parsed)
+                                  : core_domain::OtaError::not_prepared;
     core_domain::delete_json_sensitive(document);
     if (parse_result != core_domain::OtaError::ok)
       return sendOtaMutation(request, false, core_domain::error_code::OTA_METADATA_INVALID,
@@ -538,8 +560,12 @@ esp_err_t otaMutationHandler(httpd_req_t* request) {
     result = runtime->ota.prepare(parsed, upload_token);
     mbedtls_platform_zeroize(&parsed, sizeof parsed);
   } else {
+    static constexpr const char* fields[] = {"offset", "data_base64", "final_chunk",
+                                             "upload_token"};
     core_domain::OtaChunk parsed{};
-    const auto parse_result = core_domain::parse_ota_chunk(document, parsed);
+    const auto parse_result = exactObject(document, fields, 4)
+                                  ? core_domain::parse_ota_chunk(document, parsed)
+                                  : core_domain::OtaError::not_prepared;
     core_domain::delete_json_sensitive(document);
     if (parse_result != core_domain::OtaError::ok)
       return sendOtaMutation(request, false, core_domain::error_code::OTA_CHUNK_REJECTED,
@@ -714,7 +740,7 @@ esp_err_t wifiProvisionHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* credentials = cJSON_IsObject(document)
                                  ? cJSON_GetObjectItemCaseSensitive(document, "credentials")
                                  : nullptr;
@@ -726,7 +752,15 @@ esp_err_t wifiProvisionHandler(httpd_req_t* request) {
   const network_policy::Profile profile{
       cJSON_IsString(ssid) ? ssid->valuestring : nullptr, ssid_length,
       cJSON_IsString(password) ? password->valuestring : nullptr, password_length};
-  const bool valid = cJSON_IsObject(credentials) && network_policy::valid_profile(profile);
+  static constexpr const char* root_fields[] = {"credentials"};
+  static constexpr const char* root_fields_with_hostname[] = {"credentials", "hostname"};
+  static constexpr const char* credential_fields[] = {"ssid", "password"};
+  const cJSON* hostname = cJSON_GetObjectItemCaseSensitive(document, "hostname");
+  const bool valid =
+      exactObject(document, hostname == nullptr ? root_fields : root_fields_with_hostname,
+                  hostname == nullptr ? 1 : 2) &&
+      (hostname == nullptr || cJSON_IsString(hostname)) &&
+      exactObject(credentials, credential_fields, 2) && network_policy::valid_profile(profile);
   const esp_err_t result =
       valid ? runtime->wifi_provision.submit(profile.ssid, profile.ssid_length, profile.password,
                                              profile.password_length)
@@ -735,7 +769,7 @@ esp_err_t wifiProvisionHandler(httpd_req_t* request) {
     mbedtls_platform_zeroize(password->valuestring, password_length);
   if (body.data() != nullptr)
     mbedtls_platform_zeroize(body.data(), body.capacity());
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
 
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
@@ -775,14 +809,15 @@ esp_err_t wifiForgetHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* ssid =
       cJSON_IsObject(document) ? cJSON_GetObjectItemCaseSensitive(document, "ssid") : nullptr;
   const std::size_t length = cJSON_IsString(ssid) ? std::strlen(ssid->valuestring) : 0;
-  const esp_err_t result = cJSON_IsString(ssid)
+  static constexpr const char* fields[] = {"ssid"};
+  const esp_err_t result = exactObject(document, fields, 1) && cJSON_IsString(ssid)
                                ? runtime->wifi_provision.forget(ssid->valuestring, length)
                                : ESP_ERR_INVALID_ARG;
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
   cJSON_AddStringToObject(response, "status",
@@ -807,9 +842,9 @@ esp_err_t wifiScanHandler(httpd_req_t* request) {
     std::size_t received = 0;
     if (!body || readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
       return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-    cJSON* document = cJSON_ParseWithLength(body.data(), received);
+    cJSON* document = strictJson(body.data(), received);
     const bool valid = cJSON_IsObject(document) && document->child == nullptr;
-    cJSON_Delete(document);
+    core_domain::delete_json_sensitive(document);
     if (!valid)
       return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid scan request");
     const esp_err_t result = runtime->wifi_provision.requestScan();
@@ -828,9 +863,16 @@ esp_err_t wifiScanPageHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* cursor =
       cJSON_IsObject(document) ? cJSON_GetObjectItemCaseSensitive(document, "last_seen") : nullptr;
+  static constexpr const char* cursor_fields[] = {"last_seen"};
+  const bool exact = cursor == nullptr ? exactObject(document, nullptr, 0)
+                                       : exactObject(document, cursor_fields, 1);
+  if (!exact) {
+    core_domain::delete_json_sensitive(document);
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid scan cursor");
+  }
   std::size_t begin = 0;
   const auto scan = runtime->network.scanSnapshot();
   if (cursor != nullptr && !cJSON_IsNull(cursor)) {
@@ -840,12 +882,12 @@ esp_err_t wifiScanPageHandler(httpd_req_t* request) {
     if (!cJSON_IsString(cursor) || std::strlen(cursor->valuestring) > 31 ||
         std::sscanf(cursor->valuestring, "%lu:%u%c", &generation, &index, &trailing) != 2 ||
         generation != scan.generation || index > scan.count) {
-      cJSON_Delete(document);
+      core_domain::delete_json_sensitive(document);
       return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid scan cursor");
     }
     begin = index;
   }
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   constexpr std::size_t kPageSize = 8;
   const std::size_t end = std::min(begin + kPageSize, scan.count);
   return sendJson(request, wifiScanJson(scan, runtime->network.status(), begin, end, true));
@@ -1139,7 +1181,7 @@ esp_err_t smtpConfigHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   static constexpr const char* root_fields[] = {"config"};
   static constexpr const char* required_fields[] = {"enabled",  "host", "port",      "security",
                                                     "username", "from", "recipients"};
@@ -1183,7 +1225,7 @@ esp_err_t smtpConfigHandler(httpd_req_t* request) {
   smtp::clear_config(config);
   if (cJSON_IsString(password))
     mbedtls_platform_zeroize(password->valuestring, std::strlen(password->valuestring));
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   const bool accepted = result == smtp::Status::Ok;
   if (!accepted)
     httpd_resp_set_status(request, result == smtp::Status::StorageError ? "503 Service Unavailable"
@@ -1207,7 +1249,7 @@ esp_err_t smtpTestHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   static constexpr const char* root_fields[] = {"message"};
   static constexpr const char* message_fields[] = {"subject", "body", "recipients"};
   const cJSON* input =
@@ -1227,7 +1269,7 @@ esp_err_t smtpTestHandler(httpd_req_t* request) {
   const auto result = valid ? runtime->smtp.submit(message) : SmtpService::SubmitResult::invalid;
   mbedtls_platform_zeroize(&message, sizeof(message));
   mbedtls_platform_zeroize(message_body, sizeof(message_body));
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   const bool accepted = result == SmtpService::SubmitResult::queued;
   if (!accepted)
     httpd_resp_set_status(request, result == SmtpService::SubmitResult::invalid
@@ -1257,7 +1299,7 @@ esp_err_t timeConfigHandler(httpd_req_t* request) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
   }
 
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   if (document == nullptr) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid JSON");
   }
@@ -1268,10 +1310,12 @@ esp_err_t timeConfigHandler(httpd_req_t* request) {
   const bool valid_timezone =
       cJSON_IsString(timezone_id) && timezone_id->valuestring[0] != '\0' &&
       std::strlen(timezone_id->valuestring) < sizeof(time_config.timezone_id);
+  static constexpr const char* fields[] = {"ntp_server_id", "timezone_id",
+                                           "timezone_offset_minutes"};
   const bool valid_offset = cJSON_IsNumber(offset) && offset->valuedouble == offset->valueint &&
                             offset->valueint >= -840 && offset->valueint <= 840;
-  if (host == nullptr || !valid_timezone || !valid_offset) {
-    cJSON_Delete(document);
+  if (!exactObject(document, fields, 3) || host == nullptr || !valid_timezone || !valid_offset) {
+    core_domain::delete_json_sensitive(document);
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid time configuration");
   }
 
@@ -1295,7 +1339,7 @@ esp_err_t timeConfigHandler(httpd_req_t* request) {
     time_config.sntp_initialized = true;
     taskEXIT_CRITICAL(&time_config_lock);
   }
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
 
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
@@ -1509,7 +1553,7 @@ esp_err_t modelMutationHandler(httpd_req_t* request) {
     return sendModelError(request, "413 Payload Too Large",
                           core_domain::error_code::MODEL_MUTATION_REJECTED,
                           "Request body is empty or exceeds the bounded limit.");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   if (!document)
     return sendModelError(request, "400 Bad Request",
                           core_domain::error_code::MODEL_MUTATION_REJECTED,
@@ -1517,12 +1561,35 @@ esp_err_t modelMutationHandler(httpd_req_t* request) {
   core_domain::ModelUpsert model{};
   core_domain::ModelError parse_result = core_domain::ModelError::invalid_detail;
   if (remove) {
-    parse_result = core_domain::parse_model_delete(document, model.id);
+    static constexpr const char* fields[] = {"id"};
+    if (exactObject(document, fields, 1))
+      parse_result = core_domain::parse_model_delete(document, model.id);
     model.has_id = parse_result == core_domain::ModelError::ok;
   } else {
-    parse_result = core_domain::parse_model_upsert(document, kind, model);
+    static constexpr const char* room_fields[] = {"name"};
+    static constexpr const char* room_fields_with_id[] = {"id", "name"};
+    static constexpr const char* group_fields[] = {"name", "device_ids"};
+    static constexpr const char* group_fields_with_id[] = {"id", "name", "device_ids"};
+    static constexpr const char* scene_fields[] = {"name", "actions"};
+    static constexpr const char* scene_fields_with_id[] = {"id", "name", "actions"};
+    static constexpr const char* automation_fields[] = {"name", "enabled", "trigger", "actions"};
+    static constexpr const char* automation_fields_with_id[] = {"id", "name", "enabled", "trigger",
+                                                                "actions"};
+    const bool has_id = cJSON_GetObjectItemCaseSensitive(document, "id") != nullptr;
+    const char* const* fields =
+        kind == core_domain::ModelKind::room    ? (has_id ? room_fields_with_id : room_fields)
+        : kind == core_domain::ModelKind::group ? (has_id ? group_fields_with_id : group_fields)
+        : kind == core_domain::ModelKind::scene
+            ? (has_id ? scene_fields_with_id : scene_fields)
+            : (has_id ? automation_fields_with_id : automation_fields);
+    const std::size_t field_count = (kind == core_domain::ModelKind::room         ? 1U
+                                     : kind == core_domain::ModelKind::automation ? 4U
+                                                                                  : 2U) +
+                                    (has_id ? 1U : 0U);
+    if (exactObject(document, fields, field_count))
+      parse_result = core_domain::parse_model_upsert(document, kind, model);
   }
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   if (parse_result != core_domain::ModelError::ok)
     return sendModelError(request, "400 Bad Request",
                           core_domain::error_code::MODEL_MUTATION_REJECTED,
@@ -1569,11 +1636,11 @@ esp_err_t automationRunHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   char id[core_domain::max_id + 1]{};
   const bool valid = document != nullptr &&
                      core_domain::parse_model_delete(document, id) == core_domain::ModelError::ok;
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   if (!valid)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid automation request");
 
@@ -1643,14 +1710,14 @@ esp_err_t automationOperationStatusHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* id = document ? cJSON_GetObjectItemCaseSensitive(document, "operation_id") : nullptr;
   const bool valid =
       cJSON_IsObject(document) && cJSON_GetArraySize(document) == 1 && cJSON_IsNumber(id) &&
       id->valuedouble >= 1 && id->valuedouble <= UINT32_MAX &&
       static_cast<double>(static_cast<std::uint32_t>(id->valuedouble)) == id->valuedouble;
   const auto operation_id = valid ? static_cast<std::uint32_t>(id->valuedouble) : 0;
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   if (!valid)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid operation request");
 
@@ -1908,7 +1975,7 @@ esp_err_t deviceMutationHandler(httpd_req_t* request) {
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
 
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const char* const rename_fields[]{"device_id", "endpoint_id", "name"};
   const char* const on_fields[]{"device_id", "endpoint_id", "on"};
   const char* const level_fields[]{"device_id", "endpoint_id", "level", "transition_time_ds"};
@@ -1981,7 +2048,7 @@ esp_err_t deviceMutationHandler(httpd_req_t* request) {
                                                    transition->valueint, operation_id, &rejection);
     accepted_detail = "Matter color-temperature command queued.";
   }
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
 
   const bool accepted = result == ESP_OK;
   const char* status = accepted ? (rename ? "saved" : "queued") : "rejected";
@@ -2020,13 +2087,14 @@ esp_err_t resetModelsHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* confirmation =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "confirmation");
+  static constexpr const char* fields[] = {"confirmation"};
   const bool confirmed =
-      cJSON_IsString(confirmation) &&
+      exactObject(document, fields, 1) && cJSON_IsString(confirmation) &&
       std::strcmp(confirmation->valuestring, "RESET UNREADABLE MODEL DATABASE") == 0;
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
 
   ModelRepository::Result reset_result{};
   const bool submitted = confirmed && runtime->models.resetUnreadable(reset_result);
@@ -2050,12 +2118,13 @@ esp_err_t removeMatterDeviceHandler(httpd_req_t* request) {
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
 
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* device_id =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "device_id");
+  static constexpr const char* fields[] = {"device_id"};
   std::uint64_t node_id = 0;
-  const bool valid = parseMatterNodeId(device_id, node_id);
-  cJSON_Delete(document);
+  const bool valid = exactObject(document, fields, 1) && parseMatterNodeId(device_id, node_id);
+  core_domain::delete_json_sensitive(document);
 
   bool registered = false;
   if (valid) {
@@ -2116,7 +2185,7 @@ esp_err_t forgetMatterDeviceHandler(httpd_req_t* request) {
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
 
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* device_id =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "device_id");
   const cJSON* confirmation =
@@ -2138,7 +2207,7 @@ esp_err_t forgetMatterDeviceHandler(httpd_req_t* request) {
     for (std::size_t index = 0; index < devices.count; ++index)
       registered = registered || devices.entries[index].node_id == node_id;
   }
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
 
   const bool accepted = valid_node && confirmed && registered && enqueueMatterLocalForget(node_id);
 
@@ -2166,15 +2235,16 @@ esp_err_t resetDeviceRegistryHandler(httpd_req_t* request) {
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
   }
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* confirmation =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "confirmation");
+  static constexpr const char* fields[] = {"confirmation"};
   const bool confirmed =
-      cJSON_IsString(confirmation) &&
+      exactObject(document, fields, 1) && cJSON_IsString(confirmation) &&
       std::strcmp(confirmation->valuestring, "RESET MATTER DEVICE REGISTRY") == 0;
   const auto result =
       confirmed ? runtime->devices.resetUnsupported() : core_security::Status::Invalid;
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
 
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == core_security::Status::Ok);
@@ -2197,17 +2267,19 @@ esp_err_t cancelCommissionHandler(httpd_req_t* request) {
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
   }
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   if (document == nullptr) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid JSON");
   }
   const cJSON* operation = cJSON_GetObjectItemCaseSensitive(document, "operation_id");
-  const bool valid = cJSON_IsNumber(operation) && operation->valuedouble == operation->valueint &&
-                     operation->valueint > 0;
+  static constexpr const char* fields[] = {"operation_id"};
+  const bool valid = exactObject(document, fields, 1) && cJSON_IsNumber(operation) &&
+                     operation->valuedouble == operation->valueint && operation->valueint > 0 &&
+                     operation->valuedouble <= UINT32_MAX;
   const esp_err_t result =
       valid ? runtime->matter.cancelCommissioning(static_cast<std::uint32_t>(operation->valueint))
             : ESP_ERR_INVALID_ARG;
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
 
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
@@ -2225,15 +2297,15 @@ esp_err_t threadDatasetHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  SensitiveJsonDocument document(cJSON_ParseWithLength(body.data(), received),
-                                 "active_dataset_tlvs_hex");
+  SensitiveJsonDocument document(strictJson(body.data(), received), "active_dataset_tlvs_hex");
   const cJSON* encoded =
       document.get() == nullptr
           ? nullptr
           : cJSON_GetObjectItemCaseSensitive(document.get(), "active_dataset_tlvs_hex");
   ThreadDataset dataset;
-  const bool valid =
-      cJSON_IsString(encoded) && decodeThreadDatasetHex(encoded->valuestring, dataset);
+  static constexpr const char* fields[] = {"active_dataset_tlvs_hex"};
+  const bool valid = exactObject(document.get(), fields, 1) && cJSON_IsString(encoded) &&
+                     decodeThreadDatasetHex(encoded->valuestring, dataset);
   std::uint32_t operation_id = 0;
   const esp_err_t result =
       valid ? runtime->thread_dataset.submit(dataset, operation_id) : ESP_ERR_INVALID_ARG;
@@ -2267,16 +2339,24 @@ esp_err_t commissionHandler(httpd_req_t* request) {
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
   }
-  SensitiveJsonDocument document(cJSON_ParseWithLength(body.data(), received), "setup_payload");
+  SensitiveJsonDocument document(strictJson(body.data(), received), "setup_payload");
   if (document.get() == nullptr) {
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid JSON");
   }
   const cJSON* transport = cJSON_GetObjectItemCaseSensitive(document.get(), "transport");
   const cJSON* payload = cJSON_GetObjectItemCaseSensitive(document.get(), "setup_payload");
+  const cJSON* dataset_id = cJSON_GetObjectItemCaseSensitive(document.get(), "thread_dataset_id");
   const bool has_transport = cJSON_IsString(transport);
   const bool requested_thread = has_transport && std::strcmp(transport->valuestring, "thread") == 0;
   const bool requested_wifi = has_transport && std::strcmp(transport->valuestring, "wifi") == 0;
-  const bool valid = cJSON_IsString(payload) && (requested_wifi || requested_thread);
+  static constexpr const char* fields[] = {"transport", "setup_payload"};
+  static constexpr const char* fields_with_dataset[] = {"transport", "setup_payload",
+                                                        "thread_dataset_id"};
+  const bool valid =
+      exactObject(document.get(), dataset_id == nullptr ? fields : fields_with_dataset,
+                  dataset_id == nullptr ? 2 : 3) &&
+      (dataset_id == nullptr || cJSON_IsString(dataset_id)) && cJSON_IsString(payload) &&
+      (requested_wifi || requested_thread);
   std::uint32_t operation_id = 0;
   const esp_err_t result =
       valid
@@ -2494,7 +2574,7 @@ esp_err_t aiProviderHandler(httpd_req_t* request) {
   ai::clear_provider_config(config);
   if (cJSON_IsString(api_key))
     mbedtls_platform_zeroize(api_key->valuestring, std::strlen(api_key->valuestring));
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   return sendAiMutation(request, status, core_domain::error_code::AI_PROVIDER_CONFIG_INVALID,
                         "Encrypted AI provider configuration saved.");
 }
@@ -2543,7 +2623,7 @@ esp_err_t aiContentHandler(httpd_req_t* request, bool prompt) {
       !valid   ? ai::Status::InvalidArgument
       : prompt ? runtime->ai_storage.prompts.upsert(key->valuestring, content, content_size, false)
                : runtime->ai_storage.memory.upsert(key->valuestring, content, content_size);
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   return sendAiMutation(request, status,
                         prompt ? core_domain::error_code::AI_PROMPT_INVALID
                                : core_domain::error_code::AI_MEMORY_TOO_LARGE,
@@ -2680,7 +2760,7 @@ esp_err_t aiChatHandler(httpd_req_t* request) {
   std::size_t received = 0;
   if (!body || readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_413_CONTENT_TOO_LARGE, "Chat request is too large");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   static constexpr const char* message_field[] = {"message"};
   static constexpr const char* fields[] = {"message", "history"};
   static constexpr const char* fields_with_id[] = {"message", "history", "chat_id"};
@@ -2734,7 +2814,7 @@ esp_err_t aiChatHandler(httpd_req_t* request) {
   std::uint64_t operation_id = 0;
   const auto submitted =
       valid ? runtime->ai_chat.submit(chat, operation_id) : AiChatService::SubmitResult::invalid;
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   const bool accepted = submitted == AiChatService::SubmitResult::queued;
   if (!accepted)
     httpd_resp_set_status(request, submitted == AiChatService::SubmitResult::busy ? "409 Conflict"
@@ -2775,20 +2855,21 @@ esp_err_t mcpInvokeHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* tool =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "tool");
   const cJSON* arguments_json =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "arguments_json");
+  static constexpr const char* fields[] = {"tool", "arguments_json"};
   cJSON* arguments =
       cJSON_IsString(arguments_json) ? cJSON_Parse(arguments_json->valuestring) : nullptr;
   cJSON* invocation = nullptr;
   const esp_err_t result =
-      cJSON_IsString(tool) && cJSON_IsObject(arguments)
+      exactObject(document, fields, 2) && cJSON_IsString(tool) && cJSON_IsObject(arguments)
           ? McpService::invoke(*runtime, tool->valuestring, arguments, invocation)
           : ESP_ERR_INVALID_ARG;
   cJSON_Delete(arguments);
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   cJSON* response = cJSON_CreateObject();
   const bool accepted = result == ESP_OK && invocation != nullptr;
   const cJSON* invocation_status =
@@ -2816,7 +2897,7 @@ esp_err_t mcpJsonRpcHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   if (document == nullptr) {
     cJSON* response = cJSON_CreateObject();
     cJSON_AddStringToObject(response, "jsonrpc", "2.0");
@@ -2826,9 +2907,28 @@ esp_err_t mcpJsonRpcHandler(httpd_req_t* request) {
     cJSON_AddStringToObject(error, "message", "Parse error");
     return sendJson(request, response);
   }
+  static constexpr const char* required[] = {"jsonrpc", "method"};
+  static constexpr const char* with_id[] = {"jsonrpc", "id", "method"};
+  static constexpr const char* with_params[] = {"jsonrpc", "method", "params"};
+  static constexpr const char* all_fields[] = {"jsonrpc", "id", "method", "params"};
+  const bool has_id = cJSON_GetObjectItemCaseSensitive(document, "id") != nullptr;
+  const bool has_params = cJSON_GetObjectItemCaseSensitive(document, "params") != nullptr;
+  const char* const* fields =
+      has_id ? (has_params ? all_fields : with_id) : (has_params ? with_params : required);
+  const std::size_t field_count = 2U + static_cast<std::size_t>(has_id) + has_params;
+  if (!exactObject(document, fields, field_count)) {
+    core_domain::delete_json_sensitive(document);
+    cJSON* response = cJSON_CreateObject();
+    cJSON_AddStringToObject(response, "jsonrpc", "2.0");
+    cJSON_AddNullToObject(response, "id");
+    cJSON* error = cJSON_AddObjectToObject(response, "error");
+    cJSON_AddNumberToObject(error, "code", -32600);
+    cJSON_AddStringToObject(error, "message", "Invalid Request");
+    return sendJson(request, response);
+  }
   bool has_response = true;
   cJSON* response = McpService::jsonRpc(*runtime, document, has_response);
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   if (!has_response) {
     httpd_resp_set_status(request, "202 Accepted");
     ESP_RETURN_ON_ERROR(httpd_resp_set_hdr(request, "Cache-Control", "no-store"), kTag, "cache");
@@ -2845,7 +2945,7 @@ esp_err_t mcpPermissionHandler(httpd_req_t* request) {
   if (runtime == nullptr || !body ||
       readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
     return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid request");
-  cJSON* document = cJSON_ParseWithLength(body.data(), received);
+  cJSON* document = strictJson(body.data(), received);
   const cJSON* tool =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "tool");
   const cJSON* enabled =
@@ -2863,7 +2963,7 @@ esp_err_t mcpPermissionHandler(httpd_req_t* request) {
       valid ? McpService::setPermission(*runtime, tool->valuestring, cJSON_IsTrue(enabled),
                                         has_confirmation ? confirmation->valuestring : nullptr)
             : ESP_ERR_INVALID_ARG;
-  cJSON_Delete(document);
+  core_domain::delete_json_sensitive(document);
   cJSON* response = cJSON_CreateObject();
   cJSON_AddBoolToObject(response, "accepted", result == ESP_OK);
   cJSON_AddStringToObject(response, "status", result == ESP_OK ? "saved" : "AI_TOOL_REJECTED");

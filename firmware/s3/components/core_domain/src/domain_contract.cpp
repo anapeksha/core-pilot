@@ -252,9 +252,31 @@ bool field_valid(const cJSON* value, char type, const char* key, unsigned depth)
   }
 }
 
+bool shape_has_key(const char* shape, const char* wanted) {
+  const char* cursor = shape;
+  while (*cursor) {
+    while (*cursor == ' ')
+      ++cursor;
+    const char* key = cursor;
+    while (*cursor && *cursor != ':')
+      ++cursor;
+    if (*cursor != ':')
+      return false;
+    const size_t length = static_cast<size_t>(cursor - key);
+    if (std::strlen(wanted) == length && std::strncmp(key, wanted, length) == 0)
+      return true;
+    while (*cursor && *cursor != ' ')
+      ++cursor;
+  }
+  return false;
+}
+
 bool shape_valid(const cJSON* object, const char* shape, unsigned depth) {
   if (!cJSON_IsObject(object) || !shape || depth > 10)
     return false;
+  for (const cJSON* child = object->child; child; child = child->next)
+    if (!child->string || !shape_has_key(shape, child->string))
+      return false;
   const char* cursor = shape;
   while (*cursor) {
     while (*cursor == ' ')
@@ -412,7 +434,7 @@ ApiError parse_contract_request(const RouteContract& route, const char* bytes, s
     return error;
   if (shape_valid(output, route.request_shape, 0) && request_bounds(route, output))
     return ApiError::ok;
-  cJSON_Delete(output);
+  delete_json_sensitive(output);
   output = nullptr;
   return ApiError::invalid_json;
 }

@@ -216,6 +216,50 @@ class HardwareValidationTests(unittest.TestCase):
                 1,
             )
 
+class RawHttpSecurityTests(unittest.TestCase):
+    def test_parses_raw_http_response_without_collapsing_headers(self) -> None:
+        response = hardware_validation.parse_raw_http_response(
+            b"HTTP/1.1 403 Forbidden\r\nX-Test: one\r\nX-Test: two\r\n\r\nno"
+        )
+        self.assertEqual(response.status, 403)
+        self.assertEqual(response.headers, (("x-test", "one"), ("x-test", "two")))
+        self.assertEqual(response.body, b"no")
+
+    def test_rejects_incomplete_raw_http_response(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "header terminator"):
+            hardware_validation.parse_raw_http_response(b"HTTP/1.1 200 OK\r\n")
+
+    def test_raw_exchange_sends_exact_bytes_and_reads_to_close(self) -> None:
+        class FakeSocket:
+            def __init__(self) -> None:
+                self.sent = b""
+                self.chunks = [b"HTTP/1.1 404 Not Found\r\n", b"Connection: close\r\n\r\n", b""]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args) -> None:
+                return None
+
+            def settimeout(self, _timeout: float) -> None:
+                return None
+
+            def sendall(self, data: bytes) -> None:
+                self.sent = data
+
+            def recv(self, _size: int) -> bytes:
+                return self.chunks.pop(0)
+
+        connection = FakeSocket()
+        with mock.patch.object(
+            hardware_validation.socket, "create_connection", return_value=connection
+        ):
+            response = hardware_validation.raw_http_exchange(
+                "192.0.2.1", b"GET / HTTP/1.1\r\n\r\n", 1
+            )
+        self.assertEqual(response.status, 404)
+        self.assertEqual(connection.sent, b"GET / HTTP/1.1\r\n\r\n")
+
 
 if __name__ == "__main__":
     unittest.main()
