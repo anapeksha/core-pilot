@@ -23,8 +23,9 @@ class SecurityConfigurationTests(unittest.TestCase):
         defaults = (ROOT / "firmware/s3/sdkconfig.development.defaults").read_text()
         self.assertIn("CONFIG_HEAP_POISONING_LIGHT=y", defaults)
 
-    def test_stack_variables_are_zero_initialized(self) -> None:
+    def test_development_code_zero_initializes_stack_variables(self) -> None:
         project = (ROOT / "firmware/s3/CMakeLists.txt").read_text()
+        self.assertIn("if(CONFIG_CORE_PILOT_DEVELOPMENT_AUTH_BYPASS)", project)
         self.assertIn("-ftrivial-auto-var-init=zero", project)
 
 

@@ -33,27 +33,29 @@ include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(core_pilot)
 
 # ESP-IDF 6.0.2 has no Kconfig symbol for automatic variable initialization.
-# Apply the supported compiler option to application-owned code without inflating
-# ESP-IDF and ESP-Matter beyond the immutable production OTA partition boundary.
-set(core_pilot_components
-    core_activity
-    core_ai
-    core_board
-    core_display
-    core_domain
-    core_gateway
-    core_matter
-    core_network
-    core_ota
-    core_security
-    core_smtp
-    core_storage
-    main
-)
-foreach(component IN LISTS core_pilot_components)
-    idf_component_get_property(component_target ${component} COMPONENT_LIB)
-    target_compile_options(${component_target} PRIVATE -ftrivial-auto-var-init=zero)
-endforeach()
+# Enable the supported compiler option for development diagnostics only; even when
+# limited to application-owned code it exceeds the immutable production OTA slot.
+if(CONFIG_CORE_PILOT_DEVELOPMENT_AUTH_BYPASS)
+    set(core_pilot_components
+        core_activity
+        core_ai
+        core_board
+        core_display
+        core_domain
+        core_gateway
+        core_matter
+        core_network
+        core_ota
+        core_security
+        core_smtp
+        core_storage
+        main
+    )
+    foreach(component IN LISTS core_pilot_components)
+        idf_component_get_property(component_target ${component} COMPONENT_LIB)
+        target_compile_options(${component_target} PRIVATE -ftrivial-auto-var-init=zero)
+    endforeach()
+endif()
 
 # Core Pilot commissions through core_matter, so do not build ESP-Matter's unused
 # controller pairing CLI.
