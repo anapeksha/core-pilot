@@ -817,6 +817,10 @@ void AiChatService::process(std::uint64_t operation_id) {
         }
         Action& action = result.actions[result.action_count++];
         std::snprintf(action.tool, sizeof action.tool, "%s", runtime_->prior_tools[index]);
+        action.state = McpService::requiresLocalApproval(runtime_->prior_effects[index])
+                           ? ActionState::proposed
+                       : invoked == ESP_OK ? ActionState::complete
+                                           : ActionState::failed;
         if (!print_bounded(invocation, action.result_json, sizeof action.result_json)) {
           cJSON_Delete(invocation);
           calls_valid = false;

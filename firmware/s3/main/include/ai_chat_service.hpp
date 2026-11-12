@@ -65,9 +65,20 @@ public:
     std::size_t history_count{};
   };
 
+  enum class ActionState : std::uint8_t {
+    proposed,
+    executing,
+    queued,
+    complete,
+    rejected,
+    expired,
+    failed
+  };
+
   struct Action final {
     char tool[65]{};
     char result_json[2049]{};
+    ActionState state{ActionState::failed};
   };
 
   struct Snapshot final {

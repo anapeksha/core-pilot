@@ -2499,6 +2499,46 @@ const char* aiChatState(AiChatService::State state) {
   return "failed";
 }
 
+const char* aiChatActionState(AiChatService::ActionState state) {
+  switch (state) {
+  case AiChatService::ActionState::proposed:
+    return "proposed";
+  case AiChatService::ActionState::executing:
+    return "executing";
+  case AiChatService::ActionState::queued:
+    return "queued";
+  case AiChatService::ActionState::complete:
+    return "complete";
+  case AiChatService::ActionState::rejected:
+    return "rejected";
+  case AiChatService::ActionState::expired:
+    return "expired";
+  case AiChatService::ActionState::failed:
+    return "failed";
+  }
+  return "failed";
+}
+
+const char* aiChatActionDetail(AiChatService::ActionState state) {
+  switch (state) {
+  case AiChatService::ActionState::proposed:
+    return "Proposed locally; approval required and not executed.";
+  case AiChatService::ActionState::executing:
+    return "Executing locally.";
+  case AiChatService::ActionState::queued:
+    return "Queued locally; result withheld from the browser.";
+  case AiChatService::ActionState::complete:
+    return "Completed locally; result withheld from the browser.";
+  case AiChatService::ActionState::rejected:
+    return "Rejected locally; not executed.";
+  case AiChatService::ActionState::expired:
+    return "Approval expired; not executed.";
+  case AiChatService::ActionState::failed:
+    return "Local execution failed.";
+  }
+  return "Local execution failed.";
+}
+
 bool aiChatOperationId(httpd_req_t* request, std::uint64_t& operation_id) {
   operation_id = 0;
   const std::size_t query_length = httpd_req_get_url_query_len(request);
@@ -2551,8 +2591,8 @@ esp_err_t sendAiChatStatus(httpd_req_t* request, HttpRuntime& runtime) {
   for (std::size_t index = 0; index < snapshot->action_count; ++index) {
     cJSON* action = cJSON_CreateObject();
     cJSON_AddStringToObject(action, "tool", snapshot->actions[index].tool);
-    cJSON_AddStringToObject(action, "detail",
-                            "Executed locally; result withheld from the browser.");
+    cJSON_AddStringToObject(action, "detail", aiChatActionDetail(snapshot->actions[index].state));
+    cJSON_AddStringToObject(action, "state", aiChatActionState(snapshot->actions[index].state));
     cJSON_AddItemToArray(actions, action);
   }
   mbedtls_platform_zeroize(snapshot, sizeof(*snapshot));
@@ -2662,11 +2702,18 @@ esp_err_t mcpInvokeHandler(httpd_req_t* request) {
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "tool");
   const cJSON* arguments_json =
       document == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(document, "arguments_json");
-  cJSON* arguments =
-      cJSON_IsString(arguments_json) ? cJSON_Parse(arguments_json->valuestring) : nullptr;
+  cJSON* arguments = nullptr;
+  const std::size_t arguments_length =
+      cJSON_IsString(arguments_json) ? std::strlen(arguments_json->valuestring) : 0;
+  const core_domain::ApiError arguments_error =
+      cJSON_IsString(arguments_json)
+          ? core_domain::parse_json(arguments_json->valuestring, arguments_length, kMaxRequestBody,
+                                    arguments)
+          : core_domain::ApiError::invalid_json;
   cJSON* invocation = nullptr;
   const esp_err_t result =
-      cJSON_IsString(tool) && cJSON_IsObject(arguments)
+      arguments_error == core_domain::ApiError::ok && cJSON_IsString(tool) &&
+              cJSON_IsObject(arguments)
           ? McpService::invoke(*runtime, tool->valuestring, arguments, invocation)
           : ESP_ERR_INVALID_ARG;
   cJSON_Delete(arguments);
@@ -2675,17 +2722,22 @@ esp_err_t mcpInvokeHandler(httpd_req_t* request) {
   const bool accepted = result == ESP_OK && invocation != nullptr;
   const cJSON* invocation_status =
       invocation == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(invocation, "status");
+  const bool approval_required = result == ESP_ERR_NOT_ALLOWED;
   cJSON_AddBoolToObject(response, "accepted", accepted);
   cJSON_AddStringToObject(response, "status",
                           cJSON_IsString(invocation_status) ? invocation_status->valuestring
                           : accepted                        ? "completed"
+                          : approval_required               ? "AI_TOOL_APPROVAL_REQUIRED"
                                                             : "AI_TOOL_REJECTED");
   const cJSON* invocation_detail =
       invocation == nullptr ? nullptr : cJSON_GetObjectItemCaseSensitive(invocation, "detail");
-  cJSON_AddStringToObject(response, "detail",
-                          cJSON_IsString(invocation_detail) ? invocation_detail->valuestring
-                          : accepted ? "MCP tool completed or was queued as reported in result."
-                                     : "Tool unavailable or arguments invalid.");
+  cJSON_AddStringToObject(
+      response, "detail",
+      cJSON_IsString(invocation_detail) ? invocation_detail->valuestring
+      : accepted                        ? "MCP tool completed or was queued as reported in result."
+      : approval_required
+          ? "Effectful MCP tools require approval on CoreS3 and cannot be invoked directly."
+          : "Tool unavailable or arguments invalid.");
   if (invocation != nullptr)
     cJSON_AddItemToObject(response, "result", invocation);
   return sendJson(request, response);
