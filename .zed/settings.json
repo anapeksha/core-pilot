@@ -9,9 +9,6 @@
     "JavaScript": {
       "language_servers": ["typescript-language-server", "!vtsls", "..."],
     },
-    "Svelte": {
-      "enable_language_server": false,
-    },
     "CSS": {
       "language_servers": [
         "tailwindcss-intellisense-css",
