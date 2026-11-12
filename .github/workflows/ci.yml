@@ -105,18 +105,6 @@ jobs:
         run: >-
           idf.py -C firmware/s3/test/esp32s3
           -B firmware/s3/test/esp32s3/build build
-      - uses: actions/upload-artifact@v7
-        with:
-          name: core-pilot-esp32s3-test-image
-          path: |
-            firmware/s3/test/esp32s3/build/bootloader/bootloader.bin
-            firmware/s3/test/esp32s3/build/partition_table/partition-table.bin
-            firmware/s3/test/esp32s3/build/core_pilot_esp32s3_tests.bin
-            firmware/s3/test/esp32s3/build/core_pilot_esp32s3_tests.elf
-            firmware/s3/test/esp32s3/build/core_pilot_esp32s3_tests.map
-            firmware/s3/test/esp32s3/build/flasher_args.json
-          if-no-files-found: error
-          retention-days: 7
 
   firmware:
     name: ESP-IDF C++ firmware
@@ -155,19 +143,6 @@ jobs:
           python tools/release.py inspect-build
           --build-dir firmware/s3/build
           --partitions firmware/s3/partitions.csv
-      - uses: actions/upload-artifact@v7
-        with:
-          name: core-pilot-firmware
-          path: |
-            firmware/s3/build/bootloader/bootloader.bin
-            firmware/s3/build/partition_table/partition-table.bin
-            firmware/s3/build/ota_data_initial.bin
-            firmware/s3/build/core_pilot.bin
-            firmware/s3/build/core_pilot.elf
-            firmware/s3/build/core_pilot.map
-            firmware/s3/build/flasher_args.json
-          if-no-files-found: error
-          retention-days: 7
 
   required:
     name: required
