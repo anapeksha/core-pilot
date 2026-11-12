@@ -7,7 +7,7 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 ### Added
 
 - A coordinated vulnerability disclosure policy using GitHub Private Vulnerability Reporting.
-- Production stack-smashing protection, automatic stack-variable initialization, light heap poisoning, allocation-failure aborts, and FreeRTOS stack-overflow watchpoints.
+- Production stack-smashing protection, automatic stack-variable initialization, allocation-failure aborts, and FreeRTOS stack-overflow watchpoints, with light heap poisoning in development builds.
 - Bounded raw TCP security probes for ambiguous headers, malformed framing, route normalization, pipelining, slow clients, and connection-slot recovery.
 
 ### Changed
