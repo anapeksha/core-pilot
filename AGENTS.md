@@ -48,6 +48,9 @@ Component names retain the `core_` prefix to avoid collisions with ESP-IDF and t
 - Persisted model limits are UTF-8 byte limits, not character counts: IDs 48 bytes, names 64 bytes, details 96 bytes, group members 32, scene/automation actions 8, and local notifications 72 bytes. Enforce matching limits in UI forms, web request schemas, firmware request parsing, and persistence codecs.
 - Matter node IDs accepted by HTTP must be nonzero hexadecimal values of at most 16 digits; reject signs, prefixes, overflow, and non-hex characters.
 - Keep exceptions and RTTI disabled. Prefer RAII, fixed bounds, explicit status values, and single ownership.
+- Prefer stack or static storage for bounded data. Use capability-aware allocation for large PSRAM or DMA buffers and wrap every owned ESP-IDF handle or allocation in an existing RAII type or a focused destructor-owning class.
+- Use `std::unique_ptr` when ordinary C++ heap ownership is required. Do not pass owning pointers, `std::shared_ptr`, or other non-trivially-copyable objects through FreeRTOS queues; transfer bounded value messages between owner tasks instead.
+- Keep production stack protection, automatic variable initialization, heap poisoning, allocation-failure aborts, and task stack-overflow detection enabled. Treat changes to these settings as security-sensitive and validate memory headroom on hardware.
 - HTTP authentication may be bypassed only in an explicit local development build using `sdkconfig.development.defaults` and a separate `build-development` directory. Never put the bypass in `sdkconfig.defaults`, CI, release workflows, or production artifacts; never sign it with production keys. Keep Host, Origin, content-type, setup-mode, and parser validation enabled. Before completing hardware validation, restore CI-built production-signed firmware and verify protected requests return `401` without a bearer token.
 
 ## APIs and readiness
@@ -90,6 +93,8 @@ python tools/test.py both <core-s3-ip> --duration-hours 8 --sample-interval 30 -
 ```
 
 Do not start or claim a soak pass unless its initial sample has Matter, Thread, CASE, and subscriptions ready. Hardware claims require captured device evidence. Matter-over-Wi-Fi requires PASE, attestation, AddNOC, CASE, subscriptions, commands, and reboot recovery. Matter-over-Thread additionally requires H2 Spinel startup, an active dataset, attachment, routed IPv6, and DNS-SD.
+
+The CSA certification CLI may drive an available CSA Test Harness for pre-certification evidence. It does not certify Core Pilot, replace PICS review or authorized testing, or create a runtime compliance boundary. Never claim Matter certification from local harness results alone.
 
 ## Hardware validation hygiene
 

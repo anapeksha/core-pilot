@@ -32,6 +32,10 @@ endif()
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(core_pilot)
 
+# ESP-IDF 6.0.2 has no Kconfig symbol for automatic variable initialization.
+# Both pinned production toolchains support the equivalent compiler option.
+idf_build_set_property(COMPILE_OPTIONS "-ftrivial-auto-var-init=zero" APPEND)
+
 # Core Pilot commissions through core_matter, so do not build ESP-Matter's unused
 # controller pairing CLI.
 set(esp_matter_target __idf_espressif__esp_matter)
