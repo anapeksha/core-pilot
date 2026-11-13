@@ -94,7 +94,15 @@ python tools/test.py both <core-s3-ip> --duration-hours 8 --sample-interval 30 -
 
 Do not start or claim a soak pass unless its initial sample has Matter, Thread, CASE, and subscriptions ready. Hardware claims require captured device evidence. Matter-over-Wi-Fi requires PASE, attestation, AddNOC, CASE, subscriptions, commands, and reboot recovery. Matter-over-Thread additionally requires H2 Spinel startup, an active dataset, attachment, routed IPv6, and DNS-SD.
 
-The CSA certification CLI may drive an available CSA Test Harness for pre-certification evidence. It does not certify Core Pilot, replace PICS review or authorized testing, or create a runtime compliance boundary. Never claim Matter certification from local harness results alone.
+## Matter certification
+
+- The CSA certification CLI is a client for an existing CSA Test Harness. Use it to list applicable tests, submit configured runs, and retrieve pre-certification results; it is not a standalone harness or a runtime compliance control.
+- Confirm the applicable controller, commissioner, and Thread border-router certification scope before creating PICS files or selecting tests. Accessory test plans do not establish controller compliance.
+- Bind every retained result to the exact firmware version and commit, harness and test-plan versions, PICS revision, transport, network topology, and positively identified hardware used for that run.
+- Keep harness configuration, PICS files, credentials, setup payloads, node IDs, network details, and raw traces out of the repository unless they are sanitized, portable, and intentionally approved for publication. Never commit contributor-local certification projects or results from `tmp/`.
+- Treat local harness passes as pre-certification evidence only. They do not replace CSA membership requirements, authorized testing, formal submission, review, or approval.
+- Do not describe Core Pilot, a release, or its Matter implementation as certified, compliant, or specification-conformant until the applicable CSA process has completed. A certified SDK or protocol stack does not certify the final product.
+- Preserve the existing hardware readiness requirements alongside harness testing. Certification work must not weaken authentication, attestation, CASE, subscription, routing, DNS-SD, recovery, or negative-path checks to make a test pass.
 
 ## Hardware validation hygiene
 
