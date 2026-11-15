@@ -265,7 +265,8 @@ void CoreDisplay::renderHome() {
     drawText(message, 16, 158, kMuted);
     canvas_.drawRoundRect(kAccessButtonX, kAccessButtonY, kAccessButtonWidth, kAccessButtonHeight,
                           8, kBlue);
-    drawText(display_policy::kAccessButtonLabel, kAccessButtonX + 12, 204, kBlue);
+    drawText(display_policy::kAccessButtonLabel,
+             kAccessButtonX + display_policy::kAccessButtonPaddingX, 204, kBlue);
   } else {
     drawText("Dashboard access unavailable", 16, 194, kMuted);
   }

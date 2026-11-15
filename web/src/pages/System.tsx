@@ -49,7 +49,6 @@ import {
 import { Flex } from "~/components/flex";
 import { Grid } from "~/components/grid";
 import { OperationStatus } from "~/components/operation-status";
-import { Progress } from "~/components/progress";
 import {
   Sheet,
   SheetContent,
@@ -301,9 +300,10 @@ export default function System() {
   const [otaProgressTotal, setOtaProgressTotal] = createSignal(0);
   const [otaStage, setOtaStage] = createSignal("Idle");
   const [otaUploadVisible, setOtaUploadVisible] = createSignal(false);
+  const [otaBusy, setOtaBusy] = createSignal(false);
   const [otaClientError, setOtaClientError] = createSignal("");
   const shouldShowWifiToast = createToastGate();
-  const shouldShowServiceToast = createToastGate();
+  const shouldShowTimeToast = createToastGate();
 
   const ntpOptions: TimeOption[] = NTP_SERVER_OPTIONS.map((option) => ({
     value: option.id,
@@ -374,16 +374,6 @@ export default function System() {
     );
   const firmwareOtaNeedsReboot = () =>
     system().ota_phase === "activated" && !system().ota_restart_after_update;
-  const firmwareOtaProgressPercent = () =>
-    system().ota_total_bytes
-      ? Math.min(
-          100,
-          Math.round(
-            (system().ota_progress_bytes / system().ota_total_bytes) * 100,
-          ),
-        )
-      : 0;
-
   const currentDisplayUnixSeconds = () => {
     const base = timeBaseUnixSeconds();
     return base == null
@@ -605,17 +595,6 @@ export default function System() {
       : otaForm.values().file
         ? "Digest unavailable"
         : "Select a firmware image first");
-  const otaProgressPercent = () =>
-    otaProgressTotal()
-      ? Math.min(
-          100,
-          Math.round(
-            ((preparingDigest() ? digestProgressBytes() : otaProgressBytes()) /
-              otaProgressTotal()) *
-              100,
-          ),
-        )
-      : 0;
   const otaSelectionError = (file = otaForm.values().file) =>
     validateFirmwareCandidate(file);
   const otaUploadDisabledReason = () =>
@@ -774,7 +753,7 @@ export default function System() {
       return;
     }
     const file = result.data.file;
-    if (!otaSha256() || otaMutation.isPending || otaChunk.isPending) return;
+    if (!otaSha256() || otaBusy()) return;
     const clientError = otaSelectionError(file);
     if (clientError) {
       setOtaClientError(clientError);
@@ -786,6 +765,7 @@ export default function System() {
     setOtaClientError("");
     setOtaProgressBytes(0);
     setOtaProgressTotal(file.size);
+    setOtaBusy(true);
     setOtaStage("Validating metadata");
     setOtaUploadVisible(true);
     try {
@@ -806,12 +786,9 @@ export default function System() {
       const uploadToken = prepared.upload_token ?? "";
       if (!/^[0-9a-f]{64}$/.test(uploadToken))
         throw new Error("Device returned an invalid OTA upload session.");
-      await sleep(500);
-      const chunkCount = Math.ceil(file.size / OTA_CHUNK_BYTES);
+      setOtaStage("Uploading firmware…");
       let offset = 0;
       while (offset < file.size) {
-        const chunkNumber = Math.floor(offset / OTA_CHUNK_BYTES) + 1;
-        setOtaStage(`Uploading firmware chunk ${chunkNumber}/${chunkCount}`);
         const chunk = new Uint8Array(
           await file.slice(offset, offset + OTA_CHUNK_BYTES).arrayBuffer(),
         );
@@ -832,7 +809,6 @@ export default function System() {
         }
         offset = stagedBytes;
         setOtaProgressBytes(offset);
-        if (offset < file.size) await sleep(250);
       }
       setOtaStage(
         result.data.restartAfterUpdate
@@ -840,6 +816,7 @@ export default function System() {
           : "Applied; reboot pending",
       );
       setOtaUploadVisible(false);
+      toast.success("Firmware update applied.");
       void systemResult.refetch();
     } catch (error) {
       const message =
@@ -849,6 +826,8 @@ export default function System() {
       setOtaUploadVisible(false);
       toast.error(message);
       void systemResult.refetch();
+    } finally {
+      setOtaBusy(false);
     }
   });
 
@@ -869,26 +848,17 @@ export default function System() {
   });
 
   createEffect(() => {
-    const success =
-      otaMutation.isSuccess || otaChunk.isSuccess || timeMutation.isSuccess;
-    const error =
-      otaMutation.isError || otaChunk.isError || timeMutation.isError;
-    const successMessage =
-      otaChunk.data?.detail ??
-      otaMutation.data?.detail ??
-      timeMutation.data?.detail ??
-      "Update details prepared.";
+    const success = timeMutation.isSuccess;
+    const error = timeMutation.isError;
+    const successMessage = timeMutation.data?.detail ?? "Time settings saved.";
     const errorMessage =
-      otaMutation.error?.message ??
-      otaChunk.error?.message ??
-      timeMutation.error?.message ??
-      "Update could not be prepared.";
+      timeMutation.error?.message ?? "Time settings could not be saved.";
     const key = success
       ? `success:${successMessage}`
       : error
         ? `error:${errorMessage}`
         : "";
-    if (!shouldShowServiceToast(key)) return;
+    if (!shouldShowTimeToast(key)) return;
     if (success) toast.success(successMessage);
     if (error) toast.error(errorMessage);
   });
@@ -1656,13 +1626,10 @@ export default function System() {
                     }
                     unit="bytes"
                     active={
-                      preparingDigest() ||
-                      otaMutation.isPending ||
-                      otaChunk.isPending ||
-                      firmwareOtaInProgress()
+                      preparingDigest() || otaBusy() || firmwareOtaInProgress()
                     }
                     trailing={
-                      otaClientError() && !otaMutation.isPending ? (
+                      otaClientError() && !otaBusy() ? (
                         <Button
                           type="button"
                           size="sm"
@@ -1675,7 +1642,7 @@ export default function System() {
                     }
                   />
                 </Show>
-                <fieldset class="flex flex-col gap-4">
+                <fieldset class="flex flex-col gap-4" disabled={otaBusy()}>
                   <legend class="sr-only">Firmware image</legend>
                   <input
                     {...otaForm.register("file", {
@@ -1732,12 +1699,10 @@ export default function System() {
                           {otaForm.values().file?.name}
                         </p>
                         <p class="text-xs text-muted-foreground">
-                          {otaSizeLabel()} · {otaStage()}
+                          {otaSizeLabel()}
                         </p>
                       </div>
-                      <Show
-                        when={!otaMutation.isPending && !otaChunk.isPending}
-                      >
+                      <Show when={!otaBusy()}>
                         <TooltipIconButton
                           type="button"
                           size="icon"
@@ -1786,60 +1751,6 @@ export default function System() {
                       </div>
                     </Grid>
                   </Show>
-                  <Show
-                    when={otaUploadVisible() || preparingDigest()}
-                    fallback={
-                      <Show
-                        when={
-                          firmwareOtaInProgress() || firmwareOtaNeedsReboot()
-                        }
-                      >
-                        <div
-                          class="flex flex-col gap-2 rounded-lg border p-3 text-xs text-muted-foreground"
-                          aria-live="polite"
-                          aria-busy={firmwareOtaInProgress()}
-                        >
-                          <Flex>
-                            <span class="font-medium text-foreground">
-                              Firmware status
-                            </span>
-                            <span>{firmwareOtaProgressPercent()}%</span>
-                          </Flex>
-                          <Progress
-                            value={firmwareOtaProgressPercent()}
-                            minValue={0}
-                            maxValue={100}
-                          />
-                          <span>{system().ota}</span>
-                        </div>
-                      </Show>
-                    }
-                  >
-                    <div
-                      class="flex flex-col gap-2 rounded-lg border p-3 text-xs text-muted-foreground"
-                      aria-live="polite"
-                      aria-busy="true"
-                    >
-                      <Flex>
-                        <span class="font-medium text-foreground">
-                          {preparingDigest()
-                            ? "Calculating digest"
-                            : "Firmware upload"}
-                        </span>
-                        <span>{otaProgressPercent()}%</span>
-                      </Flex>
-                      <Progress
-                        value={otaProgressPercent()}
-                        minValue={0}
-                        maxValue={100}
-                      />
-                      <span>
-                        {preparingDigest()
-                          ? `${digestProgressBytes().toLocaleString()} / ${otaProgressTotal().toLocaleString()} bytes hashed`
-                          : `${otaProgressBytes().toLocaleString()} / ${otaProgressTotal().toLocaleString()} bytes staged`}
-                      </span>
-                    </div>
-                  </Show>
                   <Show when={otaClientError()}>
                     <Alert variant="destructive">
                       <p>{otaClientError()}</p>
@@ -1847,6 +1758,7 @@ export default function System() {
                   </Show>
                 </fieldset>
                 <Switch
+                  disabled={otaBusy()}
                   checked={otaForm.values().restartAfterUpdate}
                   onChange={(checked) =>
                     otaForm.setValue("restartAfterUpdate", checked)
@@ -1868,28 +1780,17 @@ export default function System() {
                 <Button
                   type="submit"
                   disabled={
-                    otaMutation.isPending ||
-                    otaChunk.isPending ||
+                    otaBusy() ||
                     preparingDigest() ||
                     !otaForm.values().file ||
                     !otaSha256() ||
                     Boolean(otaUploadDisabledReason())
                   }
                 >
-                  <Show
-                    when={
-                      otaMutation.isPending ||
-                      otaChunk.isPending ||
-                      preparingDigest()
-                    }
-                  >
+                  <Show when={otaBusy() || preparingDigest()}>
                     <Spinner />
                   </Show>
-                  {otaMutation.isPending
-                    ? "Validating…"
-                    : otaChunk.isPending
-                      ? "Uploading…"
-                      : "Validate & upload"}
+                  {otaBusy() ? "Uploading…" : "Validate & upload"}
                 </Button>
               </CardFooter>
             </Card>

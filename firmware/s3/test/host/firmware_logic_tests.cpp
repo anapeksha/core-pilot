@@ -117,11 +117,12 @@ bool safety_policy_test() {
                            AccessState::attempts_exhausted}) {
     CHECK(access_button_visible(state));
     CHECK(access_button_pressed(state, true, true, 16, 176));
-    CHECK(access_button_pressed(state, true, true, 195, 219));
+    CHECK(access_button_pressed(state, true, true, 141, 219));
     CHECK(!access_button_pressed(state, false, true, 16, 176));
     CHECK(!access_button_pressed(state, true, false, 16, 176));
     CHECK(!access_button_pressed(state, true, true, 15, 176));
-    CHECK(!access_button_pressed(state, true, true, 196, 176));
+    CHECK(!access_button_pressed(state, true, true, 142, 176));
+        CHECK(!access_button_pressed(state, true, true, 195, 219));
     CHECK(!access_button_pressed(state, true, true, 16, 175));
     CHECK(!access_button_pressed(state, true, true, 16, 220));
   }
