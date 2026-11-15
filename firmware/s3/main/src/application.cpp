@@ -1,5 +1,6 @@
 #include "application.hpp"
 
+#include "access_display_policy.hpp"
 #include "ai_chat_service.hpp"
 #include "application_mutations.hpp"
 #include "automation_service.hpp"
@@ -178,26 +179,11 @@ void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setu
 }
 
 void showAccessState(CoreDisplay& display, const HttpAccessSnapshot& snapshot) {
-  switch (snapshot.state) {
-  case core_security::BootstrapState::idle:
-    display.accessState(CoreDisplay::AccessState::idle);
-    break;
-  case core_security::BootstrapState::open:
+  const auto state = accessDisplayState(snapshot.state);
+  if (state == CoreDisplay::AccessState::active)
     display.accessCode(snapshot.code);
-    break;
-  case core_security::BootstrapState::consumed:
-    display.accessState(CoreDisplay::AccessState::granted);
-    break;
-  case core_security::BootstrapState::expired:
-    display.accessState(CoreDisplay::AccessState::expired);
-    break;
-  case core_security::BootstrapState::attempts_exhausted:
-    display.accessState(CoreDisplay::AccessState::attempts_exhausted);
-    break;
-  case core_security::BootstrapState::unavailable:
-    display.accessState(CoreDisplay::AccessState::unavailable);
-    break;
-  }
+  else
+    display.accessState(state);
 }
 
 } // namespace

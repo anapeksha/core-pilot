@@ -173,10 +173,21 @@ bool network_policy_test() {
 } // namespace
 
 int main() {
-  if (!lifecycle_test() || !matter_operation_policy_test() || !terminal_history_test() ||
-      !safety_policy_test() || !network_policy_test()) {
-    return EXIT_FAILURE;
+  const struct {
+    const char* name;
+    bool (*run)();
+  } cases[] = {{"lifecycle", lifecycle_test},
+               {"matter operation policy", matter_operation_policy_test},
+               {"terminal history", terminal_history_test},
+               {"safety policies", safety_policy_test},
+               {"network policy", network_policy_test}};
+  static_assert(std::size(cases) != 0);
+  for (const auto& test : cases) {
+    std::cout << "RUN: " << test.name << std::endl;
+    if (!test.run())
+      return EXIT_FAILURE;
+    std::cout << "PASS: " << test.name << '\n';
   }
-  std::cout << "firmware logic tests passed\n";
+  std::cout << "PASS: " << std::size(cases) << " legacy logic cases\n";
   return EXIT_SUCCESS;
 }

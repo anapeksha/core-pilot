@@ -2,7 +2,9 @@ import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
   testDir: "./tests",
+  forbidOnly: Boolean(process.env.CI),
   timeout: 30_000,
+  globalTimeout: 10 * 60_000,
   expect: { timeout: 5_000 },
   webServer: {
     command: "node tests/serve-dist.mjs",
@@ -12,7 +14,10 @@ export default defineConfig({
   },
   use: {
     baseURL: "http://127.0.0.1:4173/",
-    trace: "on-first-retry",
+    actionTimeout: 10_000,
+    navigationTimeout: 15_000,
+    trace: "retain-on-failure",
+    screenshot: "only-on-failure",
   },
   projects: [
     {

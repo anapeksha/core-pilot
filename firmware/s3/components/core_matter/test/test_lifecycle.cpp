@@ -113,3 +113,30 @@ TEST_CASE("recovery is event driven and bounded to configured nodes", "[core_mat
   TEST_ASSERT_EQUAL_HEX64(0x11, node_id);
   TEST_ASSERT_FALSE(table.requeueRecovery(0x22));
 }
+
+TEST_CASE("recovery does not claim readiness before a fresh subscription establishes",
+          "[core_matter]") {
+  LifecycleTable<1, 1> table;
+  const std::uint16_t endpoints[]{1};
+  TEST_ASSERT_TRUE(table.configure(1, endpoints, 1));
+  TEST_ASSERT_FALSE(table.anyCaseReady());
+  TEST_ASSERT_EQUAL_UINT32(0, table.activeSubscriptionCount());
+  const auto first = table.beginSubscribe(1);
+  TEST_ASSERT_TRUE(table.established(1, first));
+  TEST_ASSERT_TRUE(table.report(1, first, 1, true));
+  TEST_ASSERT_TRUE(table.terminated(1, first, true));
+  TEST_ASSERT_FALSE(table.anyCaseReady());
+  TEST_ASSERT_EQUAL_UINT32(0, table.activeSubscriptionCount());
+  TEST_ASSERT_FALSE(table.endpointSnapshot(1, 1)->report_known);
+  table.connectivityRestored();
+  TEST_ASSERT_FALSE(table.anyCaseReady());
+  const auto second = table.beginSubscribe(1);
+  TEST_ASSERT_FALSE(table.established(1, first));
+  TEST_ASSERT_FALSE(table.report(1, first, 1, true));
+  TEST_ASSERT_FALSE(table.anyCaseReady());
+  TEST_ASSERT_TRUE(table.established(1, second));
+  TEST_ASSERT_TRUE(table.anyCaseReady());
+  TEST_ASSERT_EQUAL_UINT32(1, table.activeSubscriptionCount());
+  TEST_ASSERT_FALSE(table.endpointSnapshot(1, 1)->report_known);
+  TEST_ASSERT_FALSE(table.report(1, second, 2, true));
+}

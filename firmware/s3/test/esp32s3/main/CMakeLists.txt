@@ -3,6 +3,7 @@ set(core_pilot_components "${CMAKE_CURRENT_LIST_DIR}/../../../components")
 idf_component_register(
     SRCS
         "firmware_test_main.cpp"
+        "../../test_access_integration.cpp"
         "${core_pilot_components}/core_security/src/core_auth.cpp"
         "${core_pilot_components}/core_security/test/test_core_auth.cpp"
         "${core_pilot_components}/core_board/test/test_core_board.cpp"
@@ -15,6 +16,7 @@ idf_component_register(
         "${core_pilot_components}/core_network/src/core_network_policy.cpp"
         "${core_pilot_components}/core_ota/test/test_core_ota.cpp"
     INCLUDE_DIRS
+        "../../../main/include"
         "${core_pilot_components}/core_security/include"
         "${core_pilot_components}/core_board/include"
         "${core_pilot_components}/core_display/include"

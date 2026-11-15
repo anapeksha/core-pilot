@@ -97,12 +97,12 @@ Do not run firmware formatting and the dashboard build concurrently because form
 
 CI has two deliberately separate test environments for firmware logic. Component-owned Unity cases remain beside their production components under `firmware/s3/components/core_*/test/`. The projects under `firmware/s3/test/` are runners: they assemble those policies for a specific execution environment without becoming part of the production firmware image.
 
-1. **Native host execution** configures `firmware/s3/test/host/` with the host compiler and executes deterministic policies for board geometry, display state, gateway provisioning, Matter lifecycle and bounded history, network profile/setup behavior, and OTA validation. A separate sanitizer-backed executable runs the production authorization lifecycle and its shared Unity cases, with host adapters for assertions and zeroization:
+1. **Native host execution** configures `firmware/s3/test/host/` with the host compiler. Three sanitizer-backed executables run the existing logic checks, the real authorization implementation, and the shared component-owned cases for board geometry, display, gateway verification, Matter lifecycle/history, networking, and OTA. Cross-component cases exercise the production authorization-to-display mapping together with touch admission, code exchange, and reboot recovery. Missing required suites fail the runner; each executable has a 30-second limit:
 
    ```sh
    cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
    cmake --build firmware/s3/test/host/build
-   ctest --test-dir firmware/s3/test/host/build --output-on-failure
+   ctest --test-dir firmware/s3/test/host/build --output-on-failure --no-tests=error
    ```
 
 2. **ESP32-S3 compile/link validation** builds `firmware/s3/test/esp32s3/` with the official ESP-IDF 6.0.2 toolchain. The image reuses the existing component Unity test sources and verifies that they compile and link for the actual `esp32s3` target:
@@ -112,7 +112,7 @@ CI has two deliberately separate test environments for firmware logic. Component
    eim run 'idf.py -C firmware/s3/test/esp32s3 -B firmware/s3/test/esp32s3/build build' v6.0.2
    ```
 
-The second layer is labeled **compile/link only** in CI: GitHub-hosted runners do not execute the image. The built binaries and ELF are uploaded as a CI artifact and may be flashed to a positively identified CoreS3 for Unity menu execution.
+The second layer is labeled **compile/link only** in CI: GitHub-hosted runners do not execute the image. The built binaries and ELF are uploaded as a CI artifact. Its startup checks test registration before opening the Unity menu. The standalone runner has a different flash layout from the application; do not flash it over an installed controller without an explicit backup/recovery plan.
 
 There is currently no ESP32-S3 QEMU execution job. Espressif's QEMU fork supports ESP32-S3 CPU/system emulation, so the minimal Unity image may be a future candidate for deterministic execution after its boot and test-runner behavior is proven reliable in CI. QEMU does not model the CoreS3 board peripherals or provide hardware evidence for Wi-Fi/BLE, the H2 RCP, Matter/Thread integration, timing, LCD/TF bus ownership, storage, touch, RTC, or OTA behavior. Native host execution and QEMU therefore complement—but do not replace—real target validation.
 
@@ -136,6 +136,20 @@ uv run --project tools --locked python tools/test.py lifecycle <core-s3-ip> --co
 ```
 
 Each cycle verifies an idempotent command, reboot and subscription recovery, another command, asynchronous unpairing, encrypted registry removal, recommissioning, CASE, and subscriptions. Validate the limiter contract separately with `uv run --project tools --locked python tools/test.py rate-limit <core-s3-ip>`; this intentionally exhausts the source bucket and waits for the advertised retry interval before checking recovery.
+
+### Browser and production boot regressions
+
+Playwright runs against the built dashboard with simulated firmware responses. Its cases cover explicit physical-authorization guidance, independent browser sessions, reboot/session expiry, failed requests, cached-data clearing, queued/rejected mutations, OTA rejection, UTF-8 limits, and narrow-screen keyboard access. They do not establish real Matter behavior. CI rejects focused tests and retains failure traces/screenshots; the firmware build waits for Python, browser, native, and S3 compile/link checks to pass.
+
+After flashing a signed production image to a positively identified CoreS3, capture a complete boot and confirm its current DHCP address. Keep captures in ignored local scratch space and redact secrets. Check the boot and unauthenticated API with:
+
+```sh
+uv run --project tools --locked python tools/boot_check.py <fresh-boot-capture> <current-core-s3-ip> --version 0.1.2
+```
+
+This bounded smoke check requires exactly one boot, PSRAM/storage self-test completion, the expected version/address, and application-loop entry. It rejects panic/allocation failures and startup memory below 16 KiB internal free, 8 KiB largest internal block, or 8 KiB DMA-capable free. These are regression floors, not proof of workload headroom. It checks idle production authentication, unauthenticated/invalid-cookie rejection, and that an exchange before a physical tap cannot issue a session or code. It never uses an environment bearer token and stops before exchanging if a code is already open.
+
+Boot/API success is not a stress, soak, commissioning, or peripheral-validation result. Physical touchscreen, signed OTA recovery, accessory interoperability, and peak memory workloads still require separate hardware evidence. Do not program eFuses during testing.
 
 ## Releases
 

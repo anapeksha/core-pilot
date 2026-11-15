@@ -44,3 +44,23 @@ TEST_CASE("terminal history respects output capacity", "[core_matter]") {
   TEST_ASSERT_EQUAL_UINT64(2, entries[1].sequence);
   TEST_ASSERT_EQUAL_UINT32(0, history.after(0, nullptr, 2));
 }
+
+TEST_CASE("terminal history empty zero output and repeated wrap preserve ordering",
+          "[core_matter]") {
+  core_pilot::detail::TerminalHistory<Entry, 2> history;
+  Entry output[2]{{99, 99}, {99, 99}};
+  TEST_ASSERT_FALSE(history.find(1, output[0]));
+  TEST_ASSERT_EQUAL_UINT32(0, history.after(0, output, 2));
+  for (std::uint32_t id = 1; id <= 20; ++id)
+    TEST_ASSERT_TRUE(history.append(id, {id, id}));
+  TEST_ASSERT_EQUAL_UINT32(0, history.after(0, output, 0));
+  TEST_ASSERT_EQUAL_UINT64(99, output[0].sequence);
+  TEST_ASSERT_EQUAL_UINT32(2, history.after(0, output, 2));
+  TEST_ASSERT_EQUAL_UINT64(19, output[0].sequence);
+  TEST_ASSERT_EQUAL_UINT64(20, output[1].sequence);
+  TEST_ASSERT_EQUAL_UINT32(0, history.after(UINT64_MAX, output, 2));
+  TEST_ASSERT_FALSE(history.find(18, output[0]));
+  TEST_ASSERT_TRUE(history.append(1, {21, 1}));
+  TEST_ASSERT_EQUAL_UINT32(1, history.after(20, output, 2));
+  TEST_ASSERT_EQUAL_UINT64(21, output[0].sequence);
+}
