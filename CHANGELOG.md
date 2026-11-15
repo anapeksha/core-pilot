@@ -4,6 +4,23 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-15
+
+### Changed
+
+- Start on the normal home screen with an **Authorize browser** button. Generate and display a five-minute access code only after a physical tap.
+- Guide dashboard users through physical authorization with an explicit **I have a code** check, without polling or remote code generation.
+
+### Security
+
+- Clear all browser sessions and unused access codes on reboot while keeping dashboard authentication required.
+- Preserve active sessions when authorizing another browser. Expired codes and exhausted attempts require another physical tap; failed guesses no longer rotate or reopen codes automatically.
+
+### Tests
+
+- Execute the shared authorization lifecycle tests on the native host with sanitizers and include them in the ESP32-S3 compile/link runner.
+- Cover authorization-button touch boundaries, wake-only touches, idle dashboard access, and stale browser sessions.
+
 ## [0.1.1] - 2026-11-15
 
 ### Fixed

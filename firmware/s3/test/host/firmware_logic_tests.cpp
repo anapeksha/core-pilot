@@ -113,6 +113,20 @@ bool safety_policy_test() {
   CHECK(!upgrade_screen_allowed(UpgradePhase::staging));
   CHECK(upgrade_screen_allowed(UpgradePhase::activated));
   CHECK(upgrade_progress_percent({UpgradePhase::activated, UINT32_MAX, 1, false}) == 100);
+  for (const auto state : {AccessState::idle, AccessState::granted, AccessState::expired,
+                           AccessState::attempts_exhausted}) {
+    CHECK(access_button_visible(state));
+    CHECK(access_button_pressed(state, true, true, 16, 176));
+    CHECK(access_button_pressed(state, true, true, 195, 219));
+    CHECK(!access_button_pressed(state, false, true, 16, 176));
+    CHECK(!access_button_pressed(state, true, false, 16, 176));
+    CHECK(!access_button_pressed(state, true, true, 15, 176));
+    CHECK(!access_button_pressed(state, true, true, 196, 176));
+    CHECK(!access_button_pressed(state, true, true, 16, 175));
+    CHECK(!access_button_pressed(state, true, true, 16, 220));
+  }
+  CHECK(!access_button_pressed(AccessState::active, true, true, 16, 176));
+  CHECK(!access_button_pressed(AccessState::unavailable, true, true, 16, 176));
 
   using namespace core_pilot::gateway_policy;
   CHECK(segment_action(true, true, false) == SegmentAction::accept);

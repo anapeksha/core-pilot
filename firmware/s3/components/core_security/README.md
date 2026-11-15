@@ -1,5 +1,13 @@
 # Core Pilot security contracts
 
+## Browser authorization
+
+`Auth::begin()` clears sessions and unused codes and enters `idle`; it does not use randomness or issue a code. Only the application task's physical **Authorize browser** action calls `regenerate()`. That code lasts five minutes, is consumed once, and can create one thirty-minute session. Issuing another code preserves active sessions, but reboot invalidates them all.
+
+Expired codes and exhausted attempts stay closed until another physical tap. HTTP requests cannot issue or reveal codes. The `/api/v1/auth` endpoint reports `bootstrap_state: "idle"` before physical authorization; the dashboard offers an explicit status recheck rather than polling. Neither codes nor sessions are persisted or logged.
+
+## Encrypted storage
+
 `core_security` handles _bytes_, not application object schemas. `InternalSeedStore`
 represents the dedicated internal-flash seed partition; `EspSeedPartition` checks
 its label, offset (`0x920000`) and size (`0x10000`) before access. The 64-byte

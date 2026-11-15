@@ -6,6 +6,38 @@
 
 using namespace core_pilot::display_policy;
 
+TEST_CASE("browser authorization requires an eligible visible home and a fresh press",
+          "[core_display]") {
+  TEST_ASSERT_EQUAL_STRING("Authorize browser", kAccessButtonLabel);
+  constexpr AccessState eligible[] = {AccessState::idle, AccessState::granted, AccessState::expired,
+                                      AccessState::attempts_exhausted};
+  for (const auto state : eligible) {
+    TEST_ASSERT_TRUE(access_button_visible(state));
+    TEST_ASSERT_TRUE(access_button_pressed(state, true, true, 16, 176));
+    TEST_ASSERT_FALSE(access_button_pressed(state, true, false, 16, 176));
+    // Saver/off wake contact and boot/fatal/OTA/AI pages are not visible home.
+    TEST_ASSERT_FALSE(access_button_pressed(state, false, true, 16, 176));
+    TEST_ASSERT_FALSE(access_button_pressed(state, false, false, 16, 176));
+  }
+  constexpr AccessState blocked[] = {AccessState::active, AccessState::unavailable,
+                                     static_cast<AccessState>(255)};
+  for (const auto state : blocked) {
+    TEST_ASSERT_FALSE(access_button_visible(state));
+    TEST_ASSERT_FALSE(access_button_pressed(state, true, true, 16, 176));
+  }
+}
+
+TEST_CASE("browser authorization hit target includes only its drawn bounds", "[core_display]") {
+  TEST_ASSERT_TRUE(access_button_pressed(AccessState::idle, true, true, 16, 176));
+  TEST_ASSERT_TRUE(access_button_pressed(AccessState::idle, true, true, 195, 219));
+  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 15, 190));
+  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 196, 190));
+  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 100, 175));
+  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 100, 220));
+  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, -1, -1));
+  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 320, 240));
+}
+
 TEST_CASE("RTC calendar policy accepts only real bounded calendar values", "[core_display]") {
   TEST_ASSERT_TRUE(valid_calendar({2000, 2, 29, 0, 0, 0}));
   TEST_ASSERT_TRUE(valid_calendar({2099, 12, 31, 23, 59, 59}));

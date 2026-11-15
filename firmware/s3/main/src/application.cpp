@@ -179,6 +179,9 @@ void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setu
 
 void showAccessState(CoreDisplay& display, const HttpAccessSnapshot& snapshot) {
   switch (snapshot.state) {
+  case core_security::BootstrapState::idle:
+    display.accessState(CoreDisplay::AccessState::idle);
+    break;
   case core_security::BootstrapState::open:
     display.accessCode(snapshot.code);
     break;
@@ -728,7 +731,6 @@ void Application::run() {
           AiChatService::DecisionResult::queued)
         ESP_LOGW(kTag, "stale or unavailable AI approval decision ignored");
     } else if (display_action == CoreDisplay::Action::generate_access_code) {
-      display.accessState(CoreDisplay::AccessState::unavailable);
       if (regenerateHttpAccessFromPhysicalPresence() != ESP_OK)
         ESP_LOGE(kTag, "physical access-code regeneration failed");
       last_access_check = 0;

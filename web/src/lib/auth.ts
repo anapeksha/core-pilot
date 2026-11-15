@@ -1,9 +1,15 @@
 import { createSignal } from "solid-js";
 
 export type BootstrapState =
-  "open" | "consumed" | "expired" | "attempts_exhausted" | "unavailable";
+  | "idle"
+  | "open"
+  | "consumed"
+  | "expired"
+  | "attempts_exhausted"
+  | "unavailable";
 export type AccessErrorCode =
   | "incorrect"
+  | "consumed"
   | "expired"
   | "attempts_exhausted"
   | "unavailable"
@@ -35,6 +41,7 @@ export function onAccessCleared(listener: () => void): () => void {
 
 function isBootstrapState(value: unknown): value is BootstrapState {
   return (
+    value === "idle" ||
     value === "open" ||
     value === "consumed" ||
     value === "expired" ||
@@ -44,6 +51,7 @@ function isBootstrapState(value: unknown): value is BootstrapState {
 }
 
 export async function initializeAccess(): Promise<BootstrapState> {
+  clearAccess();
   const response = await fetch("/api/v1/auth", {
     credentials: "same-origin",
     headers: { Accept: "application/json" },
@@ -62,6 +70,8 @@ export async function initializeAccess(): Promise<BootstrapState> {
   if (
     status &&
     typeof status === "object" &&
+    "authentication_required" in status &&
+    status.authentication_required === true &&
     "bootstrap_state" in status &&
     isBootstrapState(status.bootstrap_state)
   ) {
@@ -74,7 +84,7 @@ export async function initializeAccess(): Promise<BootstrapState> {
     }
     return status.bootstrap_state;
   }
-  return "open";
+  return "unavailable";
 }
 
 export function clearAccess() {
@@ -113,9 +123,9 @@ export async function logoutAccess(): Promise<void> {
 
 const accessMessages: Record<AccessErrorCode, string> = {
   incorrect: "The access code is incorrect.",
-  expired: "The access code has expired. Generate a new code on the CoreS3.",
-  attempts_exhausted:
-    "Access attempts are exhausted. Generate a new code on the CoreS3.",
+  consumed: "The access code has already been used.",
+  expired: "The access code has expired.",
+  attempts_exhausted: "Access attempts are exhausted.",
   unavailable: "Access is temporarily unavailable. Try again on the CoreS3.",
   invalid_request: "Enter the complete 16-character access code.",
   rate_limited: "Too many access attempts. Wait before trying again.",
@@ -140,7 +150,7 @@ export async function unlockAccess(code: string): Promise<void> {
         typeof value.error === "object" &&
         "code" in value.error &&
         typeof value.error.code === "string" &&
-        value.error.code in accessMessages
+        Object.hasOwn(accessMessages, value.error.code)
       )
         errorCode = value.error.code as AccessErrorCode;
     } catch {

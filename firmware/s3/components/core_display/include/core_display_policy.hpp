@@ -21,6 +21,34 @@ struct Upgrade final {
   bool restart_after_update;
 };
 
+enum class AccessState : std::uint8_t {
+  idle,
+  active,
+  granted,
+  expired,
+  attempts_exhausted,
+  unavailable
+};
+
+inline constexpr int kAccessButtonX = 16;
+inline constexpr int kAccessButtonY = 176;
+inline constexpr int kAccessButtonWidth = 180;
+inline constexpr int kAccessButtonHeight = 44;
+inline constexpr char kAccessButtonLabel[] = "Authorize browser";
+
+[[nodiscard]] constexpr bool access_button_visible(AccessState state) {
+  return state == AccessState::idle || state == AccessState::granted ||
+         state == AccessState::expired || state == AccessState::attempts_exhausted;
+}
+
+// visible_home describes the page before handling this touch, excluding wake-only contact.
+[[nodiscard]] constexpr bool access_button_pressed(AccessState state, bool visible_home,
+                                                   bool was_pressed, int x, int y) {
+  return visible_home && was_pressed && access_button_visible(state) && x >= kAccessButtonX &&
+         x < kAccessButtonX + kAccessButtonWidth && y >= kAccessButtonY &&
+         y < kAccessButtonY + kAccessButtonHeight;
+}
+
 enum class ApprovalAction : std::uint8_t { none, approve, reject };
 
 [[nodiscard]] constexpr ApprovalAction approval_action(int x, int y) {
