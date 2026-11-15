@@ -483,6 +483,7 @@ void Application::run() {
   constexpr TickType_t kDiscoveryRetryDelay = pdMS_TO_TICKS(15000);
   bool matter_ready_reported = false;
   bool ota_update_shown = false;
+  bool ota_display_acknowledged = false;
   std::uint64_t displayed_ai_operation = 0;
   std::uint64_t displayed_ai_proposal = 0;
   static AiDisplayWorkspace ai_workspace;
@@ -595,10 +596,12 @@ void Application::run() {
     }
     const auto ota_status = ota.status();
     if (!ota_update_shown && ota_status.state == CoreOta::State::activated) {
-      ota_update_shown = true;
-      display.upgrade({CoreDisplay::UpgradePhase::activated, ota_status.written_bytes,
-                       ota_status.size_bytes, ota_status.restart_after_update});
+      ota_update_shown =
+          display.upgrade({CoreDisplay::UpgradePhase::activated, ota_status.written_bytes,
+                           ota_status.size_bytes, ota_status.restart_after_update});
     }
+    if (ota_update_shown && ota_status.restart_after_update && !ota_display_acknowledged)
+      ota_display_acknowledged = ota.acknowledgeUpgradeDisplay();
     if (matter_status.commissioning_state == CoreMatter::CommissioningState::complete &&
         matter_status.commissioned_node_id != 0 &&
         matter_status.commissioned_node_id != recorded_node_id) {

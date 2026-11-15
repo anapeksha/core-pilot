@@ -109,11 +109,17 @@ bool OtaService::deferRestart() {
   return task_ != nullptr && queue_ != nullptr && xQueueSend(queue_, &operation, 0) == pdTRUE;
 }
 
+bool OtaService::acknowledgeUpgradeDisplay() {
+  const Operation operation = Operation::display_shown;
+  return task_ != nullptr && queue_ != nullptr && xQueueSend(queue_, &operation, 0) == pdTRUE;
+}
+
 void OtaService::taskEntry(void* context) {
   static_cast<OtaService*>(context)->run();
 }
 
 void OtaService::run() {
+  ota_policy::RestartGate restart_gate;
   while (true) {
     Operation operation{};
     if (xQueueReceive(queue_, &operation, pdMS_TO_TICKS(1000)) != pdTRUE) {
@@ -121,9 +127,19 @@ void OtaService::run() {
       ota_.status();
       continue;
     }
-    if (operation == Operation::restart) {
-      vTaskDelay(pdMS_TO_TICKS(500));
-      esp_restart();
+    if (operation == Operation::restart || operation == Operation::display_shown) {
+      const auto status = ota_.status();
+      const auto event = operation == Operation::restart
+                             ? ota_policy::RestartGate::Event::response_complete
+                             : ota_policy::RestartGate::Event::display_shown;
+      if (restart_gate.accept(event, status.state == CoreOta::State::activated,
+                              status.restart_after_update)) {
+        // Start after both acknowledgements. The extra tick avoids a short interval
+        // when this task delays immediately before a tick boundary.
+        vTaskDelay(pdMS_TO_TICKS(ota_policy::RestartGate::kVisibleMilliseconds) + 1);
+        esp_restart();
+      }
+      continue;
     }
 
     if (operation == Operation::prepare) {

@@ -41,11 +41,12 @@ template <std::size_t N> void copyLine(char (&dest)[N], const char* source) {
   std::snprintf(dest, N, "%s", source ? source : "");
 }
 
-void pushCanvas(M5Canvas& canvas, int x, int y) {
+bool pushCanvas(M5Canvas& canvas, int x, int y) {
   const esp_err_t result = board::draw_lcd_region(x, y, canvas.width(), canvas.height(),
                                                   canvas.getBuffer(), canvas.bufferLength());
   if (result != ESP_OK)
     ESP_LOGE(kTag, "LCD transfer failed: %s", esp_err_to_name(result));
+  return result == ESP_OK;
 }
 
 const char* phaseLabel(CoreDisplay::UpgradePhase phase, bool restart) {
@@ -116,8 +117,8 @@ void CoreDisplay::drawText(const char* text, int x, int baseline, std::uint16_t 
   canvas_.drawString(text ? text : "", x, baseline - (large ? 20 : 10));
 }
 
-void CoreDisplay::push() {
-  pushCanvas(canvas_, 0, 0);
+bool CoreDisplay::push() {
+  return pushCanvas(canvas_, 0, 0);
 }
 
 void CoreDisplay::bootSplash() {
@@ -295,7 +296,7 @@ void CoreDisplay::renderApproval() {
 }
 
 void CoreDisplay::approval(const char* summary) {
-  if (!initialized_ || summary == nullptr)
+  if (!initialized_ || page_ == Page::upgrade || summary == nullptr)
     return;
   copyLine(approval_summary_, summary);
   page_ = Page::approval;
@@ -340,7 +341,7 @@ void CoreDisplay::accessState(AccessState state) {
 }
 
 void CoreDisplay::home(const char* network, const char* web, const char* status) {
-  if (!initialized_)
+  if (!initialized_ || page_ == Page::upgrade)
     return;
   copyLine(network_, network);
   copyLine(web_, web);
@@ -352,7 +353,7 @@ void CoreDisplay::home(const char* network, const char* web, const char* status)
   renderHome();
 }
 
-void CoreDisplay::renderUpgrade() {
+bool CoreDisplay::renderUpgrade() {
   const auto total = upgrade_.total_bytes;
   const auto progress = display_policy::upgrade_progress_bytes(upgrade_);
   const auto percent = display_policy::upgrade_progress_percent(upgrade_);
@@ -371,17 +372,17 @@ void CoreDisplay::renderUpgrade() {
   drawText("Do not power off during update.", 16, 210, kMuted);
   if (upgrade_.phase == UpgradePhase::activated && !upgrade_.restart_after_update)
     drawText("Use System > Reboot when ready.", 16, 230, kMuted);
-  push();
+  return push();
 }
 
-void CoreDisplay::upgrade(const Upgrade& progress) {
+bool CoreDisplay::upgrade(const Upgrade& progress) {
   if (!initialized_ || !display_policy::upgrade_screen_allowed(progress.phase))
-    return;
+    return false;
   upgrade_ = progress;
   page_ = Page::upgrade;
   saver_ = blanked_ = false;
   M5.Display.setBrightness(160);
-  renderUpgrade();
+  return renderUpgrade();
 }
 
 void CoreDisplay::renderSaver() {

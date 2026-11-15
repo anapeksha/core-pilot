@@ -72,8 +72,8 @@ public:
   /** Returns from an AI approval page to the primary status page. */
   void clearApproval();
 
-  /** Shows firmware-upgrade progress and prevents idle sleep. */
-  void upgrade(const Upgrade& progress);
+  /** Returns true after LCD transfer succeeds; supersedes home/approval until restart. */
+  bool upgrade(const Upgrade& progress);
 
 private:
   enum class Page : std::uint8_t { boot, fatal, home, approval, upgrade };
@@ -81,13 +81,13 @@ private:
   void clearAccessCode();
   void renderApproval();
   void renderSaver();
-  void renderUpgrade();
+  bool renderUpgrade();
   void updateClock();
   void updateBattery();
   void drawBattery(M5Canvas& target, int x, int y);
   bool readClock(int& hour, int& minute, int& second, int& day, int& month, int& year);
   void drawText(const char* text, int x, int baseline, std::uint16_t color, bool large = false);
-  void push();
+  bool push();
 
   M5Canvas canvas_;
   M5Canvas time_sprite_;

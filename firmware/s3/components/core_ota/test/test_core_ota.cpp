@@ -1,10 +1,38 @@
 #include "core_ota_policy.hpp"
 
 #include <cstdint>
+#include <initializer_list>
 #include <unity.h>
 #include <unity_test_runner.h>
 
 using namespace core_pilot::ota_policy;
+
+TEST_CASE("OTA restart requires response and rendered display in either order", "[core_ota]") {
+  for (const auto first :
+       {RestartGate::Event::response_complete, RestartGate::Event::display_shown}) {
+    RestartGate gate;
+    const auto second = first == RestartGate::Event::response_complete
+                            ? RestartGate::Event::display_shown
+                            : RestartGate::Event::response_complete;
+    TEST_ASSERT_FALSE(gate.accept(first, true, true));
+    TEST_ASSERT_FALSE(gate.accept(first, true, true));
+    TEST_ASSERT_TRUE(gate.accept(second, true, true));
+  }
+  TEST_ASSERT_TRUE(RestartGate::kVisibleMilliseconds >= 1000);
+}
+
+TEST_CASE("OTA restart ignores acknowledgements before activation or without restart",
+          "[core_ota]") {
+  for (const bool activated : {false, true}) {
+    RestartGate gate;
+    TEST_ASSERT_FALSE(gate.accept(RestartGate::Event::response_complete, activated, false));
+    TEST_ASSERT_FALSE(gate.accept(RestartGate::Event::display_shown, activated, false));
+    TEST_ASSERT_FALSE(gate.accept(RestartGate::Event::response_complete, false, true));
+    TEST_ASSERT_FALSE(gate.accept(RestartGate::Event::display_shown, false, true));
+    TEST_ASSERT_FALSE(gate.accept(RestartGate::Event::response_complete, true, true));
+    TEST_ASSERT_TRUE(gate.accept(RestartGate::Event::display_shown, true, true));
+  }
+}
 
 TEST_CASE("OTA digest parsing requires exact hexadecimal encoding", "[core_ota]") {
   std::uint8_t digest[2]{};

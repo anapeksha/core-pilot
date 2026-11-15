@@ -4,6 +4,14 @@
 
 The application uses this component as the sole M5 owner. Synchronized system time is preferred, with `M5.Rtc` as the fallback. Until either source is valid, home shows `--:--` and the screensaver reports that time is synchronizing. The component uses a PSRAM-backed 320×240 RGB565 canvas, a 50×24 time sprite, and a 32×14 battery sprite. Screen transitions and the screensaver push the full canvas; home battery/time updates push small sprites. Waking from display-off renders the home frame before restoring the backlight, preventing the previous screensaver frame from flashing.
 
+## OTA completion screen
+
+The LCD stays on its normal page during upload and verification. `upgrade()` accepts only activated/rebooting phases and returns true only after the synchronous full-frame transfer succeeds. The application retries failed transfers through its normal reconciliation loop. An upgrade page blocks subsequent home/approval transitions and idle sleep.
+
+With automatic restart enabled, the OTA worker waits for both the application's successful-display acknowledgement and completion of the final HTTP response attempt, then delays at least one second before restarting. A disconnected uploader does not cancel an already activated update. Without automatic restart, the completion screen remains until a manual reboot. Digest, signature, embedded-version, and boot-partition activation must all succeed before this screen is shown.
+
+The acknowledgement ordering is covered by host tests; physical screen visibility and timing still require an observed CoreS3 OTA run. A newly installed firmware version controls the next OTA's completion screen, not the upload that installed it.
+
 ## Dashboard authorization
 
 The default access state is `CoreDisplay::AccessState::idle`: boot generates no access code. On home, idle retains the network and dashboard URL, shows `Open dashboard to authorize`, and offers exactly `Authorize browser`. Granted (reauthorization), expired, and attempts-exhausted states use the same button label with their status message. Active codes have no authorization button; unavailable is non-actionable. `accessState()` still clears the previous secret, and `accessCode()` clears the previous buffer before copying a new code.

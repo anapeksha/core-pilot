@@ -6,6 +6,27 @@
 
 namespace core_pilot::ota_policy {
 
+// Worker-owned latch: either event may arrive first; neither alone permits restart.
+class RestartGate final {
+public:
+  static constexpr std::uint32_t kVisibleMilliseconds = 1000;
+  enum class Event : std::uint8_t { response_complete, display_shown };
+
+  bool accept(Event event, bool activated, bool restart_requested) {
+    if (!activated || !restart_requested)
+      return false;
+    if (event == Event::response_complete)
+      response_complete_ = true;
+    else
+      display_shown_ = true;
+    return response_complete_ && display_shown_;
+  }
+
+private:
+  bool response_complete_{};
+  bool display_shown_{};
+};
+
 struct Identifier final {
   const char* data{};
   std::size_t size{};

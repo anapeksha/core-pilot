@@ -4,6 +4,17 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-15
+
+### Fixed
+
+- Wait for a successful LCD update-screen transfer and completion of the final HTTP response attempt before automatically restarting an activated OTA image. Keep the update screen visible for at least one second and prevent home or approval updates from replacing it.
+- Retry failed LCD transfers without acknowledging the screen, and preserve automatic restart after activation if the uploader disconnects during the final response.
+
+### Tests
+
+- Cover both restart-acknowledgement orders, repeated acknowledgements, and rejection before activation or with automatic restart disabled. Preserve digest, signature, version, and boot-partition activation checks before showing the update screen.
+
 ## [0.1.3] - 2026-11-15
 
 ### Fixed
