@@ -29,13 +29,25 @@ TEST_CASE("browser authorization requires an eligible visible home and a fresh p
 
 TEST_CASE("browser authorization hit target includes only its drawn bounds", "[core_display]") {
   TEST_ASSERT_TRUE(access_button_pressed(AccessState::idle, true, true, 16, 176));
-  TEST_ASSERT_TRUE(access_button_pressed(AccessState::idle, true, true, 195, 219));
+  TEST_ASSERT_TRUE(access_button_pressed(AccessState::idle, true, true, 141, 219));
   TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 15, 190));
-  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 196, 190));
+  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 142, 190));
+  TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 195, 219));
   TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 100, 175));
   TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 100, 220));
   TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, -1, -1));
   TEST_ASSERT_FALSE(access_button_pressed(AccessState::idle, true, true, 320, 240));
+}
+
+TEST_CASE("browser authorization label fits with symmetric Font0 padding", "[core_display]") {
+  TEST_ASSERT_EQUAL_INT(102, kAccessButtonTextWidth);
+  TEST_ASSERT_EQUAL_INT(126, kAccessButtonWidth);
+  constexpr int text_left = kAccessButtonX + kAccessButtonPaddingX;
+  constexpr int text_right = text_left + kAccessButtonTextWidth;
+  TEST_ASSERT_EQUAL_INT(12, text_left - kAccessButtonX);
+  TEST_ASSERT_EQUAL_INT(12, kAccessButtonX + kAccessButtonWidth - text_right);
+  TEST_ASSERT_TRUE(text_left > kAccessButtonX);
+  TEST_ASSERT_TRUE(text_right < kAccessButtonX + kAccessButtonWidth);
 }
 
 TEST_CASE("RTC calendar policy accepts only real bounded calendar values", "[core_display]") {

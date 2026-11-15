@@ -1755,12 +1755,11 @@ test("covers system Wi‑Fi, time settings, and firmware upload validation", asy
     mimeType: "application/octet-stream",
     buffer: Buffer.from("firmware image"),
   });
-  await expect(page.getByText("Ready to upload")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Validate & upload" }),
   ).toBeEnabled();
   await page.getByRole("button", { name: "Validate & upload" }).click();
-  await expect(page.getByText("OTA chunk staged.")).toBeVisible();
+  await expect(page.getByText("Firmware update applied.")).toBeVisible();
   expect(state.posts.some((post) => post.path === "/api/v1/ota/prepare")).toBe(
     true,
   );
@@ -2299,3 +2298,111 @@ test("enforces room names by UTF-8 bytes instead of character count", async ({
     name: "界".repeat(21) + "a",
   });
 });
+
+for (const outcome of [
+  "success",
+  "rejected",
+  "committed-response-lost",
+] as const) {
+  test(`OTA keeps one busy operation and one final toast: ${outcome}`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    const deferred = () => {
+      let release!: () => void;
+      const ready = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return { ready, release };
+    };
+    const prepare = deferred();
+    const chunks = [deferred(), deferred()];
+    const offsets: number[] = [];
+    await page.route("**/api/v1/ota/prepare", async (route) => {
+      state.system.ota_total_bytes = Number(
+        route.request().postDataJSON().size_bytes,
+      );
+      state.system.ota_phase = "prepared";
+      await prepare.ready;
+      await json(route, {
+        accepted: true,
+        detail: "Intermediate prepare",
+        upload_token: "a".repeat(64),
+      });
+    });
+    await page.route("**/api/v1/ota/chunk", async (route) => {
+      const body = route.request().postDataJSON();
+      const index = offsets.length;
+      offsets.push(body.offset);
+      await chunks[index].ready;
+      if (outcome === "rejected") {
+        await json(route, { accepted: false, detail: "Final rejection" });
+        return;
+      }
+      state.system.ota_progress_bytes =
+        body.offset + Buffer.from(body.data_base64, "base64").length;
+      state.system.ota_phase = body.final_chunk ? "activated" : "staging";
+      if (outcome === "committed-response-lost" && index === 0) {
+        await route.abort("failed");
+        return;
+      }
+      await json(route, { accepted: true, detail: "Intermediate chunk" });
+    });
+    await page.goto("/#/system");
+    await page.locator("#firmware-file").setInputFiles({
+      name: "core-pilot-0.2.0-ota.bin",
+      mimeType: "application/octet-stream",
+      buffer: Buffer.alloc(2049, 0xaa),
+    });
+    await page.getByRole("button", { name: "Validate & upload" }).click();
+    const busy = page.getByRole("button", { name: "Uploading…", exact: true });
+    const toasts = page.locator("[data-sonner-toast]");
+    await expect(busy).toBeDisabled();
+    await expect(page.getByRole("progressbar")).toHaveCount(1);
+    await expect(
+      page
+        .getByRole("region", { name: "Validating metadata" })
+        .getByRole("progressbar"),
+    ).toBeVisible();
+    await expect(page.locator("#firmware-file")).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Remove selected firmware" }),
+    ).toHaveCount(0);
+    await expect(toasts).toHaveCount(0);
+    expect(offsets).toEqual([]);
+    prepare.release();
+    await expect.poll(() => offsets.length).toBe(1);
+    await expect(busy).toBeDisabled();
+    await expect(toasts).toHaveCount(0);
+    await expect(page.getByRole("progressbar")).toHaveCount(1);
+    chunks[0].release();
+    if (outcome !== "rejected") {
+      await expect.poll(() => offsets.length).toBe(2);
+      expect(offsets).toEqual([0, 2048]);
+      await expect(busy).toBeDisabled();
+      await expect(toasts).toHaveCount(0);
+      await expect(page.getByRole("progressbar")).toHaveCount(1);
+      chunks[1].release();
+    }
+    await expect(busy).toHaveCount(0);
+    const upload = page.getByRole("button", { name: "Validate & upload" });
+    if (outcome === "rejected") await expect(upload).toBeDisabled();
+    else await expect(upload).toBeEnabled();
+    await expect(page.locator("#firmware-file")).toBeEnabled();
+    await expect(toasts).toHaveCount(1);
+    await expect(toasts).toContainText(
+      outcome === "rejected" ? "Final rejection" : "Firmware update applied.",
+    );
+    expect(offsets).toEqual(outcome === "rejected" ? [0] : [0, 2048]);
+    if (outcome === "success") {
+      await page.getByRole("button", { name: "Edit time settings" }).click();
+      await page.getByRole("button", { name: "Save time settings" }).click();
+      await expect(
+        toasts.filter({ hasText: "Time settings saved." }),
+      ).toHaveCount(1);
+      await expect(
+        toasts.filter({ hasText: "Firmware update applied." }),
+      ).toHaveCount(1);
+    }
+  });
+}

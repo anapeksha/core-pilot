@@ -32,9 +32,12 @@ enum class AccessState : std::uint8_t {
 
 inline constexpr int kAccessButtonX = 16;
 inline constexpr int kAccessButtonY = 176;
-inline constexpr int kAccessButtonWidth = 180;
 inline constexpr int kAccessButtonHeight = 44;
 inline constexpr char kAccessButtonLabel[] = "Authorize browser";
+// drawText uses unscaled M5GFX Font0: a fixed 6-pixel advance per ASCII character.
+inline constexpr int kAccessButtonTextWidth = (sizeof(kAccessButtonLabel) - 1) * 6;
+inline constexpr int kAccessButtonPaddingX = 12;
+inline constexpr int kAccessButtonWidth = kAccessButtonTextWidth + 2 * kAccessButtonPaddingX;
 
 [[nodiscard]] constexpr bool access_button_visible(AccessState state) {
   return state == AccessState::idle || state == AccessState::granted ||

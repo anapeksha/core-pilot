@@ -34,7 +34,8 @@ TEST_CASE("auth display boot wake hold and outside contact cannot issue access",
   TEST_ASSERT_EQUAL(display_policy::AccessState::idle, accessDisplayState(auth.bootstrap_state(0)));
   TEST_ASSERT_FALSE(pressed(auth, 0, false));
   TEST_ASSERT_FALSE(pressed(auth, 0, true, false));
-  TEST_ASSERT_FALSE(pressed(auth, 0, true, true, 196, 190));
+  TEST_ASSERT_FALSE(pressed(auth, 0, true, true, 142, 190));
+    TEST_ASSERT_FALSE(pressed(auth, 0, true, true, 195, 190));
   char code[17]{}, token[65]{};
   auth.copy_bootstrap(code);
   TEST_ASSERT_EQUAL_STRING("", code);

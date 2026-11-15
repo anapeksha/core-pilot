@@ -4,6 +4,18 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-15
+
+### Fixed
+
+- Keep dashboard OTA uploads continuously busy with one top progress bar and one final result notification, without per-chunk button or selected-file feedback changes.
+- Remove artificial successful-upload pauses while preserving sequential acknowledged chunks, bounded recovery, and firmware verification.
+- Fit the LCD **Authorize browser** button to its label with symmetric horizontal padding and matching touch boundaries.
+
+### Validation
+
+- Record the user-reported successful v0.1.1 → v0.1.2 dashboard OTA update; this was not independently captured end-to-end and does not establish Matter or soak readiness.
+
 ### Tests
 
 - Execute shared S3 component tests and authorization/display integration cases on the host with sanitizers and required-suite registration guards.
