@@ -6,6 +6,23 @@ namespace core_pilot::gateway_policy {
 
 constexpr std::uint8_t kMaxProvisionAttempts = 2;
 
+// At most 20 notifications at 5% boundaries, including completion. Use a fresh
+// instance for each segment/phase; empty work never reports completion.
+struct Progress final {
+  std::uint8_t last_percent{};
+
+  constexpr bool advance(std::uint32_t completed, std::uint32_t total) {
+    if (total == 0)
+      return false;
+    const auto percent = static_cast<std::uint8_t>(
+        completed >= total ? 100 : (static_cast<std::uint64_t>(completed) * 20 / total) * 5);
+    if (percent <= last_percent)
+      return false;
+    last_percent = percent;
+    return true;
+  }
+};
+
 enum class State : std::uint8_t { stopped, probing, provisioning, ready, failed };
 enum class SegmentAction : std::uint8_t { accept, provision, fail };
 

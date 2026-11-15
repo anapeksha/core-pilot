@@ -48,7 +48,6 @@ private:
   struct WorkSlot final {
     Mutation mutation{Mutation::create};
     core_domain::ModelKind kind{core_domain::ModelKind::room};
-    core_domain::ModelUpsert input{};
     Result result{};
     StaticSemaphore_t completion_buffer{};
     SemaphoreHandle_t completion{nullptr};
@@ -56,11 +55,31 @@ private:
   };
   static_assert(sizeof(core_domain::ModelUpsert) <= 4096);
   static_assert(sizeof(Result) <= 64);
-  static_assert(sizeof(WorkSlot) * kQueueDepth <= 20 * 1024);
+  static_assert(sizeof(WorkSlot) <= 512);
+
+  class WorkPayloads final {
+  public:
+    WorkPayloads();
+    ~WorkPayloads();
+    WorkPayloads(const WorkPayloads&) = delete;
+    WorkPayloads& operator=(const WorkPayloads&) = delete;
+    bool ready() const {
+      return data_ != nullptr;
+    }
+    core_domain::ModelUpsert& operator[](std::size_t index) {
+      return data_->inputs[index];
+    }
+
+  private:
+    struct Data final {
+      core_domain::ModelUpsert inputs[kQueueDepth]{};
+    };
+    Data* data_{nullptr};
+  };
 
   static void taskEntry(void* context);
   void taskLoop();
-  void process(WorkSlot& slot);
+  void process(WorkSlot& slot, core_domain::ModelUpsert& input);
   void reset(WorkSlot& slot);
   core_security::Status persist(const core_storage::ModelsDatabase& database,
                                 std::uint64_t generation);
@@ -74,6 +93,7 @@ private:
   mutable SemaphoreHandle_t state_mutex_{nullptr};
   portMUX_TYPE slots_lock_ = portMUX_INITIALIZER_UNLOCKED;
   WorkSlot slots_[kQueueDepth]{};
+  WorkPayloads payloads_;
   StaticQueue_t queue_buffer_{};
   std::uint8_t queue_storage_[kQueueDepth * sizeof(std::uint8_t)]{};
   QueueHandle_t queue_{nullptr};
@@ -85,5 +105,7 @@ private:
   std::uint8_t* encrypted_{nullptr};
   std::atomic_bool writable_{true};
 };
+// Keep the internal worker stack/control state, but not model payloads, in the repository.
+static_assert(sizeof(ModelRepository) <= 12 * 1024);
 
 } // namespace core_pilot

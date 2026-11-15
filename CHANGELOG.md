@@ -4,6 +4,11 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+### Fixed
+
+- Moved AI display scratch and queued model payloads to PSRAM while keeping task stacks and synchronization state internal, preserving internal/DMA memory for BLE and Matter startup.
+- Kept H2 firmware verification visible on the boot screen with bounded progress updates, negotiated 460800-baud ROM transfers, and removed a duplicate H2 bootloader reset without weakening image validation.
+
 ## [0.1.0] - 2026-11-12
 
 ### Added

@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <memory>
 
 namespace core_pilot {
 namespace {
@@ -38,6 +39,20 @@ private:
 };
 } // namespace
 
+ModelRepository::WorkPayloads::WorkPayloads()
+    : data_(
+          static_cast<Data*>(heap_caps_malloc(sizeof(Data), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))) {
+  if (data_ != nullptr)
+    std::construct_at(data_);
+}
+
+ModelRepository::WorkPayloads::~WorkPayloads() {
+  if (data_ != nullptr) {
+    std::destroy_at(data_);
+    heap_caps_free(data_);
+  }
+}
+
 ModelRepository::ModelRepository(core_security::StorageService& storage,
                                  core_security::RandomSource& random)
     : storage_(storage), random_(random) {
@@ -57,7 +72,8 @@ ModelRepository::ModelRepository(core_security::StorageService& storage,
 }
 
 core_security::Status ModelRepository::start() {
-  if (!databases_[0] || !databases_[1] || !plaintext_ || !encrypted_ || !state_mutex_ || !queue_)
+  if (!databases_[0] || !databases_[1] || !plaintext_ || !encrypted_ || !state_mutex_ || !queue_ ||
+      !payloads_.ready())
     return core_security::Status::BufferTooSmall;
   std::size_t size = 0;
   core_security::Metadata metadata{};
@@ -153,7 +169,7 @@ bool ModelRepository::submit(Mutation mutation, core_domain::ModelKind kind,
   auto& slot = slots_[slot_index];
   slot.mutation = mutation;
   slot.kind = kind;
-  slot.input = model;
+  payloads_[slot_index] = model;
   slot.result = {};
   while (xSemaphoreTake(slot.completion, 0) == pdTRUE) {
   }
@@ -179,13 +195,13 @@ void ModelRepository::taskLoop() {
   while (true) {
     std::uint8_t index = 0;
     if (xQueueReceive(queue_, &index, portMAX_DELAY) == pdTRUE && index < kQueueDepth) {
-      process(slots_[index]);
+      process(slots_[index], payloads_[index]);
       xSemaphoreGive(slots_[index].completion);
     }
   }
 }
 
-void ModelRepository::process(WorkSlot& slot) {
+void ModelRepository::process(WorkSlot& slot, core_domain::ModelUpsert& input) {
   if (slot.mutation == Mutation::reset_unreadable) {
     reset(slot);
     return;
@@ -207,7 +223,7 @@ void ModelRepository::process(WorkSlot& slot) {
   auto& collection = databases_[staging]->collections[core_storage::model_kind_index(slot.kind)];
   std::size_t index = collection.count;
   for (std::size_t current = 0; current < collection.count; ++current)
-    if (std::strcmp(collection.entries[current].id, slot.input.id) == 0) {
+    if (std::strcmp(collection.entries[current].id, input.id) == 0) {
       index = current;
       break;
     }
@@ -226,14 +242,14 @@ void ModelRepository::process(WorkSlot& slot) {
       slot.result.status = core_security::Status::NotFound;
       return;
     }
-    collection.entries[index].enabled = slot.input.enabled;
+    collection.entries[index].enabled = input.enabled;
     std::memcpy(slot.result.id, collection.entries[index].id, sizeof(slot.result.id));
   } else {
-    if (slot.mutation == Mutation::create && slot.input.has_id) {
+    if (slot.mutation == Mutation::create && input.has_id) {
       slot.result.status = core_security::Status::Invalid;
       return;
     }
-    if (slot.mutation == Mutation::update && (!slot.input.has_id || index == collection.count)) {
+    if (slot.mutation == Mutation::update && (!input.has_id || index == collection.count)) {
       slot.result.status = core_security::Status::NotFound;
       return;
     }
@@ -245,23 +261,23 @@ void ModelRepository::process(WorkSlot& slot) {
       static constexpr const char* prefixes[] = {"room", "group", "scene", "automation"};
       bool unique = false;
       for (std::size_t suffix = 0; suffix <= core_domain::max_models && !unique; ++suffix) {
-        std::snprintf(slot.input.id, sizeof(slot.input.id), "%s-%016llx-%02x",
+        std::snprintf(input.id, sizeof(input.id), "%s-%016llx-%02x",
                       prefixes[core_storage::model_kind_index(slot.kind)],
                       static_cast<unsigned long long>(generation_ + 1),
                       static_cast<unsigned>(suffix));
         unique = true;
         for (std::size_t current = 0; current < collection.count; ++current)
-          unique = unique && std::strcmp(slot.input.id, collection.entries[current].id) != 0;
+          unique = unique && std::strcmp(input.id, collection.entries[current].id) != 0;
       }
       if (!unique) {
         slot.result.status = core_security::Status::TooLarge;
         return;
       }
-      slot.input.has_id = true;
+      input.has_id = true;
       index = collection.count++;
     }
-    collection.entries[index] = slot.input;
-    std::memcpy(slot.result.id, slot.input.id, sizeof(slot.result.id));
+    collection.entries[index] = input;
+    std::memcpy(slot.result.id, input.id, sizeof(slot.result.id));
   }
 
   const auto result = persist(*databases_[staging], generation_ + 1);
