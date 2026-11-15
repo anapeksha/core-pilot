@@ -56,6 +56,16 @@ jobs:
       - run: npm run test:browser
       - run: npm run build
       - run: npm run test:e2e
+      - name: Retain browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: browser-failure-diagnostics
+          path: |
+            web/test-results/
+            web/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 3
       - uses: actions/upload-artifact@v7
         with:
           name: dashboard-dist
@@ -80,7 +90,18 @@ jobs:
       - name: Build native host tests
         run: cmake --build firmware/s3/test/host/build
       - name: Execute native host tests
-        run: ctest --test-dir firmware/s3/test/host/build --output-on-failure
+        env:
+          ASAN_OPTIONS: halt_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir firmware/s3/test/host/build --output-on-failure --no-tests=error
+      - name: Retain native test failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: native-test-failure-diagnostics
+          path: firmware/s3/test/host/build/Testing/Temporary/
+          if-no-files-found: ignore
+          retention-days: 3
 
   esp32s3_test_image:
     name: ESP32-S3 Unity test image (compile/link only)
@@ -105,12 +126,23 @@ jobs:
         run: >-
           idf.py -C firmware/s3/test/esp32s3
           -B firmware/s3/test/esp32s3/build build
+      - name: Retain ESP32-S3 test image
+        uses: actions/upload-artifact@v7
+        with:
+          name: esp32s3-unit-test-image
+          path: |
+            firmware/s3/test/esp32s3/build/*.bin
+            firmware/s3/test/esp32s3/build/*.elf
+            firmware/s3/test/esp32s3/build/bootloader/bootloader.bin
+            firmware/s3/test/esp32s3/build/partition_table/partition-table.bin
+          if-no-files-found: error
+          retention-days: 3
 
   firmware:
     name: ESP-IDF C++ firmware
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: web
+    needs: [python, web, host_tests, esp32s3_test_image]
     container: espressif/idf:v6.0.2
     steps:
       - uses: actions/checkout@v7

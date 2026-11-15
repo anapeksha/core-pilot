@@ -1935,3 +1935,367 @@ test("requires a physical tap and explicit status recheck after reboot", async (
   expect(checks).toBe(2);
   expect(mutations).toBe(0);
 });
+
+// Cookie issuance is simulated by the server, never by application storage.
+async function mockCookieAccess(page: Page) {
+  await mockFirmwareApi(page);
+  const server = {
+    open: false,
+    valid: false,
+    checks: 0,
+    posts: [] as string[],
+  };
+  await page.route("**/api/v1/auth**", async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET") {
+      server.checks++;
+      return json(route, {
+        authentication_required: true,
+        bootstrap_state: server.open ? "open" : "idle",
+        session_authenticated:
+          server.valid &&
+          request.headers().cookie?.includes("core_pilot_session=issued") ===
+            true,
+      });
+    }
+    server.posts.push(path);
+    if (path === "/api/v1/auth/session" && server.open) {
+      expect(request.postDataJSON()).toEqual({
+        code: "0123456789abcdef",
+        mode: "cookie",
+      });
+      server.open = false;
+      server.valid = true;
+      return route.fulfill({
+        contentType: "application/json",
+        headers: {
+          "Set-Cookie":
+            "core_pilot_session=issued; Path=/; HttpOnly; SameSite=Strict",
+        },
+        body: JSON.stringify({ authenticated: true, expires_in: 1800 }),
+      });
+    }
+    return json(route, {}, 401);
+  });
+  return server;
+}
+
+async function enterAccessCode(page: Page) {
+  await page.getByLabel("Bootstrap code").fill("0123456789abcdef");
+  await page
+    .getByRole("button", { name: "Unlock dashboard", exact: true })
+    .click();
+}
+
+test("exchanges a physically issued code by keyboard on a narrow access gate", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 320, height: 568 });
+  const server = await mockCookieAccess(page);
+  await page.goto("/");
+  const check = page.getByRole("button", { name: "I have a code" });
+  await expect(check).toBeVisible();
+  await expect(page.getByLabel("Bootstrap code")).toHaveCount(0);
+  server.open = true;
+  await check.focus();
+  await page.keyboard.press("Enter");
+  const input = page.getByLabel("Bootstrap code");
+  await expect(input).toBeVisible();
+  await input.fill("0123456789abcdef");
+  await input.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Unlock dashboard", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expectHeading(page, "Home");
+  expect(server.checks).toBe(2);
+  expect(server.posts).toEqual(["/api/v1/auth/session"]);
+  const cookies = await page.context().cookies();
+  expect(
+    cookies.find((cookie) => cookie.name === "core_pilot_session"),
+  ).toMatchObject({ httpOnly: true, sameSite: "Strict" });
+});
+
+for (const failure of [
+  "network",
+  "malformed status",
+  "malformed exchange",
+] as const) {
+  test(`fails closed without automatic auth issuance on ${failure}`, async ({
+    page,
+  }) => {
+    const server = await mockCookieAccess(page);
+    server.open = true;
+    if (failure !== "malformed exchange") {
+      await page.route("**/api/v1/auth", (route) =>
+        failure === "network"
+          ? route.abort("failed")
+          : json(route, { session_authenticated: true }),
+      );
+    } else {
+      await page.route("**/api/v1/auth/session", (route) =>
+        json(route, { authenticated: true, expires_in: 1 }),
+      );
+    }
+    await page.goto("/");
+    if (failure === "malformed exchange") await enterAccessCode(page);
+    await expect(
+      page.getByText("Access temporarily unavailable", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Home", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Check access" }),
+    ).toBeEnabled();
+    expect(server.posts).toEqual([]);
+  });
+}
+
+test("keeps independent browser cookies isolated and rejects them after server reboot", async ({
+  page,
+  browser,
+}) => {
+  const server = await mockCookieAccess(page);
+  server.open = true;
+  await page.goto("/");
+  await enterAccessCode(page);
+  await expectHeading(page, "Home");
+  const other = await browser.newContext();
+  try {
+    const second = await other.newPage();
+    // Both contexts consult the same simulated server state.
+    await mockFirmwareApi(second);
+    await second.route("**/api/v1/auth", (route) =>
+      json(route, {
+        authentication_required: true,
+        bootstrap_state: "idle",
+        session_authenticated:
+          server.valid &&
+          route
+            .request()
+            .headers()
+            .cookie?.includes("core_pilot_session=issued") === true,
+      }),
+    );
+    await second.goto("/");
+    await expect(
+      second.getByRole("button", { name: "I have a code" }),
+    ).toBeVisible();
+    await page.reload();
+    await expectHeading(page, "Home");
+    server.valid = false;
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "I have a code" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: "Home", exact: true }),
+    ).toHaveCount(0);
+    expect(
+      (await page.context().cookies()).some(
+        (cookie) => cookie.name === "core_pilot_session",
+      ),
+    ).toBe(true);
+    expect(server.posts).toEqual(["/api/v1/auth/session"]);
+  } finally {
+    await other.close();
+  }
+});
+
+test("clears local access even when logout cannot reach firmware", async ({
+  page,
+}) => {
+  await mockCookieAccess(page);
+  await page.route("**/api/v1/auth", (route) =>
+    json(route, {
+      authentication_required: true,
+      bootstrap_state: "consumed",
+      session_authenticated: true,
+    }),
+  );
+  await page.route("**/api/v1/auth/logout", (route) => route.abort("failed"));
+  await page.goto("/");
+  await expectHeading(page, "Home");
+  await page.getByRole("button", { name: "Log out" }).click();
+  await expect(
+    page.getByRole("heading", { name: "Unlock your dashboard" }),
+  ).toBeVisible();
+  await expect(page.getByText("Bench Lamp", { exact: true })).toHaveCount(0);
+});
+
+test("server OTA rejection preserves the normal dashboard without staging chunks", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.route("**/api/v1/ota/prepare", (route) =>
+    json(route, {
+      accepted: false,
+      detail: "Signature verification rejected.",
+    }),
+  );
+  await page.goto("/#/system");
+  await page.locator("#firmware-file").setInputFiles({
+    name: "core-pilot-0.2.0-ota.bin",
+    mimeType: "application/octet-stream",
+    buffer: Buffer.from("rejected image"),
+  });
+  await page.getByRole("button", { name: "Validate & upload" }).click();
+  await expect(
+    page.getByText("Signature verification rejected.").first(),
+  ).toBeVisible();
+  await expectHeading(page, "System");
+  await expect(page.getByRole("button", { name: "Log out" })).toBeVisible();
+  expect(
+    state.posts.filter((post) => post.path.startsWith("/api/v1/ota/")),
+  ).toEqual([]);
+});
+
+test("expires an authenticated session without automatically exchanging another code", async ({
+  page,
+}) => {
+  await page.clock.install();
+  const server = await mockCookieAccess(page);
+  server.open = true;
+  await page.goto("/");
+  await enterAccessCode(page);
+  await expectHeading(page, "Home");
+  await page.clock.runFor(1800 * 1000);
+  await expect(
+    page.getByRole("heading", { name: "Unlock your dashboard" }),
+  ).toBeVisible();
+  await expect(page.getByText("Bench Lamp", { exact: true })).toHaveCount(0);
+  expect(server.posts).toEqual(["/api/v1/auth/session"]);
+});
+
+test("a protected 401 discards cached rooms before another session unlocks", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.goto("/#/rooms");
+  await expect(page.getByText("Lab", { exact: true }).first()).toBeVisible();
+  await page.route("**/api/v1/groups", (route) => json(route, {}, 401));
+  await page.getByRole("link", { name: "Groups", exact: true }).first().click();
+  await expect(
+    page.getByRole("heading", { name: "Unlock your dashboard" }),
+  ).toBeVisible();
+  state.rooms = [{ id: "new-room", name: "Replacement Room" }];
+  await page.unroute("**/api/v1/groups");
+  await page.route("**/api/v1/auth", (route) =>
+    json(route, {
+      authentication_required: true,
+      bootstrap_state: "open",
+      session_authenticated: false,
+    }),
+  );
+  await page.route("**/api/v1/auth/session", (route) =>
+    json(route, { authenticated: true, expires_in: 1800 }),
+  );
+  await page.getByRole("button", { name: "Check access" }).click();
+  await enterAccessCode(page);
+  await page.getByRole("link", { name: "Rooms", exact: true }).first().click();
+  await expect(
+    page.getByText("Replacement Room", { exact: true }).first(),
+  ).toBeVisible();
+  await expect(page.getByText("Lab", { exact: true })).toHaveCount(0);
+});
+
+for (const status of ["pending", "failed"] as const) {
+  test(`retains a Matter device when asynchronous removal is ${status}`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.route("**/api/v1/matter/devices/remove", (route) => {
+      expect(route.request().postDataJSON()).toEqual({
+        device_id: "0000000000001234",
+      });
+      return json(route, {
+        accepted: status === "pending",
+        status,
+        detail: `Removal ${status}.`,
+        operation_id: 42,
+      });
+    });
+    await page.goto("/#/devices");
+    const device = page.locator('[data-device-id="matter-light-1"]');
+    await expect(device).toBeVisible();
+    await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
+    await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
+    await page.getByRole("button", { name: "Remove device" }).click();
+    await expect(
+      page
+        .getByText(
+          status === "pending"
+            ? "Matter device removal queued."
+            : `Removal ${status}.`,
+        )
+        .first(),
+    ).toBeVisible();
+    await expect(device).toBeVisible();
+    await page.reload();
+    await expect(device).toBeVisible();
+  });
+}
+
+for (const status of ["pending", "failed"] as const) {
+  test(`retains device inventory after a Matter command is ${status}`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    state.devices[0].capabilities = ["on_off"];
+    await page.route("**/api/v1/devices", (route) =>
+      route.request().method() === "GET"
+        ? route.fallback()
+        : json(route, {
+            accepted: status === "pending",
+            status,
+            operation_id: 43,
+            detail: `Command ${status}.`,
+          }),
+    );
+    await page.goto("/#/devices");
+    const device = page.locator('[data-device-id="matter-light-1"]');
+    await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
+    const response = page.waitForResponse("**/api/v1/devices");
+    await page.getByRole("menuitem", { name: "Turn on", exact: true }).click();
+    await response;
+    await expect(
+      page
+        .getByText(
+          status === "pending"
+            ? "Matter command queued. Power will update when the device reports state."
+            : "Command failed.",
+        )
+        .first(),
+    ).toBeVisible();
+    await expect(device).toBeVisible();
+  });
+}
+
+test("enforces room names by UTF-8 bytes instead of character count", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.goto("/#/rooms");
+  await page.getByRole("button", { name: "Create room" }).click();
+  await page.getByPlaceholder("Kitchen").fill("界".repeat(22));
+  await page
+    .getByRole("button", { name: "Create room", exact: true })
+    .last()
+    .click();
+  expect(
+    state.posts.filter((post) => post.path === "/api/v1/rooms/upsert"),
+  ).toEqual([]);
+  await page.getByPlaceholder("Kitchen").fill("界".repeat(21) + "a");
+  await page
+    .getByRole("button", { name: "Create room", exact: true })
+    .last()
+    .click();
+  await expect(
+    page.getByText("界".repeat(21) + "a", { exact: true }).first(),
+  ).toBeVisible();
+  expect(state.posts.at(-1)?.body).toMatchObject({
+    name: "界".repeat(21) + "a",
+  });
+});

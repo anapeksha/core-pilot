@@ -4,6 +4,12 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+### Tests
+
+- Execute shared S3 component tests and authorization/display integration cases on the host with sanitizers and required-suite registration guards.
+- Expand Playwright coverage for authorization recovery, browser isolation, asynchronous mutations, OTA rejection, UTF-8 limits, and narrow-screen keyboard access.
+- Gate firmware builds on the faster regression suites and retain failure diagnostics. Add a bounded production boot/API smoke checker for restart, memory, and authentication regressions.
+
 ## [0.1.2] - 2026-11-15
 
 ### Changed
