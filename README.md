@@ -25,17 +25,20 @@ Matter-over-Wi-Fi commissioning, subscription recovery, control, and removal hav
 Dashboard access starts with physical possession of the CoreS3:
 
 1. Connect your phone or computer to the same local network as Core Pilot.
-2. Open the address shown on the CoreS3 display.
-3. Enter the one-time access code displayed on the touchscreen.
-4. After authorization, that browser remains signed in for up to 30 minutes.
+2. Open the address shown on the CoreS3 home screen.
+3. Tap **Authorize browser** on the CoreS3 touchscreen.
+4. In the browser, select **I have a code**, then enter the code shown on the CoreS3.
+5. After authorization, that browser remains signed in for up to 30 minutes.
 
-The one-time code disappears after it is used. Core Pilot does not provide a network command for revealing or regenerating it.
+Core Pilot starts on the normal home screen without generating or displaying a code. A physical tap issues a one-time code valid for five minutes; using it clears it from the display. Expired codes and exhausted attempts require another physical tap. Network requests cannot generate or reveal codes.
+
+Restarting the CoreS3 invalidates every browser session and unused code. Authorize the browser again after a restart.
 
 ### Authorizing another browser
 
 Authorizing a second browser does not sign out the first one:
 
-1. On the CoreS3, tap **Authorize another browser**.
+1. On the CoreS3, tap **Authorize browser**.
 2. A fresh one-time code appears for five minutes.
 3. Open the dashboard in the new browser or browser profile and enter that code.
 4. Each browser receives its own independent 30-minute session.

@@ -129,6 +129,8 @@ it("does not restore bearer material from browser storage", async () => {
 
 it.each([
   ["incorrect", "The access code is incorrect."],
+  ["consumed", "The access code has already been used."],
+  ["__proto__", "Access is temporarily unavailable."],
   ["expired", "The access code has expired."],
   ["attempts_exhausted", "Access attempts are exhausted."],
   ["unavailable", "Access is temporarily unavailable."],
@@ -145,3 +147,43 @@ it.each([
   expect(fetcher).toHaveBeenCalledTimes(1);
   expect(authHeaders()).toEqual({});
 });
+
+it.each(["idle", "consumed", "expired", "attempts_exhausted", "unavailable"])(
+  "keeps %s locked and revokes stale local access after reboot",
+  async (bootstrap_state) => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ authenticated: true, expires_in: 1800 })),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            authentication_required: true,
+            bootstrap_state,
+            session_authenticated: false,
+          }),
+        ),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    await unlockAccess("0123456789abcdef");
+    await expect(initializeAccess()).resolves.toBe(bootstrap_state);
+    expect(accessGranted()).toBe(false);
+    expect(fetcher).toHaveBeenLastCalledWith("/api/v1/auth", {
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    });
+  },
+);
+
+it.each([{}, { authentication_required: true, bootstrap_state: "unknown" }])(
+  "fails closed for malformed auth status %j",
+  async (status) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(status))),
+    );
+    await expect(initializeAccess()).resolves.toBe("unavailable");
+    expect(accessGranted()).toBe(false);
+  },
+);

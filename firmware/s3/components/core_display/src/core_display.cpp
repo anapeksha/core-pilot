@@ -26,10 +26,10 @@ constexpr auto kClock = rgb(3, 50, 31);
 constexpr auto kCharge = kWhite;
 constexpr int kBatteryX = 286;
 constexpr int kBatteryY = 5;
-constexpr int kAccessButtonX = 16;
-constexpr int kAccessButtonY = 176;
-constexpr int kAccessButtonWidth = 180;
-constexpr int kAccessButtonHeight = 44;
+using display_policy::kAccessButtonHeight;
+using display_policy::kAccessButtonWidth;
+using display_policy::kAccessButtonX;
+using display_policy::kAccessButtonY;
 constexpr std::uint32_t kSaverMs = 300000;
 constexpr std::uint32_t kOffMs = 900000;
 std::uint32_t nowMs() {
@@ -257,17 +257,15 @@ void CoreDisplay::renderHome() {
   if (access_state_ == AccessState::active) {
     drawText("Dashboard access code", 16, 158, kMuted);
     drawText(access_code_, 16, 194, kBlue);
-  } else if (access_state_ == AccessState::granted || access_state_ == AccessState::expired ||
-             access_state_ == AccessState::attempts_exhausted) {
-    const char* message = access_state_ == AccessState::granted   ? "Dashboard access authorized"
+  } else if (display_policy::access_button_visible(access_state_)) {
+    const char* message = access_state_ == AccessState::idle      ? "Open dashboard to authorize"
+                          : access_state_ == AccessState::granted ? "Dashboard access authorized"
                           : access_state_ == AccessState::expired ? "Access code expired"
                                                                   : "Access attempts exhausted";
     drawText(message, 16, 158, kMuted);
     canvas_.drawRoundRect(kAccessButtonX, kAccessButtonY, kAccessButtonWidth, kAccessButtonHeight,
                           8, kBlue);
-    drawText(access_state_ == AccessState::granted ? "Authorize another browser"
-                                                   : "Generate new access code",
-             kAccessButtonX + 12, 204, kBlue);
+    drawText(display_policy::kAccessButtonLabel, kAccessButtonX + 12, 204, kBlue);
   } else {
     drawText("Dashboard access unavailable", 16, 194, kMuted);
   }
@@ -504,13 +502,11 @@ CoreDisplay::Action CoreDisplay::poll() {
         else if (approval == display_policy::ApprovalAction::reject)
           action = Action::reject_ai_action;
       }
-    } else if (page_ == Page::home &&
-               (access_state_ == AccessState::granted || access_state_ == AccessState::expired ||
-                access_state_ == AccessState::attempts_exhausted)) {
+    } else {
       const auto& touch = M5.Touch.getDetail();
-      if (touch.wasPressed() && touch.x >= kAccessButtonX &&
-          touch.x < kAccessButtonX + kAccessButtonWidth && touch.y >= kAccessButtonY &&
-          touch.y < kAccessButtonY + kAccessButtonHeight)
+      if (display_policy::access_button_pressed(access_state_,
+                                                page_ == Page::home && !saver_ && !blanked_,
+                                                touch.wasPressed(), touch.x, touch.y))
         action = Action::generate_access_code;
     }
   }

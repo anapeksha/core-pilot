@@ -129,7 +129,11 @@ export function mockRouterApi(): Plugin {
         }
 
         if (request.method === "GET" && url.pathname === "/api/v1/auth") {
-          json(response, 200, { authentication_required: false });
+          json(response, 200, {
+            authentication_required: false,
+            bootstrap_state: "idle",
+            session_authenticated: false,
+          });
           return;
         }
 

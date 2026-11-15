@@ -25,13 +25,7 @@ public:
     const char* action;
   };
   using UpgradePhase = display_policy::UpgradePhase;
-  enum class AccessState : std::uint8_t {
-    active,
-    granted,
-    expired,
-    attempts_exhausted,
-    unavailable
-  };
+  using AccessState = display_policy::AccessState;
   enum class Action : std::uint8_t {
     none,
     generate_access_code,
@@ -105,7 +99,7 @@ private:
   char status_[51]{};
   char access_code_[17]{};
   char approval_summary_[97]{};
-  AccessState access_state_{AccessState::unavailable};
+  AccessState access_state_{AccessState::idle};
   char time_[6]{};
   char date_[32]{};
   std::uint8_t digits_[6]{255, 255, 255, 255, 255, 255};

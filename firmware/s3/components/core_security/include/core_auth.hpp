@@ -3,7 +3,14 @@
 
 namespace core_security {
 
-enum class BootstrapState : uint8_t { open, consumed, expired, attempts_exhausted, unavailable };
+enum class BootstrapState : uint8_t {
+  idle,
+  open,
+  consumed,
+  expired,
+  attempts_exhausted,
+  unavailable
+};
 enum class ExchangeResult : uint8_t { ok, incorrect, expired, attempts_exhausted, unavailable };
 
 // Single owner or externally synchronized. Times are monotonic seconds.
@@ -11,7 +18,6 @@ class Auth final {
 public:
   static constexpr uint64_t kBootstrapSeconds = 300;
   static constexpr uint8_t kBootstrapAttemptLimit = 8;
-  static constexpr uint64_t kBootstrapCooldownSeconds = 2;
 
   static constexpr uint64_t kSessionSeconds = 30ULL * 60;
   using BootstrapSink = void (*)(const char* code, uint64_t expires_at);
@@ -20,7 +26,9 @@ public:
   Auth(const Auth&) = delete;
   Auth& operator=(const Auth&) = delete;
 
-  Status begin(RandomSource& random, uint64_t now, BootstrapSink physical_sink = nullptr);
+  // Boot/reset invalidates all access without generating or displaying a code.
+  void begin(BootstrapSink physical_sink = nullptr);
+  // Physical owner action: replace the code, preserving authorized browsers.
   Status regenerate(RandomSource& random, uint64_t now, BootstrapSink physical_sink = nullptr);
   BootstrapState bootstrap_state(uint64_t now);
   uint64_t bootstrap_expires() const;
@@ -35,16 +43,15 @@ private:
     uint64_t expires{};
   };
   void close_bootstrap(BootstrapState state);
-  Status rotate_bootstrap(RandomSource& random, uint64_t now, bool revoke_sessions);
 
   char code_[17]{};
   uint64_t bootstrap_expires_{};
 
   uint8_t failed_attempts_{};
-  uint64_t bootstrap_retry_at_{};
+
   BootstrapSink physical_sink_{};
 
-  BootstrapState bootstrap_state_{BootstrapState::unavailable};
+  BootstrapState bootstrap_state_{BootstrapState::idle};
   Session sessions_[4]{};
 };
 } // namespace core_security

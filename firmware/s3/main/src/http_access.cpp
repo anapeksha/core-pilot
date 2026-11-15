@@ -149,6 +149,8 @@ esp_err_t rejectAuth(httpd_req_t* req, const char* status, const char* code, con
 
 const char* stateName(core_security::BootstrapState state) {
   switch (state) {
+  case core_security::BootstrapState::idle:
+    return "idle";
   case core_security::BootstrapState::open:
     return "open";
   case core_security::BootstrapState::consumed:
@@ -451,7 +453,10 @@ esp_err_t initializeHttpAccess(core_security::RandomSource& random, CoreNetwork&
   if (!auth_mutex || !rate_mutex)
     return ESP_ERR_NO_MEM;
   AuthLock lock;
-  return lock.held() && auth.begin(random, now()) == core_security::Status::Ok ? ESP_OK : ESP_FAIL;
+  if (!lock.held())
+    return ESP_ERR_TIMEOUT;
+  auth.begin();
+  return ESP_OK;
 }
 
 bool snapshotHttpAccess(HttpAccessSnapshot& snapshot) {

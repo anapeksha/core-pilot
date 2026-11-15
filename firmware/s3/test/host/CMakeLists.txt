@@ -37,3 +37,22 @@ target_link_options(
 )
 
 add_test(NAME firmware_logic COMMAND firmware_logic_tests)
+
+add_executable(
+    firmware_auth_tests
+    auth_test_main.cpp
+    ../../components/core_security/src/core_auth.cpp
+    ../../components/core_security/test/test_core_auth.cpp
+)
+target_include_directories(
+    firmware_auth_tests PRIVATE auth_support ../../components/core_security/include
+)
+target_compile_features(firmware_auth_tests PRIVATE cxx_std_23)
+target_compile_options(
+    firmware_auth_tests PRIVATE -Wall -Wextra -Wpedantic -Werror
+    -fno-exceptions -fno-rtti -fsanitize=address,undefined -fno-omit-frame-pointer
+)
+target_link_options(
+    firmware_auth_tests PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer
+)
+add_test(NAME firmware_auth COMMAND firmware_auth_tests)

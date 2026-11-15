@@ -3,6 +3,8 @@ set(core_pilot_components "${CMAKE_CURRENT_LIST_DIR}/../../../components")
 idf_component_register(
     SRCS
         "firmware_test_main.cpp"
+        "${core_pilot_components}/core_security/src/core_auth.cpp"
+        "${core_pilot_components}/core_security/test/test_core_auth.cpp"
         "${core_pilot_components}/core_board/test/test_core_board.cpp"
         "${core_pilot_components}/core_display/test/test_core_display.cpp"
         "${core_pilot_components}/core_gateway/test/test_core_gateway.cpp"
@@ -13,13 +15,15 @@ idf_component_register(
         "${core_pilot_components}/core_network/src/core_network_policy.cpp"
         "${core_pilot_components}/core_ota/test/test_core_ota.cpp"
     INCLUDE_DIRS
+        "${core_pilot_components}/core_security/include"
         "${core_pilot_components}/core_board/include"
         "${core_pilot_components}/core_display/include"
         "${core_pilot_components}/core_gateway/include"
         "${core_pilot_components}/core_matter/include"
         "${core_pilot_components}/core_network/include"
         "${core_pilot_components}/core_ota/include"
-    REQUIRES unity
+    REQUIRES unity mbedtls
+    WHOLE_ARCHIVE
 )
 
 target_compile_features(${COMPONENT_LIB} PRIVATE cxx_std_26)

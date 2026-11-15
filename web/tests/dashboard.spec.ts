@@ -1896,3 +1896,42 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
   ).toBeDisabled();
   expect(state.posts).toEqual([]);
 });
+
+test("requires a physical tap and explicit status recheck after reboot", async ({
+  page,
+}) => {
+  let state = "idle";
+  let checks = 0;
+  let mutations = 0;
+  await page.route("**/api/v1/**", async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() !== "GET") mutations++;
+    if (path === "/api/v1/auth") {
+      checks++;
+      return json(route, {
+        authentication_required: true,
+        bootstrap_state: state,
+        session_authenticated: false,
+      });
+    }
+    return route.fulfill({ status: 401, body: "{}" });
+  });
+  await page.context().addCookies([
+    {
+      name: "core_pilot_session",
+      value: "old-session",
+      url: "http://127.0.0.1:4173",
+    },
+  ]);
+  await page.goto("/");
+  await expect(
+    page.getByRole("button", { name: "I have a code" }),
+  ).toBeVisible();
+  await expect(page.getByLabel("Bootstrap code")).toHaveCount(0);
+  expect(checks).toBe(1);
+  state = "open";
+  await page.getByRole("button", { name: "I have a code" }).click();
+  await expect(page.getByLabel("Bootstrap code")).toBeVisible();
+  expect(checks).toBe(2);
+  expect(mutations).toBe(0);
+});
