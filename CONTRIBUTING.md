@@ -43,7 +43,7 @@ A local hardware-development build may bypass bearer authentication when repeate
 Build it in a dedicated directory with the checked-in defaults overlay:
 
 ```sh
-eim run 'idf.py -C firmware/s3 -B firmware/s3/build-development -D PROJECT_VER=0.1.1-dev -D SDKCONFIG=sdkconfig.development.generated -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.development;sdkconfig.development.defaults" reconfigure build' v6.0.2
+eim run 'idf.py -C firmware/s3 -B firmware/s3/build-development -D PROJECT_VER=0.1.2-dev -D SDKCONFIG=sdkconfig.development.generated -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.development;sdkconfig.development.defaults" reconfigure build' v6.0.2
 ```
 
 The development image reports `authentication_required:false` from `/api/v1/auth` and emits a prominent boot warning. Host, Origin, content-type, setup-mode, and request validation remain active.
@@ -97,7 +97,7 @@ Do not run firmware formatting and the dashboard build concurrently because form
 
 CI has two deliberately separate test environments for firmware logic. Component-owned Unity cases remain beside their production components under `firmware/s3/components/core_*/test/`. The projects under `firmware/s3/test/` are runners: they assemble those policies for a specific execution environment without becoming part of the production firmware image.
 
-1. **Native host execution** configures `firmware/s3/test/host/` with the host compiler and executes deterministic policies for board geometry, display state, gateway provisioning, Matter lifecycle and bounded history, network profile/setup behavior, and OTA validation:
+1. **Native host execution** configures `firmware/s3/test/host/` with the host compiler and executes deterministic policies for board geometry, display state, gateway provisioning, Matter lifecycle and bounded history, network profile/setup behavior, and OTA validation. A separate sanitizer-backed executable runs the production authorization lifecycle and its shared Unity cases, with host adapters for assertions and zeroization:
 
    ```sh
    cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
@@ -136,6 +136,10 @@ uv run --project tools --locked python tools/test.py lifecycle <core-s3-ip> --co
 ```
 
 Each cycle verifies an idempotent command, reboot and subscription recovery, another command, asynchronous unpairing, encrypted registry removal, recommissioning, CASE, and subscriptions. Validate the limiter contract separately with `uv run --project tools --locked python tools/test.py rate-limit <core-s3-ip>`; this intentionally exhausts the source bucket and waits for the advertised retry interval before checking recovery.
+
+## Releases
+
+Update the firmware/dashboard versions and add the release entry to `CHANGELOG.md` before tagging a release. Use only that version's changelog body as the GitHub release text, preserving its section headings; do not copy other versions or append PR descriptions and validation logs. Wait for CI and CodeQL before merging, then use the production release workflow to sign and verify the published images. Never publish development authentication-bypass builds or program eFuses as part of a release.
 
 ## Pull requests
 
