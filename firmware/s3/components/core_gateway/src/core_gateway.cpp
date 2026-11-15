@@ -5,6 +5,7 @@
 #include "esp32_port.h"
 #include "esp_check.h"
 #include "esp_loader.h"
+#include "esp_loader_io.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,6 +15,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <cstring>
 
 namespace core_pilot {
@@ -67,7 +69,21 @@ esp_err_t loaderError(esp_loader_error_t error) {
   return ESP_FAIL;
 }
 
-esp_err_t verifySegmentSha256(const Segment& segment) {
+void reportProgress(CoreGateway::ProgressCallback progress, void* context, const char* phase,
+                    const Segment& segment, gateway_policy::Progress& throttle,
+                    std::size_t completed) {
+  if (progress == nullptr || !throttle.advance(static_cast<std::uint32_t>(completed),
+                                               static_cast<std::uint32_t>(segment.size)))
+    return;
+  std::array<char, 96> message{};
+  std::snprintf(message.data(), message.size(), "H2 %s %s: %u%%", phase, segment.name,
+                static_cast<unsigned>(throttle.last_percent));
+  progress(context, message.data());
+}
+
+esp_err_t verifySegmentSha256(const Segment& segment, CoreGateway::ProgressCallback progress,
+                              void* context) {
+  gateway_policy::Progress throttle{};
   psa_hash_operation_t operation = PSA_HASH_OPERATION_INIT;
   if (psa_crypto_init() != PSA_SUCCESS ||
       psa_hash_setup(&operation, PSA_ALG_SHA_256) != PSA_SUCCESS)
@@ -90,6 +106,7 @@ esp_err_t verifySegmentSha256(const Segment& segment) {
     if (status != PSA_SUCCESS)
       break;
     offset += static_cast<std::uint32_t>(count);
+    reportProgress(progress, context, "reading SHA-256", segment, throttle, offset);
   }
 
   std::array<std::uint8_t, 32> digest{};
@@ -105,7 +122,9 @@ esp_err_t verifySegmentSha256(const Segment& segment) {
   return matches ? ESP_OK : ESP_ERR_INVALID_CRC;
 }
 
-esp_err_t flashSegment(const Segment& segment) {
+esp_err_t flashSegment(const Segment& segment, CoreGateway::ProgressCallback progress,
+                       void* context) {
+  gateway_policy::Progress throttle{};
   ESP_LOGI(kTag, "flashing approved H2 %s segment (%u bytes at 0x%05lx)", segment.name,
            static_cast<unsigned>(segment.size), static_cast<unsigned long>(segment.address));
   auto error = esp_loader_flash_start(segment.address, static_cast<std::uint32_t>(segment.size),
@@ -123,13 +142,16 @@ esp_err_t flashSegment(const Segment& segment) {
     if (error != ESP_LOADER_SUCCESS)
       return loaderError(error);
     offset += count;
+    reportProgress(progress, context, "writing", segment, throttle, offset);
   }
   return loaderError(esp_loader_flash_verify());
 }
 
 } // namespace
 
-esp_err_t CoreGateway::provision() {
+esp_err_t CoreGateway::provision(ProgressCallback progress, void* context) {
+  if (progress != nullptr)
+    progress(context, "Connecting to H2 ROM");
   const loader_esp32_config_t config{
       .baud_rate = 115200,
       .uart_port = kUart,
@@ -146,18 +168,30 @@ esp_err_t CoreGateway::provision() {
   auto error = loader_port_esp32_init(&config);
   if (error != ESP_LOADER_SUCCESS)
     return loaderError(error);
-  loader_port_enter_bootloader();
   esp_loader_connect_args_t connect_args{.sync_timeout = 100, .trials = 5};
   error = esp_loader_connect(&connect_args);
   if (error == ESP_LOADER_SUCCESS && esp_loader_get_target() != ESP32H2_CHIP)
     error = ESP_LOADER_ERROR_INVALID_TARGET;
+  if (error == ESP_LOADER_SUCCESS) {
+    if (progress != nullptr)
+      progress(context, "Switching H2 ROM UART to 460800 baud");
+    error = esp_loader_change_transmission_rate(460800);
+    if (error == ESP_LOADER_SUCCESS)
+      error = loader_port_change_transmission_rate(460800);
+    // A failed switch can leave the peers at different rates. Do not continue
+    // validation; deinit below and reconnect from reset at 115200 on retry.
+    if (error != ESP_LOADER_SUCCESS)
+      ESP_LOGW(kTag, "H2 ROM baud negotiation failed: %d", static_cast<int>(error));
+  }
   esp_err_t result = loaderError(error);
   if (result == ESP_OK) {
     for (const auto& segment : kSegments) {
+      if (progress != nullptr)
+        progress(context, "Checking H2 segment MD5");
       error = esp_loader_flash_verify_known_md5(
           segment.address, static_cast<std::uint32_t>(segment.size), segment.md5_hex);
       const bool md5_matches = error == ESP_LOADER_SUCCESS;
-      result = md5_matches ? verifySegmentSha256(segment) : loaderError(error);
+      result = md5_matches ? verifySegmentSha256(segment, progress, context) : loaderError(error);
       const auto action = gateway_policy::segment_action(
           md5_matches, result == ESP_OK, !md5_matches && error != ESP_LOADER_ERROR_INVALID_MD5);
       if (action == gateway_policy::SegmentAction::accept) {
@@ -168,9 +202,9 @@ esp_err_t CoreGateway::provision() {
         break;
       if (md5_matches)
         ESP_LOGW(kTag, "H2 %s failed SHA-256 validation; reprovisioning", segment.name);
-      result = flashSegment(segment);
+      result = flashSegment(segment, progress, context);
       if (result == ESP_OK)
-        result = verifySegmentSha256(segment);
+        result = verifySegmentSha256(segment, progress, context);
       if (result != ESP_OK)
         break;
     }
@@ -195,12 +229,12 @@ esp_err_t CoreGateway::provision() {
   return ESP_OK;
 }
 
-esp_err_t CoreGateway::ensureReady() {
+esp_err_t CoreGateway::ensureReady(ProgressCallback progress, void* context) {
   status_ = gateway_policy::provisioning_started();
   esp_err_t result = ESP_FAIL;
   for (std::uint8_t attempt = 1; attempt <= gateway_policy::kMaxProvisionAttempts; ++attempt) {
     gateway_policy::provisioning_attempt(status_, attempt);
-    result = provision();
+    result = provision(progress, context);
     if (result == ESP_OK) {
       gateway_policy::provisioning_succeeded(status_);
       return ESP_OK;

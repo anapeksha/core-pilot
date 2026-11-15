@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -8,6 +7,7 @@ import viteCompression from "vite-plugin-compression";
 import { viteSingleFile } from "vite-plugin-singlefile";
 import { defineConfig, type Plugin } from "vite";
 import { mockRouterApi } from "./src/dev/mock-router-api.ts";
+import { inlineScriptHashes } from "./src/dev/csp.ts";
 
 const rootDir = import.meta.dirname;
 
@@ -20,14 +20,7 @@ function contentSecurityPolicy(): Plugin {
         path.join(outputDirectory, "index.html"),
         "utf8",
       );
-      const hashes = [
-        ...source.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi),
-      ].map(
-        (match) =>
-          `'sha256-${createHash("sha256").update(match[1]).digest("base64")}'`,
-      );
-      if (hashes.length === 0)
-        throw new Error("built dashboard contains no inline scripts");
+      const hashes = inlineScriptHashes(source);
       const policy = `default-src 'none'; script-src ${hashes.join(" ")}; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; font-src 'self'; manifest-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'; object-src 'none'`;
       await writeFile(path.join(outputDirectory, "csp.txt"), policy, "utf8");
     },

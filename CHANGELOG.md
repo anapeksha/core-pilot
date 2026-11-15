@@ -4,6 +4,23 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-15
+
+### Fixed
+
+- Moved AI display scratch and queued model payloads to PSRAM while keeping task stacks and synchronization state internal, preserving internal/DMA memory for BLE and Matter startup.
+- Kept H2 firmware verification visible on the boot screen with bounded progress updates, negotiated 460800-baud ROM transfers, and removed a duplicate H2 bootloader reset without weakening image validation.
+
+### Security
+
+- Replaced regular-expression script extraction with HTML parsing when generating dashboard CSP hashes, with regression tests for malformed and inert markup.
+- Updated dashboard build dependencies and scoped the TypeScript-ESLint minimatch override to a patched release, resolving the reported dependency vulnerabilities.
+
+### Known limitations
+
+- Boot recovery has short hardware validation; long-duration stability and commissioning workloads still require validation, particularly internal/DMA memory headroom.
+- Matter-over-Thread and Thread Border Router end-to-end readiness remain unverified. This release is not CSA Matter certified.
+
 ## [0.1.0] - 2026-11-12
 
 ### Added

@@ -15,6 +15,7 @@
 #include "core_storage.hpp"
 #include "device_registry.hpp"
 #include "esp_err.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "http_access.hpp"
@@ -35,12 +36,46 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <memory>
 
 namespace core_pilot {
 namespace {
 
 constexpr char kTag[] = "core_pilot";
 std::atomic<std::uint64_t> pending_matter_local_forget{};
+
+// These UI-only buffers must not consume the internal/DMA heap needed by BLE startup.
+class AiDisplayWorkspace final {
+public:
+  struct Data final {
+    AiChatService::Snapshot snapshot{};
+    char response[AiChatService::kMaxResponseBytes + 1]{};
+  };
+
+  AiDisplayWorkspace()
+      : data_(static_cast<Data*>(
+            heap_caps_malloc(sizeof(Data), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT))) {
+    if (data_ != nullptr)
+      std::construct_at(data_);
+  }
+  ~AiDisplayWorkspace() {
+    if (data_ != nullptr) {
+      std::destroy_at(data_);
+      mbedtls_platform_zeroize(data_, sizeof(Data));
+      heap_caps_free(data_);
+    }
+  }
+  AiDisplayWorkspace(const AiDisplayWorkspace&) = delete;
+  AiDisplayWorkspace& operator=(const AiDisplayWorkspace&) = delete;
+
+  Data* get() const {
+    return data_;
+  }
+
+private:
+  Data* data_{};
+};
+static_assert(sizeof(AiDisplayWorkspace) == sizeof(void*));
 
 esp_err_t confirmPendingOta(bool& confirmed) {
   confirmed = false;
@@ -110,6 +145,12 @@ void showProgress(CoreDisplay& display, std::uint8_t percent, const char* messag
 
 void networkBootProgress(void* context, const char* message) {
   showProgress(*static_cast<CoreDisplay*>(context), 50, message);
+}
+
+void gatewayBootProgress(void* context, const char* message) {
+  auto& display = *static_cast<CoreDisplay*>(context);
+  display.bootProgress(95, message);
+  display.poll();
 }
 
 void showHome(CoreDisplay& display, const CoreNetwork& network, const char* setup_password) {
@@ -372,7 +413,7 @@ void Application::run() {
 
   showProgress(display, 95, "Checking Gateway H2 radio");
   static CoreGateway gateway;
-  const esp_err_t gateway_result = gateway.ensureReady();
+  const esp_err_t gateway_result = gateway.ensureReady(gatewayBootProgress, &display);
   if (gateway_result != ESP_OK)
     ESP_LOGE(kTag, "Gateway H2 RCP unavailable: %s", esp_err_to_name(gateway_result));
 
@@ -455,10 +496,20 @@ void Application::run() {
   bool ota_update_shown = false;
   std::uint64_t displayed_ai_operation = 0;
   std::uint64_t displayed_ai_proposal = 0;
-  static AiChatService::Snapshot ai_snapshot{};
-  static char ai_response[AiChatService::kMaxResponseBytes + 1]{};
+  static AiDisplayWorkspace ai_workspace;
+  if (ai_workspace.get() == nullptr) {
+    stopAtFatal(display, {"MEMORY UNAVAILABLE", "AI display allocation failed",
+                          "The display workspace requires external memory.", "Restart Core Pilot"});
+  }
+  auto& ai_snapshot = ai_workspace.get()->snapshot;
+  auto& ai_response = ai_workspace.get()->response;
   std::uint64_t reconciled_terminal_sequence = 0;
   std::uint64_t last_removed_node_id = 0;
+  ESP_LOGI(kTag, "Application startup complete; internal free=%u largest=%u, DMA free=%u",
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(
+               heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT)),
+           static_cast<unsigned>(heap_caps_get_free_size(MALLOC_CAP_DMA)));
   while (true) {
     servicePendingTimeNetworkEvent();
     thread_dataset_service.reconcile();
