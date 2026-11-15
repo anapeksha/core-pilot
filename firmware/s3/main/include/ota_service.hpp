@@ -20,9 +20,10 @@ public:
   CoreOta::Result write(const core_domain::OtaChunk& request);
   CoreOta::Status status() const;
   bool deferRestart();
+  bool acknowledgeUpgradeDisplay();
 
 private:
-  enum class Operation : std::uint8_t { prepare, write, restart };
+  enum class Operation : std::uint8_t { prepare, write, restart, display_shown };
 
   struct RequestSlot final {
     core_domain::OtaPrepare prepare{};
@@ -31,7 +32,8 @@ private:
     CoreOta::SessionId session{};
   };
 
-  static constexpr UBaseType_t kQueueDepth = 1;
+  // One serialized request plus the response and display acknowledgements.
+  static constexpr UBaseType_t kQueueDepth = 3;
   static constexpr std::uint32_t kTaskStackBytes = 8 * 1024;
 
   static void taskEntry(void* context);

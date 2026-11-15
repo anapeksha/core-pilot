@@ -601,7 +601,8 @@ esp_err_t otaMutationHandler(httpd_req_t* request) {
                                  "verification.",
       nullptr, prepare ? upload_token : nullptr);
   mbedtls_platform_zeroize(upload_token, sizeof upload_token);
-  if (response_result == ESP_OK && restart_after_response && !runtime->ota.deferRestart())
+  // Activation is committed even if the client disconnects during the final response.
+  if (restart_after_response && !runtime->ota.deferRestart())
     ESP_LOGE(kTag, "failed to queue deferred OTA restart");
   return response_result;
 }
