@@ -1404,8 +1404,15 @@ for (const endpoint of ["devices", "scenes"]) {
         release();
       }
       await expect(panel.getByRole("alert")).toContainText(
-        "Could not load favorites",
+        "Could not refresh favorites",
       );
+      await expect(
+        panel.getByRole("link", { name: /Bench Lamp/ }),
+      ).toBeVisible();
+      await expect(panel.locator("[data-home-card-skeleton]")).toHaveCount(0);
+      await expect(
+        panel.getByRole("button", { name: "Retry favorites" }),
+      ).toBeEnabled();
       await expect(panel).toHaveAccessibleName("Saved favorites");
       const toggle = page.getByRole("button", {
         name: "Edit favorites",
@@ -1423,13 +1430,11 @@ for (const endpoint of ["devices", "scenes"]) {
         page.getByRole("status", { name: "Online", exact: true }),
       ).toBeVisible();
 
-      // The normal reconnect refresh recovers inventory without remounting Home.
+      // Retry recovers inventory without remounting Home or stealing focus.
       await page.unroute(`**/api/v1/${endpoint}`, failInventory);
-      await context.setOffline(true);
-      await expect(
-        page.getByRole("status", { name: "Offline", exact: true }),
-      ).toBeVisible();
-      await context.setOffline(false);
+      await panel
+        .getByRole("button", { name: "Retry favorites" })
+        .evaluate((button: HTMLButtonElement) => button.click());
       await expect(toggle).toBeEnabled();
       await expect(panel.getByRole("alert")).toHaveCount(0);
       await expect(
@@ -1440,6 +1445,285 @@ for (const endpoint of ["devices", "scenes"]) {
       expect(state.posts).toEqual([]);
     });
   }
+}
+
+for (const endpoint of ["health", "devices"] as const) {
+  test(`Home cached ${endpoint} refresh retains favorite identity and Retry recovers`, async ({
+    page,
+    context,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "core-pilot-home-favorites",
+        JSON.stringify(["device:matter-light-1"]),
+      ),
+    );
+    await page.goto("/");
+    const panel = page.locator("#home-favorites-panel");
+    const link = panel.getByRole("link", { name: /Bench Lamp/ });
+    await expect(link).toBeVisible();
+    await expect(page.getByText("Lab_WiFi", { exact: false })).toBeVisible();
+    const original = await link.elementHandle();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fail = async (route: Route) => {
+      await held;
+      await json(route, { detail: "Refresh unavailable" }, 400);
+    };
+    await page.route(`**/api/v1/${endpoint}`, fail);
+    await context.setOffline(true);
+    await expect(
+      page.getByRole("status", { name: "Offline", exact: true }),
+    ).toBeVisible();
+    const requested = page.waitForRequest(`**/api/v1/${endpoint}`);
+    await context.setOffline(false);
+    await requested;
+    try {
+      await link.focus();
+      await expect(
+        page.getByRole("status").filter({ hasText: "Refreshing home status" }),
+      ).toBeVisible();
+      await expect(page.locator("[data-home-card-skeleton]")).toHaveCount(0);
+      await expect(link).toBeFocused();
+      expect(
+        await link.evaluate(
+          (element, previous) => element === previous,
+          original,
+        ),
+      ).toBe(true);
+    } finally {
+      release();
+    }
+    const warning = page
+      .getByRole("alert")
+      .filter({ hasText: "Could not refresh home status" });
+    await expect(warning).toContainText("Showing previously loaded data");
+    await expect(page.getByText("Lab_WiFi", { exact: false })).toBeVisible();
+    await expect(link).toBeFocused();
+    expect(
+      await link.evaluate(
+        (element, previous) => element === previous,
+        original,
+      ),
+    ).toBe(true);
+    if (endpoint === "devices")
+      await expect(
+        page.getByRole("button", { name: "Edit favorites" }),
+      ).toBeDisabled();
+    await page.unroute(`**/api/v1/${endpoint}`, fail);
+    await warning
+      .getByRole("button", { name: "Retry home status" })
+      .evaluate((button: HTMLButtonElement) => button.click());
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Could not refresh" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Edit favorites" }),
+    ).toBeEnabled();
+    await expect(link).toBeFocused();
+    expect(
+      await link.evaluate(
+        (element, previous) => element === previous,
+        original,
+      ),
+    ).toBe(true);
+    expect(state.posts).toEqual([]);
+  });
+}
+
+for (const endpoint of ["devices", "scenes"]) {
+  test(`Home empty favorites block both editor entry points after cached ${endpoint} failure`, async ({
+    page,
+    context,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.goto("/");
+    const panel = page.locator("#home-favorites-panel");
+    const pin = panel.getByRole("button", {
+      name: "Pin favorites",
+      exact: true,
+    });
+    const edit = page.getByRole("button", {
+      name: "Edit favorites",
+      exact: true,
+    });
+    await expect(pin).toBeEnabled();
+    await page.route(`**/api/v1/${endpoint}`, (route) =>
+      json(route, { detail: "Inventory refresh unavailable" }, 400),
+    );
+    await context.setOffline(true);
+    await expect(
+      page.getByRole("status", { name: "Offline", exact: true }),
+    ).toBeVisible();
+    await context.setOffline(false);
+    await expect(panel.getByRole("alert")).toContainText(
+      "Could not refresh favorites",
+    );
+    await expect(edit).toBeDisabled();
+    await expect(pin).toBeDisabled();
+    // Synthetic dispatch also exercises the mode guard, independently of native disabled clicks.
+    await pin.dispatchEvent("click");
+    await edit.dispatchEvent("click");
+    await expect(panel).toHaveAccessibleName("Saved favorites");
+    await expect(edit).toHaveAttribute("aria-expanded", "false");
+    await expect(panel.locator("button[aria-pressed]")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Done", exact: true }),
+    ).toHaveCount(0);
+  });
+}
+
+for (const cached of [false, true]) {
+  for (const result of ["success", "failure", "outside"] as const) {
+    test(`Home keyboard Retry from ${cached ? "cached failure" : "initial error"} preserves ${result} focus`, async ({
+      page,
+      context,
+    }) => {
+      await mockFirmwareApi(page);
+      const fail = (route: Route) =>
+        json(route, { detail: "Health unavailable" }, 400);
+      if (!cached) await page.route("**/api/v1/health", fail);
+      await page.goto("/");
+      if (cached) {
+        await expect(
+          page
+            .getByRole("group", { name: "home status content", exact: true })
+            .getByText("Lab_WiFi", { exact: false }),
+        ).toBeVisible();
+        await page.route("**/api/v1/health", fail);
+        await context.setOffline(true);
+        await expect(
+          page.getByRole("status", { name: "Offline", exact: true }),
+        ).toBeVisible();
+        await context.setOffline(false);
+      }
+      const content = page.getByRole("group", {
+        name: "home status content",
+        exact: true,
+      });
+      await expect(content.getByRole("alert")).toContainText(
+        cached ? "Could not refresh home status" : "Could not load home status",
+      );
+      await page.unroute("**/api/v1/health", fail);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route("**/api/v1/health", async (route) => {
+        await held;
+        if (result === "failure") return fail(route);
+        return route.fallback();
+      });
+      const retry = content.getByRole("button", {
+        name: "Retry home status",
+        exact: true,
+      });
+      await retry.focus();
+      await expect(retry).toBeFocused();
+      const requested = page.waitForRequest("**/api/v1/health");
+      await page.keyboard.press("Enter");
+      await requested;
+      const outside = page
+        .locator("#main-content footer")
+        .getByRole("link", { name: "View activity history", exact: true });
+      try {
+        if (cached) await expect(content.getByRole("button")).toBeDisabled();
+        else
+          await expect(
+            content.locator('[data-home-card-skeleton="home status"]'),
+          ).toBeVisible();
+        if (result === "outside") {
+          await outside.focus();
+          await expect(outside).toBeFocused();
+        }
+      } finally {
+        release();
+      }
+      if (result === "failure") {
+        await expect(retry).toBeEnabled();
+        await expect(cached ? retry : content).toBeFocused();
+        await expect(content.getByRole("alert")).toBeVisible();
+      } else {
+        await expect(content.getByRole("alert")).toHaveCount(0);
+        await expect(
+          content.getByRole("button", { name: /Retry/ }),
+        ).toHaveCount(0);
+        await expect(result === "outside" ? outside : content).toBeFocused();
+      }
+    });
+  }
+}
+
+for (const terminal of ["complete", "failed"] as const) {
+  test(`Home local automation waits for terminal ${terminal}`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let checks = 0;
+    await page.route(
+      "**/api/v1/automations/operations/status",
+      async (route) => {
+        expect(route.request().postDataJSON()).toEqual({ operation_id: 101 });
+        checks += 1;
+        if (checks === 1)
+          return json(route, {
+            operation_id: 101,
+            state: "pending",
+            action_index: 0,
+            action_count: 1,
+            failure: null,
+            error: null,
+          });
+        await held;
+        return json(route, {
+          operation_id: 101,
+          state: terminal,
+          action_index: 1,
+          action_count: 1,
+          failure: terminal === "failed" ? "Local action failed." : null,
+          error: null,
+        });
+      },
+    );
+    await page.goto("/");
+    const run = page.getByRole("button", { name: "Welcome home", exact: true });
+    await run.click();
+    try {
+      await expect(
+        page.getByRole("region", { name: "Waiting for automation completion" }),
+      ).toContainText("completion has not been confirmed");
+      await expect(run).toBeDisabled();
+      await expect(
+        page.getByRole("region", { name: "Automation run complete" }),
+      ).toHaveCount(0);
+      await expect.poll(() => checks).toBeGreaterThanOrEqual(2);
+    } finally {
+      release();
+    }
+    await expect(
+      page.getByRole("region", {
+        name:
+          terminal === "complete"
+            ? "Automation run complete"
+            : "Automation run failed",
+      }),
+    ).toContainText(
+      terminal === "complete"
+        ? "The automation completed successfully."
+        : "Local action failed.",
+    );
+    await expect(run).toBeEnabled();
+    expect(
+      state.posts.filter((post) => post.path === "/api/v1/automations/run"),
+    ).toHaveLength(1);
+  });
 }
 
 test("Home alerts offer per-condition review links without misleading healthy states", async ({
@@ -1746,6 +2030,83 @@ test("keeps every page within mobile and tablet viewports", async ({
     }
   }
 });
+
+for (const width of [320, 1024]) {
+  for (const navigation of ["expanded", "collapsed"] as const) {
+    test(`long model cards wrap locally at ${width} with ${navigation} navigation`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      const state = await mockFirmwareApi(page);
+      const name = "N".repeat(64);
+      const id = "i".repeat(48);
+      state.groups = [{ id, name, device_ids: [id, "d".repeat(48)] }];
+      state.scenes = [{ id, name, actions: [`scene|${id}`] }];
+      state.automations = [
+        {
+          id,
+          name,
+          enabled: true,
+          trigger: "manual",
+          actions: [`scene|${id}`],
+        },
+      ];
+      await page.goto("/#/groups");
+      if (width >= 768) {
+        const sidebar = page.locator("[data-state][data-collapsible]");
+        if ((await sidebar.getAttribute("data-state")) !== navigation)
+          await page.locator('[data-sidebar="trigger"]').click();
+        await expect(sidebar).toHaveAttribute("data-state", navigation);
+      } else if (navigation === "expanded") {
+        await page.getByRole("button", { name: "Toggle navigation" }).click();
+        await expect(page.locator('[data-slot="sheet-content"]')).toBeVisible();
+        await page.getByRole("button", { name: "Close navigation" }).click();
+        await expect(page.locator('[data-slot="sheet-content"]')).toBeHidden();
+      }
+      for (const route of ["groups", "scenes", "automations"]) {
+        await page.evaluate((path) => {
+          location.hash = `#/${path}`;
+        }, route);
+        await expectHeading(page, route[0].toUpperCase() + route.slice(1));
+        const title = page.getByText(name, { exact: true });
+        await expect(title).toBeVisible();
+        const card = title.locator(
+          "xpath=ancestor::div[contains(@class, 'rounded-lg')][1]",
+        );
+        await expect(card).toBeVisible();
+        expect(
+          await card.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return Array.from(element.querySelectorAll("*"))
+              .filter(
+                (child) =>
+                  child.textContent?.trim() && child.getClientRects().length,
+              )
+              .every((child) => {
+                const box = child.getBoundingClientRect();
+                return (
+                  box.left >= bounds.left - 1 &&
+                  box.right <= bounds.right + 1 &&
+                  child.scrollWidth <= child.clientWidth + 1
+                );
+              });
+          }),
+        ).toBe(true);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        const header = page.locator("#main-content header").first();
+        expect(
+          await header.evaluate(
+            (element) => element.scrollWidth <= element.clientWidth + 1,
+          ),
+        ).toBe(true);
+      }
+    });
+  }
+}
 
 test("contains maximum-length room names within room cards", async ({
   page,
@@ -2091,7 +2452,9 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
     .dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
   await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
   await page.getByRole("button", { name: "Remove device" }).click();
-  await expect(page.getByText("Matter device removal queued.")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Matter removal request accepted" }),
+  ).toBeVisible();
   expect(state.posts.at(-1)).toMatchObject({
     path: "/api/v1/matter/devices/remove",
     body: { device_id: "0000000000001234" },
@@ -2936,15 +3299,7 @@ for (const status of ["pending", "failed"] as const) {
     await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
     await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
     await page.getByRole("button", { name: "Remove device" }).click();
-    await expect(
-      page
-        .getByText(
-          status === "pending"
-            ? "Matter device removal queued."
-            : `Removal ${status}.`,
-        )
-        .first(),
-    ).toBeVisible();
+    await expect(page.getByText(`Removal ${status}.`).first()).toBeVisible();
     await expect(device).toBeVisible();
     await page.reload();
     await expect(device).toBeVisible();
@@ -2983,6 +3338,131 @@ for (const status of ["pending", "failed"] as const) {
         .first(),
     ).toBeVisible();
     await expect(device).toBeVisible();
+  });
+}
+
+test("Devices accepted power command stays Unknown until a fresh report", async ({
+  page,
+  context,
+}) => {
+  const state = await mockFirmwareApi(page);
+  state.devices[0].capabilities = ["on_off"];
+  let reads = 0;
+  let reported = false;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/devices", async (route) => {
+    if (route.request().method() !== "GET") {
+      expect(route.request().postDataJSON()).toEqual({
+        device_id: "0000000000001234",
+        endpoint_id: 1,
+        on: true,
+      });
+      return json(route, {
+        accepted: true,
+        status: "pending",
+        operation_id: 43,
+        detail: "Power command queued.",
+      });
+    }
+    reads += 1;
+    if (reported) await held;
+    return json(route, {
+      devices: state.devices.map((device) => ({
+        ...device,
+        ...(reported ? { state: [{ OnOff: true }] } : {}),
+      })),
+      detail: "Reported inventory",
+    });
+  });
+  await page.goto("/#/devices");
+  const device = page.locator('[data-device-id="matter-light-1"]');
+  await expect(device.getByText("Unknown", { exact: true })).toBeVisible();
+  await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
+  await page.getByRole("menuitem", { name: "Turn on", exact: true }).click();
+  const accepted = page.getByRole("region", {
+    name: "Matter command request accepted",
+    exact: true,
+  });
+  await expect(accepted).toContainText("Power command queued.");
+  await expect(accepted).toContainText(
+    "Power remains the last reported state, not the requested state.",
+  );
+  expect(reads).toBeGreaterThanOrEqual(2);
+  await expect(device.getByText("Unknown", { exact: true })).toBeVisible();
+  await expect(device.getByText("On", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("region", { name: /command.*complet/i }),
+  ).toHaveCount(0);
+  await expect(
+    device.locator("#power-matter-light-1-description"),
+  ).toContainText("displayed state updates only when Bench Lamp reports it");
+  reported = true;
+  await context.setOffline(true);
+  await expect(
+    page.getByRole("status", { name: "Offline", exact: true }),
+  ).toBeVisible();
+  const requested = page.waitForRequest("**/api/v1/devices");
+  await context.setOffline(false);
+  await requested;
+  try {
+    await expect(device.getByText("Unknown", { exact: true })).toBeVisible();
+    await expect(device.getByText("On", { exact: true })).toHaveCount(0);
+  } finally {
+    release();
+  }
+  await expect(device.getByText("On", { exact: true })).toBeVisible();
+  await expect(device.getByText("Unknown", { exact: true })).toHaveCount(0);
+  await expect(accepted).toBeVisible();
+});
+
+for (const accepted of [true, false]) {
+  test(`Devices rename shows local ${accepted ? "accepted" : "error"} feedback`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.route("**/api/v1/devices", (route) => {
+      if (route.request().method() === "GET") return route.fallback();
+      expect(route.request().postDataJSON()).toEqual({
+        device_id: "0000000000001234",
+        endpoint_id: 1,
+        name: "Desk Lamp",
+      });
+      return json(route, {
+        accepted,
+        status: accepted ? "pending" : "failed",
+        detail: accepted ? "Rename queued." : "Rename unavailable.",
+      });
+    });
+    await page.goto("/#/devices");
+    const device = page.locator('[data-device-id="matter-light-1"]');
+    await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
+    await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+    await device
+      .getByRole("textbox", { name: "Device name" })
+      .fill("Desk Lamp");
+    await device.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(
+      page.getByRole("region", {
+        name: accepted
+          ? "Device rename request accepted"
+          : "Device rename failed",
+        exact: true,
+      }),
+    ).toContainText(accepted ? "Rename queued." : "Rename unavailable.");
+    await expect(
+      page.getByRole("region", { name: /rename.*complet/i }),
+    ).toHaveCount(0);
+    if (accepted)
+      await expect(
+        device.getByText("Bench Lamp", { exact: true }),
+      ).toBeVisible();
+    else
+      await expect(
+        device.getByRole("textbox", { name: "Device name" }),
+      ).toHaveValue("Desk Lamp");
   });
 }
 
