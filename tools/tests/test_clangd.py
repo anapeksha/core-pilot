@@ -17,6 +17,8 @@ TOOLS = Path(__file__).resolve().parents[1]
 
 def load(name):
     spec = importlib.util.spec_from_file_location(name, TOOLS / f"{name}.py")
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load test module {name!r}")
     module = importlib.util.module_from_spec(spec)
     with mock.patch.dict(sys.modules, {name: module}):
         spec.loader.exec_module(module)
