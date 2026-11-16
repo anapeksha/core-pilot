@@ -1857,7 +1857,7 @@ for (const trigger of ["automatic", "manual"] as const) {
       name: "Scrollable activity history",
     });
     await expect(page.locator("#activity-list-summary")).toContainText(
-      "20 loaded events",
+      "20 loaded",
     );
     const original = await viewport.elementHandle();
     expect(original).not.toBeNull();
@@ -1900,7 +1900,7 @@ for (const trigger of ["automatic", "manual"] as const) {
       ).toBe(true);
       await pending.shift()!.fallback();
       await expect(page.locator("#activity-list-summary")).toContainText(
-        `${loaded} loaded events`,
+        `${loaded} loaded`,
       );
       expect(
         await viewport.evaluate(
@@ -1954,7 +1954,7 @@ for (const [filter, option] of [
       name: "Scrollable activity history",
     });
     await expect(page.locator("#activity-list-summary")).toContainText(
-      "20 loaded events",
+      "20 loaded",
     );
     await viewport.evaluate((element) => {
       element.scrollTop = 400;
@@ -1966,7 +1966,7 @@ for (const [filter, option] of [
     await page.getByRole("button", { name: filter, exact: false }).click();
     await page.getByRole("option", { name: option, exact: true }).click();
     await expect(page.locator("#activity-list-summary")).toContainText(
-      "20 loaded events",
+      "20 loaded",
     );
     await expect
       .poll(() => viewport.evaluate((element) => element.scrollTop))
@@ -2613,7 +2613,7 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   ).toBeVisible();
 
   await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(
-    0,
+    1,
   );
   await page
     .locator('[data-device-id="matter-light-1"]')
@@ -3110,6 +3110,11 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
     state.posts.filter((request) => request.path === "/api/v1/rooms/upsert"),
   ).toHaveLength(0);
 
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
+    .getByRole("alertdialog", { name: "Discard unsaved changes?" })
+    .getByRole("button", { name: "Discard changes" })
+    .click();
   await page.goto("/#/devices/add");
   await page.getByRole("button", { name: "Validate Wi‑Fi setup code" }).click();
   await page.getByRole("button", { name: "Validate Wi‑Fi code" }).click();
@@ -4003,4 +4008,597 @@ test("nonmodal context menu exits with Escape and Tab while confirmation traps f
       ),
     )
     .toBe(true);
+});
+
+for (const key of ["Enter", "Space"]) {
+  test(`device actions dropdown supports ${key} and restores focus`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.goto("/#/devices");
+    const trigger = page.getByRole("button", {
+      name: "Device actions for Bench Lamp",
+    });
+    await trigger.focus();
+    await page.keyboard.press(key);
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+    const items = await menu.getByRole("menuitem").allTextContents();
+    await page.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
+    await page
+      .locator('[data-device-id="matter-light-1"]')
+      .click({ button: "right" });
+    await expect(menu).toBeVisible();
+    expect(await menu.getByRole("menuitem").allTextContents()).toEqual(items);
+  });
+}
+
+test("narrow touch device actions expose accessible removal confirmation", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 320, height: 568 },
+    hasTouch: true,
+  });
+  const page = await context.newPage();
+  try {
+    await mockFirmwareApi(page);
+    await page.goto("http://127.0.0.1:4173/#/devices");
+    await page
+      .getByRole("button", { name: "Device actions for Bench Lamp" })
+      .tap();
+    await expect(page.getByRole("menu")).toBeVisible();
+    await expectAccessible(page);
+    await page
+      .getByRole("menuitem", { name: "Remove device… Bench Lamp" })
+      .tap();
+    const confirm = page.getByRole("button", {
+      name: "Remove device",
+      exact: true,
+    });
+    await expect(confirm).toBeInViewport();
+    await expect(
+      page.getByRole("button", { name: "Cancel", exact: true }),
+    ).toBeInViewport();
+  } finally {
+    await context.close();
+  }
+});
+
+for (const [platform, label, shortcut] of [
+  ["MacIntel", "⌘K", "Meta+K"],
+  ["Win32", "Ctrl+K", "Control+K"],
+]) {
+  test(`command shortcut follows ${platform}`, async ({ page }) => {
+    await page.addInitScript(
+      (platform) =>
+        Object.defineProperty(navigator, "platform", { get: () => platform }),
+      platform,
+    );
+    await mockFirmwareApi(page);
+    await page.goto("/");
+    const trigger = page.getByRole("button", {
+      name: `Search ${label} — open command palette`,
+    });
+    await expect(trigger).toBeVisible();
+    await expect(trigger).toHaveAttribute("aria-keyshortcuts", shortcut);
+    await page.keyboard.press(shortcut);
+    await expect(
+      page.getByRole("dialog", { name: "Command palette" }),
+    ).toBeVisible();
+  });
+}
+
+for (const [model, placeholder] of [
+  ["room", "Kitchen"],
+  ["group", "Downstairs lights"],
+  ["scene", "Movie night"],
+  ["automation", "Wind-down routine"],
+]) {
+  test(`${model} sheet guards dirty cancellation and beforeunload`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.goto(`/#/${model}s`);
+    const open = page
+      .getByRole("button", { name: `Create ${model}`, exact: true })
+      .first();
+    await open.click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await open.click();
+    const field = page.getByPlaceholder(placeholder);
+    await field.fill("Unsaved draft");
+    expect(
+      await page.evaluate(() => {
+        const event = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      }),
+    ).toBe(true);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    const warning = page.getByRole("alertdialog", {
+      name: "Discard unsaved changes?",
+    });
+    await expect(warning).toBeVisible();
+    await expect(
+      warning.getByRole("button", { name: "Keep editing" }),
+    ).toBeFocused();
+    if (model === "room") await expectAccessible(page);
+    await warning.getByRole("button", { name: "Keep editing" }).click();
+    await expect(field).toHaveValue("Unsaved draft");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await warning.getByRole("button", { name: "Discard changes" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(
+      await page.evaluate(() => {
+        const event = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      }),
+    ).toBe(false);
+  });
+}
+
+test("devices loading boundary hides decorative table until inventory resolves", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/devices", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto("/#/devices");
+  await expect(
+    page.getByRole("status").filter({ hasText: "Loading devices" }),
+  ).toBeVisible();
+  await expect(page.getByRole("table")).toHaveCount(0);
+  release();
+  await expect(page.getByRole("table")).toBeVisible();
+});
+
+test("device URL filters preserve unknown parameters and browser history", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto(
+    "/#/devices?q=Bench&protocol=matter&availability=online&density=compact&future=keep",
+  );
+  await expect(
+    page.getByRole("searchbox", { name: "Search devices" }),
+  ).toHaveValue("Bench");
+  await expect(
+    page.getByRole("button", { name: "Compact", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Bench Lamp", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Comfortable", exact: true }).click();
+  await expect(page).toHaveURL(/future=keep/);
+  await expect(page).not.toHaveURL(/density=/);
+  await page.goBack();
+  await expect(
+    page.getByRole("button", { name: "Compact", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.goForward();
+  await expect(
+    page.getByRole("button", { name: "Comfortable", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("activity URL filters validate values and expose a visible live count", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto(
+    "/#/activity?eventType=wifi_join_failed&severity=error&category=network&future=keep",
+  );
+  const summary = page.locator("#activity-list-summary");
+  await expect(summary).toBeVisible();
+  await expect(summary).toHaveAttribute("role", "status");
+  await expect(
+    page.getByText("Wi-Fi join failed.", { exact: true }),
+  ).toBeVisible();
+  await page.goto(
+    `/#/activity?eventType=${"x".repeat(65)}&severity=invalid&category=invalid&future=keep`,
+  );
+  await expect(page).toHaveURL(/activity\?future=keep$/);
+  await expect(summary).toContainText("3 loaded");
+});
+
+test("assistant conversation log remains stable when a completed reply is appended", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/ai/chat", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto("/#/ai");
+  const log = page.getByRole("log", { name: "Assistant conversation" });
+  await expect(log).toHaveAttribute("aria-live", "polite");
+  await expect(log).toHaveAttribute("aria-relevant", "additions text");
+  const original = await log.elementHandle();
+  await page
+    .getByPlaceholder(
+      "Ask Core Pilot to check status, list devices, scenes, or automations…",
+    )
+    .fill("Check status");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(log.getByText("Core Pilot status looks healthy.")).toHaveCount(
+    0,
+  );
+  release();
+  await expect(log.getByText("Core Pilot status looks healthy.")).toBeVisible();
+  expect(
+    await log.evaluate((element, saved) => element === saved, original),
+  ).toBe(true);
+});
+
+for (const model of ["rooms", "groups", "scenes", "automations"]) {
+  test(`${model} cached content survives refresh errors and explicit retry`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.goto(`/#/${model}`);
+    const content = page.getByRole("group", { name: `${model} content` });
+    await expect(content.getByRole("heading").first()).toBeVisible();
+    const original = await content.elementHandle();
+    let failed = true;
+    await page.route(`**/api/v1/${model}`, async (route) => {
+      if (failed)
+        await json(route, { detail: "Storage temporarily unavailable" }, 503);
+      else await route.fallback();
+    });
+    await page.context().setOffline(true);
+    await expect(
+      page.getByRole("status", { name: "Offline", exact: true }),
+    ).toBeVisible();
+    await page.context().setOffline(false);
+    await expect(content.getByRole("alert")).toContainText(
+      `Could not refresh ${model}`,
+    );
+    expect(
+      await content.evaluate((element, saved) => element === saved, original),
+    ).toBe(true);
+    await expect(content.getByRole("heading").first()).toBeVisible();
+    failed = false;
+    await content
+      .getByRole("button", { name: `Retry ${model}`, exact: true })
+      .click();
+    await expect(content.getByRole("alert")).toHaveCount(0);
+  });
+}
+
+test("activity older error retains viewport and requires explicit retry", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page, { activityPageSize: 20 });
+  state.activity = Array.from({ length: 40 }, (_, index) => ({
+    sequence: 100 - index,
+    unix_seconds: 1_700_000_000 - index,
+    uptime_seconds: 500 - index,
+    kind: "configuration_saved",
+    detail: `Retained history ${index + 1}`,
+  }));
+  let failed = true;
+  let olderReads = 0;
+  let releaseRetry!: () => void;
+  const heldRetry = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  await page.route("**/api/v1/activity/page", async (route) => {
+    if (route.request().postDataJSON().before_sequence != null) {
+      olderReads++;
+      if (failed) {
+        await json(route, { detail: "Older history unavailable" }, 503);
+        return;
+      }
+      await heldRetry;
+    }
+    await route.fallback();
+  });
+  await page.goto("/#/activity");
+  const viewport = page.getByRole("region", {
+    name: "Scrollable activity history",
+  });
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "20 loaded",
+  );
+  const original = await viewport.elementHandle();
+  await viewport.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(
+    page.getByRole("button", { name: "Retry older", exact: true }),
+  ).toBeVisible();
+  const readsAfterError = olderReads;
+  const scroll = await viewport.evaluate((element) => element.scrollTop);
+  for (let index = 0; index < 3; index++) {
+    await viewport.evaluate((element) =>
+      element.dispatchEvent(new Event("scroll")),
+    );
+    await page.getByRole("button", { name: "Severity" }).click();
+    await page.keyboard.press("Escape");
+  }
+  expect(olderReads).toBe(readsAfterError);
+  expect(
+    await viewport.evaluate((element, saved) => element === saved, original),
+  ).toBe(true);
+  // Virtual row measurements may adjust the offset without resetting history.
+  expect(scroll).toBeGreaterThan(0);
+  expect(
+    await viewport.evaluate((element) => element.scrollTop),
+  ).toBeGreaterThan(0);
+  failed = false;
+  await page.getByRole("button", { name: "Retry older", exact: true }).click();
+  await expect.poll(() => olderReads).toBe(readsAfterError + 1);
+  // Measure a settled, fully visible row while the successful retry is held.
+  await viewport.evaluate(async (element) => {
+    element.scrollTop = 200;
+    element.dispatchEvent(new Event("scroll"));
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
+  const anchor = await viewport.evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    const row = Array.from(element.querySelectorAll("li")).find(
+      (row) => row.getBoundingClientRect().top >= top,
+    )!;
+    return {
+      label: row.textContent!,
+      offset: row.getBoundingClientRect().top - top,
+      scroll: element.scrollTop,
+    };
+  });
+  releaseRetry();
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "40 loaded",
+  );
+  expect(
+    await viewport.evaluate((element, saved) => element === saved, original),
+  ).toBe(true);
+  await expect
+    .poll(() => viewport.evaluate((element) => element.scrollTop))
+    .toBe(anchor.scroll);
+  await expect
+    .poll(() =>
+      viewport
+        .getByRole("listitem")
+        .filter({ hasText: anchor.label })
+        .evaluate(
+          (row) =>
+            row.getBoundingClientRect().top -
+            row.closest('[role="region"]')!.getBoundingClientRect().top,
+        ),
+    )
+    .toBeCloseTo(anchor.offset, 0);
+});
+
+test("activity background error retains cached history", async ({ page }) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/activity");
+  const viewport = page.getByRole("region", {
+    name: "Scrollable activity history",
+  });
+  await expect(
+    viewport.getByText("Wi-Fi join failed.", { exact: true }),
+  ).toBeVisible();
+  const original = await viewport.elementHandle();
+  await page.route("**/api/v1/activity/page", (route) =>
+    json(route, { detail: "History unavailable" }, 503),
+  );
+  await page.context().setOffline(true);
+  await expect(
+    page.getByRole("status", { name: "Offline", exact: true }),
+  ).toBeVisible();
+  await page.context().setOffline(false);
+  await expect(page.getByRole("alert")).toContainText(
+    "Activity refresh failed. Showing cached activity.",
+  );
+  await expect(
+    viewport.getByText("Wi-Fi join failed.", { exact: true }),
+  ).toBeVisible();
+  expect(
+    await viewport.evaluate((element, saved) => element === saved, original),
+  ).toBe(true);
+});
+
+test("room failed save preserves draft and successful retry closes without warning", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/rooms");
+  await page
+    .getByRole("button", { name: "Create room", exact: true })
+    .first()
+    .click();
+  const field = page.getByPlaceholder("Kitchen");
+  await field.fill("Draft kitchen");
+  const fail = (route: Route) =>
+    json(route, { accepted: false, detail: "Save rejected" });
+  await page.route("**/api/v1/rooms/upsert", fail);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create room", exact: true })
+    .click();
+  await expect(page.getByText("Save rejected", { exact: true })).toBeVisible();
+  await expect(field).toHaveValue("Draft kitchen");
+  await page.unroute("**/api/v1/rooms/upsert", fail);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create room", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});
+
+test("dirty room internal navigation waits for discard confirmation", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/rooms");
+  await page
+    .getByRole("button", { name: "Create room", exact: true })
+    .first()
+    .click();
+  await page.getByPlaceholder("Kitchen").fill("Navigation draft");
+  // Drive a real router link from inside the modal, without bypassing its focus trap.
+  await page.getByRole("dialog").evaluate((dialog) => {
+    const link = document.createElement("a");
+    link.href = "#/groups";
+    link.textContent = "Test internal navigation";
+    dialog.append(link);
+    link.click();
+    link.remove();
+  });
+  const warning = page.getByRole("alertdialog", {
+    name: "Discard unsaved changes?",
+  });
+  await expect(warning).toBeVisible();
+  await expect(page).toHaveURL(/#\/rooms$/);
+  await warning.getByRole("button", { name: "Discard changes" }).click();
+  await expectHeading(page, "Groups");
+});
+
+for (const [model, name, dependency, reason] of [
+  [
+    "room",
+    "Lab",
+    "devices",
+    "Device assignments could not be verified. Refresh devices before deleting this room.",
+  ],
+  [
+    "scene",
+    "Evening",
+    "automations",
+    "Automation references could not be verified. Refresh automations before deleting this scene.",
+  ],
+]) {
+  test(`${model} open delete confirmation blocks when required inventory refresh fails`, async ({
+    page,
+    context,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    for (const device of state.devices) device.room = "";
+    state.automations = [];
+    await page.goto(`/#/${model}s`);
+    await page
+      .getByRole("button", { name: `Delete ${name}`, exact: true })
+      .click();
+    const dialog = page.getByRole("alertdialog", { name: `Delete ${name}?` });
+    await expect(
+      dialog.getByRole("button", { name: `Delete ${model}`, exact: true }),
+    ).toBeEnabled();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(`**/api/v1/${dependency}`, async (route) => {
+      await held;
+      await json(route, { detail: "Required inventory unavailable" }, 400);
+    });
+    // Isolate the dependency failure before the independent model refresh completes.
+    let releaseModel!: () => void;
+    const heldModel = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    await page.route(`**/api/v1/${model}s`, async (route) => {
+      await heldModel;
+      await route.fallback();
+    });
+    await context.setOffline(true);
+    const requested = page.waitForRequest(`**/api/v1/${dependency}`);
+    await context.setOffline(false);
+    await requested;
+    await expect(dialog).toBeVisible();
+    release();
+    await expect(dialog.getByRole("status")).toHaveText(reason);
+    const confirm = dialog.getByRole("button", {
+      name: "Resolve dependencies first",
+      exact: true,
+    });
+    await expect(confirm).toBeDisabled();
+    // Synthetic dispatch also exercises confirm()'s guard, not just native disabled input.
+    await confirm.dispatchEvent("click");
+    await expect(dialog).toBeVisible();
+    expect(
+      state.posts.filter((post) => post.path === `/api/v1/${model}s/delete`),
+    ).toEqual([]);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(
+      state.posts.filter((post) => post.path === `/api/v1/${model}s/delete`),
+    ).toEqual([]);
+    releaseModel();
+  });
+}
+
+test("activity filter Back and Forward restore selected results and unknown parameters", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/activity?future=keep");
+  await page.getByRole("button", { name: "Severity" }).click();
+  await page.getByRole("option", { name: "Error", exact: true }).click();
+  await expect(page).toHaveURL(/severity=error/);
+  await expect(
+    page.getByRole("button", { name: /Severity Error/ }),
+  ).toBeVisible();
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "1 matching",
+  );
+  await page.goBack();
+  await expect(page).not.toHaveURL(/severity=/);
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "3 matching",
+  );
+  await page.goForward();
+  await expect(
+    page.getByRole("button", { name: /Severity Error/ }),
+  ).toBeVisible();
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "1 matching",
+  );
+  await expect(page).toHaveURL(/future=keep/);
+});
+
+test("devices search and availability update URL and restore through history", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/devices?future=keep");
+  const search = page.getByRole("searchbox", { name: "Search devices" });
+  const availability = page.getByRole("combobox", {
+    name: "Availability",
+    exact: true,
+  });
+  await search.fill("Bench");
+  await expect(page).toHaveURL(/q=Bench/);
+  await availability.selectOption("offline");
+  await expect(page).toHaveURL(/availability=offline/);
+  await expect(
+    page.getByText("No devices match these filters.", { exact: true }),
+  ).toBeVisible();
+  await page.goBack();
+  await expect(search).toHaveValue("Bench");
+  await expect(availability).toHaveValue("all");
+  await expect(page.getByText("Bench Lamp", { exact: true })).toBeVisible();
+  await page.goForward();
+  await expect(availability).toHaveValue("offline");
+  await expect(search).toHaveValue("Bench");
+  await expect(
+    page.getByText("No devices match these filters.", { exact: true }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/future=keep/);
 });
