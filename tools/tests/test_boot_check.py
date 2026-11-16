@@ -34,7 +34,7 @@ def fixture_server(fault: str = ""):
     state = {"exchanges": 0, "authorization_headers": 0}
 
     class Handler(BaseHTTPRequestHandler):
-        def log_message(self, *_args):
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
         def do_GET(self):
