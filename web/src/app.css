@@ -23,7 +23,7 @@
   --color-success-foreground: hsl(var(--success-foreground));
   --color-warning: hsl(var(--warning));
   --color-warning-foreground: hsl(var(--warning-foreground));
-  --color-error: hsl(var(--destructive));
+  --color-error: hsl(var(--error));
   --color-error-foreground: hsl(var(--destructive-foreground));
   --color-border: hsl(var(--border));
   --color-input: hsl(var(--input));
@@ -60,6 +60,7 @@
   --accent-foreground: 0 0% 98%;
   --destructive: 0 62.8% 30.6%;
   --destructive-foreground: 0 0% 98%;
+  --error: 0 90.6% 70.8%;
   --success: 142.1 70.6% 45.3%;
   --success-foreground: 144.9 80.4% 10%;
   --warning: 47.9 95.8% 53.1%;
@@ -103,6 +104,52 @@ input,
 select,
 textarea {
   -webkit-tap-highlight-color: transparent;
+}
+
+@layer base {
+  :where(
+      button,
+      a[href],
+      summary,
+      select,
+      input[type="button"],
+      input[type="submit"],
+      input[type="reset"],
+      input[type="checkbox"],
+      input[type="radio"],
+      [role="button"],
+      [role="combobox"]:not(input),
+      [role="tab"],
+      [role="checkbox"],
+      [role="radio"],
+      [role="switch"],
+      [role="option"],
+      [role="menuitem"],
+      [role="menuitemcheckbox"],
+      [role="menuitemradio"]
+    ):not(:disabled, [aria-disabled="true"], [data-disabled]):not(
+      [aria-disabled="true"] *,
+      [data-disabled] *,
+      [inert] *
+    ) {
+    cursor: pointer;
+  }
+
+  :where(button, input, select, [role], a[href]):is(
+    :disabled,
+    [aria-disabled="true"],
+    [data-disabled]
+  ) {
+    cursor: not-allowed;
+  }
+
+  input[type="file"]::file-selector-button {
+    cursor: pointer;
+  }
+
+  input[type="file"]:disabled::file-selector-button {
+    cursor: not-allowed;
+  }
 }
 
 .brand-orb {
@@ -305,5 +352,5 @@ textarea {
   color: hsl(var(--warning));
 }
 .text-error {
-  color: hsl(var(--destructive));
+  color: hsl(var(--error));
 }
