@@ -12,7 +12,26 @@ type SkeletonRootProps<T extends ValidComponent = "div"> =
 const Skeleton = <T extends ValidComponent = "div">(
   props: PolymorphicProps<T, SkeletonRootProps<T>>,
 ) => {
-  const [local, others] = splitProps(props as SkeletonRootProps, ["class"]);
+  const [local, others] = splitProps(props as SkeletonRootProps, [
+    "class",
+    "style",
+  ]);
+  const style = () => {
+    // Clear Kobalte's inline defaults so utility classes can size the skeleton.
+    const dimensions = {
+      height: props.height === undefined ? "" : `${props.height}px`,
+      width: props.circle
+        ? props.height === undefined
+          ? ""
+          : `${props.height}px`
+        : props.width === undefined
+          ? ""
+          : `${props.width}px`,
+    };
+    return typeof local.style === "string"
+      ? `height:${dimensions.height};width:${dimensions.width};${local.style}`
+      : { ...dimensions, ...local.style };
+  };
   return (
     <SkeletonPrimitive.Root
       class={cn(
@@ -20,6 +39,7 @@ const Skeleton = <T extends ValidComponent = "div">(
         local.class,
       )}
       {...others}
+      style={style()}
     />
   );
 };
