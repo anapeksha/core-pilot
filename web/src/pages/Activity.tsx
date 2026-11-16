@@ -4,7 +4,7 @@ import {
   createSignal,
   For,
   Show,
-  untrack,
+  on,
 } from "solid-js";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
@@ -87,13 +87,12 @@ export default function Activity() {
     overscan: 6,
   });
 
-  createEffect(() => {
-    void filteredEvents().length;
-    untrack(() => {
+  createEffect(
+    on([eventType, severity, category], () => {
       rowVirtualizer.scrollToOffset(0);
       rowVirtualizer.measure();
-    });
-  });
+    }),
+  );
 
   createEffect(() => {
     const lastRow = rowVirtualizer.getVirtualItems().at(-1);

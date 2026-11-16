@@ -1806,6 +1806,148 @@ test("loads, filters, and infinitely paginates activity history", async ({
   ).toBeVisible();
 });
 
+for (const trigger of ["automatic", "manual"] as const) {
+  test(`activity pagination preserves scroll and viewport on ${trigger} append`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page, { activityPageSize: 20 });
+    state.activity = Array.from({ length: 65 }, (_, index) => ({
+      sequence: 100 - index,
+      unix_seconds: 1_700_000_000 - index,
+      uptime_seconds: 500 - index,
+      kind: "configuration_saved",
+      detail: `History event ${index + 1}: ${"Room lighting configuration saved locally. ".repeat(1 + (index % 4))}`,
+    }));
+    const pending: Route[] = [];
+    await page.route("**/api/v1/activity/page", async (route) => {
+      if (route.request().postDataJSON().before_sequence == null) {
+        await route.fallback();
+        return;
+      }
+      pending.push(route);
+    });
+    await page.goto("/#/activity");
+    const viewport = page.getByRole("region", {
+      name: "Scrollable activity history",
+    });
+    await expect(page.locator("#activity-list-summary")).toContainText(
+      "20 loaded events",
+    );
+    const original = await viewport.elementHandle();
+    expect(original).not.toBeNull();
+    await expect
+      .poll(() =>
+        viewport
+          .locator("li")
+          .evaluateAll(
+            (rows) =>
+              new Set(rows.map((row) => row.getBoundingClientRect().height))
+                .size,
+          ),
+      )
+      .toBeGreaterThan(1);
+
+    for (const loaded of [40, 60, 65]) {
+      await viewport.evaluate((element, automatic) => {
+        element.scrollTop = automatic ? element.scrollHeight : 200;
+        element.dispatchEvent(new Event("scroll"));
+      }, trigger === "automatic");
+      await expect
+        .poll(() => viewport.evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(0);
+      if (trigger === "manual") {
+        expect(pending).toHaveLength(0);
+        await page
+          .getByRole("button", { name: "Load older", exact: true })
+          .click();
+      }
+      await expect.poll(() => pending.length).toBe(1);
+      const before = await viewport.evaluate((element) => element.scrollTop);
+      await expect(
+        page.getByRole("button", { name: "Loading older…" }),
+      ).toBeDisabled();
+      expect(
+        await viewport.evaluate(
+          (element, saved) => element === saved,
+          original,
+        ),
+      ).toBe(true);
+      await pending.shift()!.fallback();
+      await expect(page.locator("#activity-list-summary")).toContainText(
+        `${loaded} loaded events`,
+      );
+      expect(
+        await viewport.evaluate(
+          (element, saved) => element === saved,
+          original,
+        ),
+      ).toBe(true);
+      expect
+        .soft(
+          await viewport.evaluate((element) => element.scrollTop),
+          `scroll after ${loaded} loaded events (was ${before})`,
+        )
+        .toBeGreaterThan(0);
+    }
+    await expect(
+      page.getByRole("button", { name: "Load older", exact: true }),
+    ).toHaveCount(0);
+    await viewport.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(viewport.getByText(/History event 65:/)).toBeVisible();
+    await expect
+      .poll(() => viewport.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    expect(pending).toHaveLength(0);
+    expect(
+      state.posts.filter((post) => post.path === "/api/v1/activity/page"),
+    ).toHaveLength(4);
+  });
+}
+
+for (const [filter, option] of [
+  ["Severity", "Info"],
+  ["Event type", "configuration saved"],
+  ["Related category", "Configuration"],
+]) {
+  test(`activity explicit ${filter} change resets same-count results to top`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page, { activityPageSize: 20 });
+    state.activity = Array.from({ length: 20 }, (_, index) => ({
+      sequence: 100 - index,
+      unix_seconds: 1_700_000_000 - index,
+      uptime_seconds: 500 - index,
+      kind: "configuration_saved",
+      detail: `Filter event ${index + 1}: ${"Room configuration saved. ".repeat(1 + (index % 4))}`,
+    }));
+    await page.goto("/#/activity");
+    const viewport = page.getByRole("region", {
+      name: "Scrollable activity history",
+    });
+    await expect(page.locator("#activity-list-summary")).toContainText(
+      "20 loaded events",
+    );
+    await viewport.evaluate((element) => {
+      element.scrollTop = 400;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect
+      .poll(() => viewport.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    await page.getByRole("button", { name: filter, exact: false }).click();
+    await page.getByRole("option", { name: option, exact: true }).click();
+    await expect(page.locator("#activity-list-summary")).toContainText(
+      "20 loaded events",
+    );
+    await expect
+      .poll(() => viewport.evaluate((element) => element.scrollTop))
+      .toBe(0);
+  });
+}
+
 test("renders and scrolls a full virtualized activity page", async ({
   page,
 }) => {
