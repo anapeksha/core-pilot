@@ -65,7 +65,7 @@ def receive_bounded(connection: socket.socket, timeout: float) -> RawSocketResul
     while True:
         try:
             chunk = connection.recv(4096)
-        except socket.timeout:
+        except TimeoutError:
             return RawSocketResult(b"".join(chunks), False, True, time.monotonic() - started)
         except (ConnectionError, OSError):
             return RawSocketResult(b"".join(chunks), True, False, time.monotonic() - started)
