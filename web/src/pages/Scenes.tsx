@@ -13,6 +13,7 @@ import { Alert, AlertDescription, AlertTitle } from "~/components/alert";
 import { AutomationBuilder } from "~/components/automation-builder";
 import { Badge } from "~/components/badge";
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import { TooltipIconButton } from "~/components/tooltip";
 import {
@@ -241,32 +242,21 @@ export default function Scenes() {
     <section class="w-full">
       <Card class="w-full overflow-hidden">
         <CardHeader>
-          <Flex
-            alignItems="start"
-            justifyContent="between"
-            class="flex-col gap-4 sm:flex-row"
-          >
-            <div class="max-w-3xl">
-              <div class="mb-3 h-px w-12 bg-foreground" />
-              <h1 class="text-xl font-semibold tracking-tight">Scenes</h1>
-              <CardDescription>
-                Capture an ordered set of local device actions and replay it
-                without AI or cloud access.
-              </CardDescription>
-            </div>
-            <Flex
-              justifyContent="start"
-              class="w-full flex-wrap gap-2 sm:w-auto"
-            >
-              <Button as="a" variant="outline" href="#/devices">
-                View devices
-              </Button>
-              <Button type="button" onClick={createScene}>
-                <HiOutlinePlus data-icon="inline-start" />
-                Create scene
-              </Button>
-            </Flex>
-          </Flex>
+          <PageHeader
+            title="Scenes"
+            description="Capture an ordered set of local device actions and replay it without AI or cloud access."
+            actions={
+              <>
+                <Button as="a" variant="outline" href="#/devices">
+                  View devices
+                </Button>
+                <Button type="button" onClick={createScene}>
+                  <HiOutlinePlus data-icon="inline-start" />
+                  Create scene
+                </Button>
+              </>
+            }
+          />
         </CardHeader>
 
         <CardContent class="p-5 sm:p-7">

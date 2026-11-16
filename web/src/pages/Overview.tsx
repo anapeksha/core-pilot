@@ -18,6 +18,7 @@ import {
 import { toast } from "solid-sonner";
 
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 
 import {
   Card,
@@ -503,32 +504,20 @@ export default function Overview() {
   return (
     <>
       <div class="w-full min-w-0 space-y-4">
-        <header>
-          <Flex
-            alignItems="start"
-            justifyContent="between"
-            class="flex-col gap-4 sm:flex-row"
-          >
-            <div class="max-w-3xl">
-              <div class="mb-3 h-px w-12 bg-foreground" />
-              <h1 class="text-xl font-semibold tracking-tight">Home</h1>
-              <CardDescription>
-                Devices, rooms, automations, alerts, and hub health at a glance.
-              </CardDescription>
-            </div>
-            <Flex
-              class="w-full flex-wrap gap-2 sm:w-auto"
-              justifyContent="start"
-            >
+        <PageHeader
+          title="Home"
+          description="Devices, rooms, automations, alerts, and hub health at a glance."
+          actions={
+            <>
               <Button as="a" href="#/automations" variant="outline" size="sm">
                 Automations
               </Button>
               <Button as="a" href="#/devices/add" size="sm">
                 Add device
               </Button>
-            </Flex>
-          </Flex>
-        </header>
+            </>
+          }
+        />
         <Grid cols={1} colsLg={2} class="gap-4">
           <Card class="min-w-0 lg:col-span-2">
             <CardHeader>

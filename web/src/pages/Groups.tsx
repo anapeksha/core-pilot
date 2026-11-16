@@ -5,6 +5,7 @@ import { toast } from "solid-sonner";
 import { z } from "zod";
 
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import { TooltipIconButton } from "~/components/tooltip";
 import {
@@ -171,30 +172,23 @@ export default function Groups() {
   return (
     <Card class="w-full overflow-hidden">
       <CardHeader>
-        <Flex
-          alignItems="start"
-          class="flex-col gap-4 sm:flex-row sm:items-center"
-        >
-          <div class="max-w-3xl">
-            <div class="mb-3 h-px w-12 bg-foreground" />
-            <h1 class="text-xl font-semibold tracking-tight">Groups</h1>
-            <CardDescription>Control multiple devices together</CardDescription>
-          </div>
-          <Flex
-            justifyContent="start"
-            class="w-full flex-wrap gap-2 self-start sm:w-auto"
-          >
-            <Button as="a" href="#/devices" variant="outline" size="sm">
-              View devices
-            </Button>
-            <Button as="a" href="#/devices/add" variant="outline" size="sm">
-              Add device
-            </Button>
-            <Button type="button" size="sm" onClick={openCreate}>
-              Create group
-            </Button>
-          </Flex>
-        </Flex>
+        <PageHeader
+          title="Groups"
+          description="Control multiple devices together"
+          actions={
+            <>
+              <Button as="a" href="#/devices" variant="outline" size="sm">
+                View devices
+              </Button>
+              <Button as="a" href="#/devices/add" variant="outline" size="sm">
+                Add device
+              </Button>
+              <Button type="button" size="sm" onClick={openCreate}>
+                Create group
+              </Button>
+            </>
+          }
+        />
       </CardHeader>
 
       <CardContent>

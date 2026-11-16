@@ -5,6 +5,7 @@ import { toast } from "solid-sonner";
 import { z } from "zod";
 
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import { TooltipIconButton } from "~/components/tooltip";
 import {
@@ -137,30 +138,23 @@ export default function Rooms() {
   return (
     <Card class="w-full overflow-hidden">
       <CardHeader>
-        <Flex
-          alignItems="start"
-          class="flex-col gap-4 sm:flex-row sm:items-center"
-        >
-          <div class="max-w-3xl">
-            <div class="mb-3 h-px w-12 bg-foreground" />
-            <h1 class="text-xl font-semibold tracking-tight">Rooms</h1>
-            <CardDescription>Organize devices by location</CardDescription>
-          </div>
-          <Flex
-            justifyContent="start"
-            class="w-full flex-wrap gap-2 self-start sm:w-auto"
-          >
-            <Button type="button" size="sm" onClick={createRoom}>
-              Create room
-            </Button>
-            <Button as="a" href="#/devices" variant="outline" size="sm">
-              View devices
-            </Button>
-            <Button as="a" href="#/devices/add" size="sm">
-              Add device
-            </Button>
-          </Flex>
-        </Flex>
+        <PageHeader
+          title="Rooms"
+          description="Organize devices by location"
+          actions={
+            <>
+              <Button type="button" size="sm" onClick={createRoom}>
+                Create room
+              </Button>
+              <Button as="a" href="#/devices" variant="outline" size="sm">
+                View devices
+              </Button>
+              <Button as="a" href="#/devices/add" size="sm">
+                Add device
+              </Button>
+            </>
+          }
+        />
       </CardHeader>
 
       <CardContent>

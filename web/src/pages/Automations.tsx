@@ -12,6 +12,7 @@ import { z } from "zod";
 import { Badge } from "~/components/badge";
 import { AutomationBuilder } from "~/components/automation-builder";
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import { TooltipIconButton } from "~/components/tooltip";
 import { EmptyState } from "~/components/empty-state";
@@ -420,27 +421,20 @@ export default function Automations() {
   return (
     <Card class="w-full overflow-hidden">
       <CardHeader>
-        <Flex
-          alignItems="start"
-          justifyContent="between"
-          class="flex-col gap-4 sm:flex-row"
-        >
-          <div class="max-w-3xl">
-            <div class="mb-3 h-px w-12 bg-foreground" />
-            <h1 class="text-xl font-semibold tracking-tight">Automations</h1>
-            <CardDescription>
-              Create bounded local routines that work without the assistant.
-            </CardDescription>
-          </div>
-          <Flex class="w-full flex-wrap gap-2 sm:w-auto" justifyContent="start">
-            <Button as="a" size="sm" variant="outline" href="#/devices">
-              View devices
-            </Button>
-            <Button type="button" size="sm" onClick={createAutomation}>
-              Create automation
-            </Button>
-          </Flex>
-        </Flex>
+        <PageHeader
+          title="Automations"
+          description="Create bounded local routines that work without the assistant."
+          actions={
+            <>
+              <Button as="a" size="sm" variant="outline" href="#/devices">
+                View devices
+              </Button>
+              <Button type="button" size="sm" onClick={createAutomation}>
+                Create automation
+              </Button>
+            </>
+          }
+        />
       </CardHeader>
       <CardContent>
         <Flex
