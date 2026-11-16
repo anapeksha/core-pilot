@@ -7,7 +7,7 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
-import { HiOutlineCommandLine, HiOutlineMagnifyingGlass } from "solid-icons/hi";
+import { HiOutlineMagnifyingGlass } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { Button } from "~/components/button";
 import { TooltipIconButton } from "~/components/tooltip";
@@ -153,7 +153,7 @@ export function CommandPalette() {
         aria-label="Open command palette"
         onClick={() => setOpen(true)}
       >
-        <HiOutlineCommandLine aria-hidden="true" />
+        <HiOutlineMagnifyingGlass aria-hidden="true" />
       </TooltipIconButton>
       <Dialog open={open()} onOpenChange={setOpen}>
         <DialogContent class="max-w-xl gap-3 p-4">
