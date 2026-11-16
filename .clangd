@@ -1,12 +1,30 @@
+If:
+  PathMatch: firmware/s3/.*
 CompileFlags:
   CompilationDatabase: firmware/s3/build-clang
 Diagnostics:
   UnusedIncludes: None
 ---
 If:
-  PathMatch: .*firmware/s3/(components/.*/test|main/test)/.*\.cpp
+  PathMatch: firmware/s3/(components/[^/]+/test|main/test)/.*
 CompileFlags:
   CompilationDatabase: firmware/s3/build-tests-clang
+---
+If:
+  PathMatch: firmware/s3/test/.*
+CompileFlags:
+  CompilationDatabase: firmware/s3/test/esp32s3/build-clang
+---
+If:
+  PathMatch: firmware/s3/test/host/.*
+CompileFlags:
+  CompilationDatabase: firmware/s3/test/host/build
+
+---
+If:
+  PathMatch: firmware/h2/.*
+CompileFlags:
+  CompilationDatabase: firmware/h2/build-clang
 ---
 If:
   PathMatch: .*managed_components/.*
