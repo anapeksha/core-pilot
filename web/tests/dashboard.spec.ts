@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { NetworkStatus } from "../src/lib/api";
 
@@ -620,6 +621,31 @@ async function mockFirmwareApi(page: Page, options: MockFirmwareOptions = {}) {
     return json(route, { detail: `Unhandled ${path}` }, 404);
   });
   return state;
+}
+
+async function expectAccessible(page: Page) {
+  // Let mocked query responses and portal transitions settle before scanning.
+  await page.waitForLoadState("networkidle");
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(
+    results.violations,
+    JSON.stringify(
+      results.violations.map(({ id, impact, help, nodes }) => ({
+        rule: id,
+        impact,
+        help,
+        nodes: nodes.map(({ html, target, failureSummary }) => ({
+          html,
+          target,
+          failureSummary,
+        })),
+      })),
+      null,
+      2,
+    ),
+  ).toEqual([]);
 }
 
 async function expectHeading(page: Page, name: string) {
@@ -1983,7 +2009,7 @@ test("uses the keyboard command palette for bounded available actions", async ({
   // Wait for Solid to hydrate and attach the global keyboard listener before
   // sending the shortcut; page load alone does not guarantee hydration.
   await expect(
-    page.getByRole("button", { name: "Open command palette" }),
+    page.getByRole("button", { name: /open command palette/i }),
   ).toBeVisible();
   await page.keyboard.press("Control+K");
   const palette = page.getByRole("dialog", { name: "Command palette" });
@@ -2000,7 +2026,7 @@ test("uses the keyboard command palette for bounded available actions", async ({
     .poll(() => state.posts.at(-1)?.path)
     .toBe("/api/v1/automations/operations/status");
 
-  await page.getByRole("button", { name: "Open command palette" }).click();
+  await page.getByRole("button", { name: /open command palette/i }).click();
   const shortcutSearch = page
     .getByRole("dialog", { name: "Command palette" })
     .getByPlaceholder(/Search pages/);
@@ -2592,7 +2618,9 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   await page
     .locator('[data-device-id="matter-light-1"]')
     .dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
-  await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
+  await page
+    .getByRole("menuitem", { name: "Remove device… Bench Lamp" })
+    .click();
   await page.getByRole("button", { name: "Remove device" }).click();
   await expect(
     page.getByRole("region", { name: "Matter removal request accepted" }),
@@ -3439,7 +3467,9 @@ for (const status of ["pending", "failed"] as const) {
     const device = page.locator('[data-device-id="matter-light-1"]');
     await expect(device).toBeVisible();
     await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
-    await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
+    await page
+      .getByRole("menuitem", { name: "Remove device… Bench Lamp" })
+      .click();
     await page.getByRole("button", { name: "Remove device" }).click();
     await expect(page.getByText(`Removal ${status}.`).first()).toBeVisible();
     await expect(device).toBeVisible();
@@ -3742,3 +3772,235 @@ for (const outcome of [
     }
   });
 }
+
+// Full-page scans intentionally retain contrast rules and portal content.
+for (const [path, heading] of [
+  ["/", "Home"],
+  ["/#/activity", "Activity"],
+  ["/#/devices", "Devices"],
+  ["/#/devices/add", "Add Matter Device"],
+  ["/#/devices/configure", "Device Setup"],
+  ["/#/rooms", "Rooms"],
+  ["/#/groups", "Groups"],
+  ["/#/scenes", "Scenes"],
+  ["/#/automations", "Automations"],
+  ["/#/ai", "Optional Assistant"],
+  ["/#/ai/tools", "Assistant Permissions"],
+  ["/#/ai/prompts", "Assistant Prompts"],
+  ["/#/system", "System"],
+] as const) {
+  test(`axe desktop loaded ${heading}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await mockFirmwareApi(page);
+    await page.goto(path);
+    await expectHeading(page, heading);
+
+    await expectAccessible(page);
+  });
+}
+
+for (const state of [
+  "Home",
+  "Activity",
+  "access gate",
+  "dialog",
+  "sheet",
+  "command palette",
+  "menu",
+] as const) {
+  test(`axe narrow ${state}`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    if (state === "access gate") {
+      const server = await mockCookieAccess(page);
+      await page.goto("/");
+      await expect(
+        page.getByRole("button", { name: "I have a code" }),
+      ).toBeVisible();
+      await expectAccessible(page);
+      server.open = true;
+      await page.getByRole("button", { name: "I have a code" }).click();
+      await expect(page.getByLabel("Bootstrap code")).toBeVisible();
+      await expectAccessible(page);
+      return;
+    }
+    await mockFirmwareApi(page);
+    await page.goto(
+      state === "Activity"
+        ? "/#/activity"
+        : state === "sheet"
+          ? "/#/groups"
+          : state === "menu"
+            ? "/#/devices"
+            : "/",
+    );
+    if (state === "dialog") {
+      await page
+        .locator("#app")
+        .getByRole("button", { name: "Reboot" })
+        .click();
+      await expect(
+        page.getByRole("dialog", { name: "Reboot Core Pilot?" }),
+      ).toBeVisible();
+    } else if (state === "sheet") {
+      await page.getByRole("button", { name: "Create group" }).first().click();
+      await expect(
+        page.getByRole("dialog", { name: "Create group" }),
+      ).toBeVisible();
+    } else if (state === "command palette") {
+      await page.getByRole("button", { name: /open command palette/i }).click();
+      await expect(
+        page.getByRole("dialog", { name: "Command palette" }),
+      ).toBeVisible();
+    } else if (state === "menu") {
+      await page
+        .getByText("Bench Lamp", { exact: true })
+        .click({ button: "right" });
+      await expect(page.getByRole("menu")).toBeVisible();
+    } else {
+      await expectHeading(page, state);
+    }
+    await expectAccessible(page);
+  });
+}
+
+test("computed cursors distinguish actionable, disabled, text, and drag controls", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/groups");
+  const sharedButton = page
+    .getByRole("button", { name: "Create group" })
+    .first();
+  await expect(sharedButton).toHaveCSS("cursor", "pointer");
+  await page
+    .getByRole("link", { name: "Home", exact: true })
+    .first()
+    .evaluate((element) => element.setAttribute("data-cursor-link", ""));
+  await expect(page.locator("[data-cursor-link]")).toHaveCSS(
+    "cursor",
+    "pointer",
+  );
+  await sharedButton.click();
+  const sheet = page.getByRole("dialog", { name: "Create group" });
+  await expect(sheet.getByPlaceholder("Downstairs lights")).toHaveCSS(
+    "cursor",
+    "text",
+  );
+  // Exercise the shared component's disabled styling independently of form validation.
+  await sheet
+    .getByRole("button", { name: "Create group", exact: true })
+    .evaluate((element) => {
+      (element as HTMLButtonElement).disabled = true;
+    });
+  await expect(
+    sheet.getByRole("button", { name: "Create group", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    sheet.getByRole("button", { name: "Create group", exact: true }),
+  ).not.toHaveCSS("cursor", "pointer");
+  await expect(sheet.getByRole("button", { name: /^Devices/ })).toHaveCSS(
+    "cursor",
+    "pointer",
+  );
+
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(sheet).toHaveCount(0);
+
+  // Isolate base semantic CSS from component utility classes, including native
+  // and ARIA controls that may not all occur together on a dashboard route.
+  await page.evaluate(() => {
+    const fixture = document.createElement("section");
+    fixture.id = "cursor-contract";
+    fixture.innerHTML = `
+      <button>Raw button</button><button disabled>Disabled button</button>
+      <a href="#/rooms">Raw link</a>
+      <select aria-label="Native select"><option>One</option></select>
+      <input type="checkbox" aria-label="Native checkbox">
+      <input type="text" aria-label="Text input">
+      <div role="combobox" tabindex="0" aria-label="Combobox"></div>
+      <div role="menuitem" tabindex="0">Menu item</div>
+      <div role="switch" tabindex="0" aria-checked="false">Switch</div>
+      <div role="checkbox" tabindex="0" aria-checked="false">Checkbox</div>
+      <div role="tab" tabindex="0">Tab</div>
+      <div role="button" tabindex="0" aria-disabled="true">Disabled role button</div>
+      <button class="cursor-grab" draggable="true">Drag handle</button>`;
+    document.body.append(fixture);
+  });
+  const fixture = page.locator("#cursor-contract");
+  for (const selector of [
+    "button:not(:disabled):not([draggable])",
+    "a[href]",
+    "select",
+    'input[type="checkbox"]',
+    '[role="combobox"]',
+    '[role="menuitem"]',
+    '[role="switch"]',
+    '[role="checkbox"]',
+    '[role="tab"]',
+  ]) {
+    await expect
+      .soft(fixture.locator(selector), selector)
+      .toHaveCSS("cursor", "pointer");
+  }
+  await expect
+    .soft(fixture.locator("button:disabled"))
+    .not.toHaveCSS("cursor", "pointer");
+  await expect
+    .soft(fixture.locator('[aria-disabled="true"]'))
+    .not.toHaveCSS("cursor", "pointer");
+  await expect
+    .soft(fixture.locator('input[type="text"]'))
+    .toHaveCSS("cursor", "text");
+  await expect
+    .soft(fixture.getByRole("button", { name: "Drag handle" }))
+    .toHaveCSS("cursor", "grab");
+});
+
+test("nonmodal context menu exits with Escape and Tab while confirmation traps focus", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/devices");
+  const device = page.locator('[data-device-id="matter-light-1"]');
+  const openMenu = async () => {
+    await device.click({ button: "right" });
+    await expect(page.getByRole("menu")).toBeVisible();
+    await expect(page.locator("#app")).not.toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    await expect(
+      page.getByRole("menu").locator("[data-focus-trap]"),
+    ).toHaveCount(0);
+  };
+  await openMenu();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await openMenu();
+  await page
+    .getByRole("menuitem", { name: "Remove device… Bench Lamp", exact: true })
+    .click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await expect(page.locator("#app")).toHaveAttribute("aria-hidden", "true");
+  for (const key of ["Tab", "Shift+Tab", "Tab", "Tab"]) {
+    await page.keyboard.press(key);
+    await expect
+      .poll(() =>
+        dialog.evaluate((element) => element.contains(document.activeElement)),
+      )
+      .toBe(true);
+  }
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await openMenu();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.activeElement?.closest('[role="menu"]') === null,
+      ),
+    )
+    .toBe(true);
+});
