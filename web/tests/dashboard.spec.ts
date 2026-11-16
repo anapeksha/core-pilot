@@ -1,12 +1,26 @@
 import { Buffer } from "node:buffer";
 
 import { expect, test, type Page, type Route } from "@playwright/test";
+import type { NetworkStatus } from "../src/lib/api";
 
 type Json = Record<string, unknown>;
 
 type FirmwareState = ReturnType<typeof createFirmwareState>;
 
 function createFirmwareState() {
+  const network: NetworkStatus = {
+    mode: "station",
+    setup_ssid: "CorePilot-Setup-1234",
+    station_ssid: "Lab_WiFi",
+    station_bssid: "aa:bb:cc:dd:ee:ff",
+    ipv4: "192.168.29.2",
+    station_ipv4: "192.168.29.2",
+    hostname: "corepilot.local",
+    dhcp: "started",
+    http: "started",
+    wan_enabled: false,
+    cloud_relay_enabled: false,
+  };
   return {
     health: {
       product: "Core Pilot",
@@ -15,19 +29,7 @@ function createFirmwareState() {
       ai_enabled: true,
       auth: "none-trusted-lan",
     },
-    network: {
-      mode: "station",
-      setup_ssid: "CorePilot-Setup-1234",
-      station_ssid: "Lab_WiFi",
-      station_bssid: "aa:bb:cc:dd:ee:ff",
-      ipv4: "192.168.29.2",
-      station_ipv4: "192.168.29.2",
-      hostname: "corepilot.local",
-      dhcp: "started",
-      http: "started",
-      wan_enabled: false,
-      cloud_relay_enabled: false,
-    },
+    network,
     system: {
       product: "Core Pilot",
       hostname: "corepilot.local",
