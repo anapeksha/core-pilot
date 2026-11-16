@@ -5,6 +5,7 @@ import {
   For,
   type JSX,
   onMount,
+  onCleanup,
   Show,
 } from "solid-js";
 import {
@@ -122,8 +123,10 @@ function CardQueryContent(props: {
               aria-busy="true"
               data-home-card-skeleton={props.label}
             >
-              <span class="sr-only">Loading {props.label}</span>
-              {props.fallback}
+              <p class="mb-3 text-xs text-muted-foreground">
+                Loading {props.label}…
+              </p>
+              <div aria-hidden="true">{props.fallback}</div>
             </div>
           }
         >
@@ -137,7 +140,7 @@ function CardQueryContent(props: {
 function HomeStatusSkeleton() {
   return (
     <div class="space-y-5">
-      <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <For each={["w-1/2", "w-2/3", "w-2/5", "w-3/5"]}>
           {(width) => (
             <div
@@ -145,14 +148,18 @@ function HomeStatusSkeleton() {
               data-home-status-skeleton
             >
               <div class="flex items-center justify-between gap-3">
-                <Skeleton class={`h-3 ${width}`} />
-                <Skeleton class="size-7 rounded-full" />
+                <Skeleton height={12} class={width} />
+                <Skeleton
+                  height={28}
+                  width={28}
+                  class="shrink-0 rounded-full"
+                />
               </div>
-              <Skeleton class="mt-3 h-5 w-4/5" />
+              <Skeleton height={20} class="mt-3 w-4/5" />
             </div>
           )}
         </For>
-      </dl>
+      </div>
       <div class="space-y-3 border-t pt-4">
         <div class="flex items-center gap-3">
           <Skeleton class="h-4 w-12" />
@@ -166,58 +173,42 @@ function HomeStatusSkeleton() {
 
 function QuickActionsSkeleton() {
   return (
-    <div class="space-y-3">
-      <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <Skeleton class="h-9 rounded-md" />
-        <Skeleton class="h-9 rounded-md" />
-      </div>
-      <div class="grid grid-cols-1 gap-2 border-t pt-3 sm:grid-cols-2">
-        <Skeleton class="h-9 rounded-md" />
-        <Skeleton class="h-9 rounded-md" />
-      </div>
-    </div>
+    <Grid cols={1} class="gap-2 @min-[26rem]/card:grid-cols-2">
+      <For each={[0, 1, 2, 3]}>
+        {() => <Skeleton height={40} class="w-full" />}
+      </For>
+    </Grid>
   );
 }
 
 function FavoritesSkeleton() {
   return (
-    <div class="space-y-4">
-      <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-        <For each={[0, 1]}>
-          {() => (
-            <div class="flex items-center gap-3 rounded-md border p-3">
-              <Skeleton class="size-5 shrink-0 rounded-full" />
-              <div class="flex-1 space-y-2">
-                <Skeleton class="h-4 w-3/5" />
-                <Skeleton class="h-3 w-2/5" />
-              </div>
-              <Skeleton class="h-8 w-16 rounded-md" />
-            </div>
-          )}
-        </For>
-      </div>
-      <div class="space-y-2 border-t pt-3">
-        <Skeleton class="h-3 w-24" />
-        <div class="flex gap-2">
-          <Skeleton class="h-8 w-24 rounded-md" />
-          <Skeleton class="h-8 w-28 rounded-md" />
-        </div>
-      </div>
+    <div class="space-y-2">
+      <For each={[0, 1]}>
+        {() => (
+          <div class="min-w-0 space-y-2 rounded-md border p-3">
+            <Skeleton height={16} class="w-3/5" />
+            <Skeleton height={12} class="w-2/5" />
+          </div>
+        )}
+      </For>
     </div>
   );
 }
 
 function RoomsSkeleton() {
   return (
-    <Grid cols={1} colsSm={2} class="gap-3">
+    <Grid cols={1} class="gap-3 @min-[26rem]/card:grid-cols-2">
       <For each={[0, 1]}>
         {() => (
-          <div class="flex items-center gap-3 rounded-lg border border-l-4 p-3">
-            <div class="flex-1 space-y-2">
-              <Skeleton class="h-4 w-1/2" />
-              <Skeleton class="h-3 w-2/3" />
-            </div>
-            <Skeleton class="size-7 rounded-full" />
+          <div class="@container/room rounded-lg border border-l-4 p-3">
+            <Flex class="flex-col items-start gap-3 @min-[18rem]/room:flex-row @min-[18rem]/room:items-center">
+              <div class="w-full min-w-0 flex-1 space-y-2">
+                <Skeleton height={16} class="w-1/2" />
+                <Skeleton height={12} class="w-2/3" />
+              </div>
+              <Skeleton height={24} class="w-20 shrink-0 rounded-full" />
+            </Flex>
           </div>
         )}
       </For>
@@ -232,7 +223,7 @@ function DeviceAvailabilitySkeleton() {
         {(width) => (
           <li class="flex items-center justify-between gap-3 rounded-md border p-3">
             <Skeleton class={`h-4 ${width}`} />
-            <Skeleton class="h-6 w-20 rounded-full" />
+            <Skeleton class="h-6 w-20 shrink-0 rounded-full" />
           </li>
         )}
       </For>
@@ -253,6 +244,38 @@ export default function Overview() {
   const runMutation = automationRunMutation();
   const [rebootDialogOpen, setRebootDialogOpen] = createSignal(false);
   const [favoriteKeys, setFavoriteKeys] = createSignal<string[]>([]);
+  const [editingFavorites, setEditingFavorites] = createSignal(false);
+  const [favoritesFeedback, setFavoritesFeedback] = createSignal("");
+  let favoritesToggle: HTMLButtonElement | undefined;
+  let favoritesPanel: HTMLDivElement | undefined;
+  let pinFavorites: HTMLButtonElement | undefined;
+  const favoritesBlocked = () =>
+    devicesQuery.isPlaceholderData ||
+    scenesQuery.isPlaceholderData ||
+    !!devicesQuery.error ||
+    !!scenesQuery.error;
+  createEffect(() => {
+    if (favoritesBlocked()) setEditingFavorites(false);
+  });
+  const FavoritesEditor = (props: { children: JSX.Element }) => {
+    onCleanup(() => {
+      if (
+        favoritesBlocked() &&
+        (favoritesPanel?.contains(document.activeElement) ||
+          document.activeElement === favoritesToggle)
+      ) {
+        favoritesPanel?.focus();
+      }
+    });
+    return props.children;
+  };
+  const changeFavoritesMode = (editing: boolean) => {
+    setEditingFavorites(editing);
+    queueMicrotask(() => {
+      if (editing) favoritesPanel?.focus();
+      else favoritesToggle?.focus();
+    });
+  };
   const shouldShowToast = createToastGate();
 
   const health = () => healthQuery.data ?? fallbackHealth;
@@ -265,24 +288,61 @@ export default function Overview() {
   const automations = () =>
     automationsQuery.data?.automations ?? fallbackAutomations.automations;
 
+  const favoriteInventory = createMemo(() => [
+    ...devices().map((device) => ({
+      key: `device:${deviceId(device)}`,
+      name: device.name,
+      kind: "device",
+      href: "#/devices",
+    })),
+    ...scenes().map((scene) => ({
+      key: `scene:${scene.id}`,
+      name: scene.name,
+      kind: "scene",
+      href: "#/scenes",
+    })),
+  ]);
+
+  const normalizeFavorites = (values: unknown[]): string[] =>
+    [
+      ...new Set(
+        values.filter(
+          (value): value is string =>
+            typeof value === "string" && /^(device|scene):\S+$/.test(value),
+        ),
+      ),
+    ].slice(0, MAX_FAVORITES);
+
   onMount(() => {
     try {
-      const stored = JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? "[]");
-      if (Array.isArray(stored))
-        setFavoriteKeys(
-          stored
-            .filter((value): value is string => typeof value === "string")
-            .slice(0, MAX_FAVORITES),
+      const stored: unknown = JSON.parse(
+        localStorage.getItem(FAVORITES_KEY) ?? "[]",
+      );
+      if (!Array.isArray(stored)) throw new Error("Invalid favorites");
+      const normalized = normalizeFavorites(stored);
+      setFavoriteKeys(normalized);
+      if (JSON.stringify(normalized) !== JSON.stringify(stored))
+        setFavoritesFeedback(
+          "Invalid or duplicate favorites were ignored. Change a selection to save the cleaned list.",
         );
     } catch {
-      localStorage.removeItem(FAVORITES_KEY);
+      setFavoritesFeedback(
+        "Saved favorites could not be read. You can select favorites for this visit; saving may be unavailable.",
+      );
     }
   });
 
   const saveFavorites = (favorites: string[]) => {
-    const bounded = favorites.slice(0, MAX_FAVORITES);
+    const bounded = normalizeFavorites(favorites);
     setFavoriteKeys(bounded);
-    localStorage.setItem(FAVORITES_KEY, JSON.stringify(bounded));
+    try {
+      localStorage.setItem(FAVORITES_KEY, JSON.stringify(bounded));
+      setFavoritesFeedback("Favorites saved in this browser.");
+    } catch {
+      setFavoritesFeedback(
+        "Favorites changed for this visit only. Browser storage could not save them.",
+      );
+    }
   };
 
   const toggleFavorite = (key: string) => {
@@ -292,6 +352,13 @@ export default function Overview() {
         ? current.filter((favorite) => favorite !== key)
         : [...current, key],
     );
+  };
+
+  const removeUnavailableFavorite = (key: string) => {
+    toggleFavorite(key);
+    if (!editingFavorites() && favoriteKeys().length === 0 && pinFavorites)
+      pinFavorites.focus();
+    else favoritesPanel?.focus();
   };
 
   const unavailableDevices = createMemo(() =>
@@ -305,17 +372,27 @@ export default function Overview() {
     ),
   );
   const alerts = createMemo(() => {
-    const items: { title: string; detail: string; tone: StatusTone }[] = [];
+    const items: {
+      title: string;
+      detail: string;
+      tone: StatusTone;
+      href: string;
+      action: string;
+    }[] = [];
     if (!network().station_ipv4)
       items.push({
         title: "Home Wi-Fi is not connected",
-        detail: "The setup network remains available for local recovery.",
+        detail: "Review the reported network state and recovery options.",
+        href: "#/system",
+        action: "Review network setup",
         tone: "warn",
       });
     if (!storage().encrypted || !storage().mutations_allowed)
       items.push({
         title: "Encrypted storage needs attention",
         detail: storage().detail,
+        href: "#/storage",
+        action: "Review storage",
         tone: "error",
       });
     if (unavailableDevices().length > 0)
@@ -323,6 +400,8 @@ export default function Overview() {
         title: `${unavailableDevices().length} device states are stale or offline`,
         detail:
           "Operational Matter subscriptions are required for fresh state.",
+        href: "#/devices",
+        action: "Review devices",
         tone: "warn",
       });
     if (
@@ -333,6 +412,8 @@ export default function Overview() {
       items.push({
         title: `Firmware update: ${system().ota_phase}`,
         detail: system().ota,
+        href: "#/system",
+        action: "Review firmware update",
         tone: system().ota_phase === "failed" ? "error" : "warn",
       });
     return items;
@@ -421,8 +502,8 @@ export default function Overview() {
 
   return (
     <>
-      <Card class="w-full overflow-hidden">
-        <CardHeader>
+      <div class="w-full min-w-0 space-y-4">
+        <header>
           <Flex
             alignItems="start"
             justifyContent="between"
@@ -447,179 +528,158 @@ export default function Overview() {
               </Button>
             </Flex>
           </Flex>
-        </CardHeader>
-        <CardContent>
-          <Grid cols={1} colsLg={2} class="gap-4">
-            <Card class="lg:col-span-2">
-              <CardHeader>
-                <Flex class="flex-col items-start gap-3 sm:flex-row">
-                  <div class="min-w-0 flex-1">
-                    <CardTitle>Home status</CardTitle>
-                    <CardDescription>
-                      Essential hub health and conditions that need attention
-                    </CardDescription>
-                  </div>
-                  <Flex class="w-auto shrink-0 flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      disabled={rebootMutation.isPending}
-                      onClick={requestReboot}
-                    >
-                      <HiOutlineArrowPath
-                        class={cn(rebootMutation.isPending && "animate-spin")}
-                        data-icon="inline-start"
-                      />
-                      {rebootMutation.isPending ? "Rebooting…" : "Reboot"}
-                    </Button>
-                    <Button as="a" href="#/system" variant="outline" size="sm">
-                      Network setup
-                    </Button>
-                  </Flex>
-                </Flex>
-              </CardHeader>
-              <CardQueryContent
-                label="home status"
-                loading={
-                  healthQuery.isPlaceholderData ||
-                  systemQuery.isPlaceholderData ||
-                  networkQuery.isPlaceholderData ||
-                  storageQuery.isPlaceholderData ||
-                  devicesQuery.isPlaceholderData
-                }
-                error={
-                  healthQuery.error ??
-                  systemQuery.error ??
-                  networkQuery.error ??
-                  storageQuery.error ??
-                  devicesQuery.error
-                }
-                fallback={<HomeStatusSkeleton />}
-              >
-                <div class="space-y-5">
-                  <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                    <For each={homeStatusItems()}>
-                      {(item) => (
-                        <div class="min-w-0 rounded-lg border bg-muted/15 p-4 transition-colors hover:bg-muted/25">
-                          <dt class="flex items-center justify-between gap-3">
-                            <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                              {item.label}
-                            </span>
-                            <StatusIcon tone={item.tone} />
-                          </dt>
-                          <dd class="mt-3 min-w-0 wrap-break-word text-sm font-semibold leading-5">
-                            {item.value}
-                          </dd>
-                        </div>
-                      )}
-                    </For>
-                  </dl>
-
-                  <section
-                    class="border-t pt-4"
-                    aria-labelledby="home-alerts-title"
-                  >
-                    <Flex class="mb-3 gap-3">
-                      <h2 id="home-alerts-title" class="text-sm font-semibold">
-                        Alerts
-                      </h2>
-                      <StatusBadge
-                        tone={alerts().length > 0 ? "warn" : "ok"}
-                        label={
-                          alerts().length > 0
-                            ? `${alerts().length} active`
-                            : "Clear"
-                        }
-                      />
-                    </Flex>
-                    <Show
-                      when={alerts().length > 0}
-                      fallback={
-                        <p class="text-sm text-muted-foreground">
-                          No active network, storage, device-state, or OTA
-                          warnings.
-                        </p>
-                      }
-                    >
-                      <ul
-                        class="grid grid-cols-1 gap-3 lg:grid-cols-2"
-                        aria-label="Active alerts"
-                      >
-                        <For each={alerts()}>
-                          {(alert) => (
-                            <li class="flex items-start gap-3 rounded-md border p-3">
-                              <HiOutlineExclamationTriangle
-                                class="mt-0.5 size-5 shrink-0 text-warning"
-                                aria-hidden="true"
-                              />
-                              <div class="min-w-0 flex-1">
-                                <p class="text-sm font-medium">{alert.title}</p>
-                                <p class="text-xs text-muted-foreground">
-                                  {alert.detail}
-                                </p>
-                              </div>
-                              <StatusBadge tone={alert.tone} />
-                            </li>
-                          )}
-                        </For>
-                      </ul>
-                    </Show>
-                  </section>
+        </header>
+        <Grid cols={1} colsLg={2} class="gap-4">
+          <Card class="min-w-0 lg:col-span-2">
+            <CardHeader>
+              <Flex class="flex-col items-start gap-3 sm:flex-row">
+                <div class="min-w-0 flex-1">
+                  <CardTitle>Home status</CardTitle>
+                  <CardDescription>
+                    Essential hub health and conditions that need attention
+                  </CardDescription>
                 </div>
-              </CardQueryContent>
-            </Card>
+                <Flex class="w-auto shrink-0 flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={rebootMutation.isPending}
+                    onClick={requestReboot}
+                  >
+                    <HiOutlineArrowPath
+                      class={cn(rebootMutation.isPending && "animate-spin")}
+                      data-icon="inline-start"
+                    />
+                    {rebootMutation.isPending ? "Rebooting…" : "Reboot"}
+                  </Button>
+                  <Button as="a" href="#/system" variant="outline" size="sm">
+                    Network setup
+                  </Button>
+                </Flex>
+              </Flex>
+            </CardHeader>
+            <CardQueryContent
+              label="home status"
+              loading={
+                healthQuery.isPlaceholderData ||
+                systemQuery.isPlaceholderData ||
+                networkQuery.isPlaceholderData ||
+                storageQuery.isPlaceholderData ||
+                devicesQuery.isPlaceholderData
+              }
+              error={
+                healthQuery.error ??
+                systemQuery.error ??
+                networkQuery.error ??
+                storageQuery.error ??
+                devicesQuery.error
+              }
+              fallback={<HomeStatusSkeleton />}
+            >
+              <div class="space-y-5">
+                <dl class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <For each={homeStatusItems()}>
+                    {(item) => (
+                      <div class="min-w-0 rounded-lg border bg-muted/15 p-4 transition-colors hover:bg-muted/25">
+                        <dt class="flex items-center justify-between gap-3">
+                          <span class="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            {item.label}
+                          </span>
+                          <StatusIcon tone={item.tone} />
+                        </dt>
+                        <dd class="mt-3 min-w-0 wrap-break-word text-sm font-semibold leading-5">
+                          {item.value}
+                        </dd>
+                      </div>
+                    )}
+                  </For>
+                </dl>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Quick actions</CardTitle>
-                <CardDescription>
-                  Real local actions available from the current firmware
-                </CardDescription>
-              </CardHeader>
-              <CardQueryContent
-                label="quick actions"
-                loading={automationsQuery.isPlaceholderData}
-                error={automationsQuery.error}
-                fallback={<QuickActionsSkeleton />}
-              >
-                <div class="space-y-3">
+                <section
+                  class="border-t pt-4"
+                  aria-labelledby="home-alerts-title"
+                >
+                  <h2 id="home-alerts-title" class="sr-only">
+                    Alerts
+                  </h2>
                   <Show
-                    when={manualAutomations().length > 0}
+                    when={alerts().length > 0}
                     fallback={
                       <p class="text-sm text-muted-foreground">
-                        Create an enabled manual automation to add a working
-                        quick action.
+                        No active network, storage, device-state, or OTA
+                        warnings.
                       </p>
                     }
                   >
-                    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-                      <For each={manualAutomations().slice(0, 4)}>
-                        {(automation) => (
-                          <Button
-                            type="button"
-                            variant="outline"
-                            disabled={runMutation.isPending}
-                            onClick={() => void runAutomation(automation.id)}
-                          >
-                            <HiOutlineBolt data-icon="inline-start" />
-                            {automation.name}
-                          </Button>
+                    <ul class="space-y-2" aria-label="Active alerts">
+                      <For each={alerts()}>
+                        {(alert) => (
+                          <li class="flex items-start gap-3 text-sm">
+                            <HiOutlineExclamationTriangle
+                              class={cn(
+                                "mt-0.5 size-5 shrink-0",
+                                alert.tone === "error"
+                                  ? "text-destructive"
+                                  : "text-warning",
+                              )}
+                              aria-hidden="true"
+                            />
+                            <div class="min-w-0 flex-1">
+                              <p class="text-sm font-medium">{alert.title}</p>
+                              <p class="wrap-break-word text-xs text-muted-foreground">
+                                {alert.detail}
+                              </p>
+                            </div>
+                            <a
+                              href={alert.href}
+                              class="shrink-0 text-xs underline underline-offset-4"
+                            >
+                              {alert.action}
+                            </a>
+                          </li>
                         )}
                       </For>
-                    </div>
+                    </ul>
                   </Show>
-                </div>
-              </CardQueryContent>
-            </Card>
+                </section>
+              </div>
+            </CardQueryContent>
+          </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Favorites</CardTitle>
-                <CardDescription>
-                  Stored only in this browser, with a maximum of eight
-                </CardDescription>
-              </CardHeader>
+          <Card class="@container/card min-w-0">
+            <CardHeader>
+              <Flex class="flex-wrap items-start gap-3">
+                <div class="min-w-0 flex-1">
+                  <CardTitle>Favorites</CardTitle>
+                  <CardDescription>
+                    Up to eight shortcuts, saved in this browser only
+                  </CardDescription>
+                </div>
+                <Button
+                  ref={(element) => (favoritesToggle = element)}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={favoritesBlocked()}
+                  aria-expanded={editingFavorites()}
+                  aria-controls="home-favorites-panel"
+                  onClick={() => changeFavoritesMode(!editingFavorites())}
+                >
+                  {editingFavorites() ? "Done" : "Edit favorites"}
+                </Button>
+              </Flex>
+            </CardHeader>
+            <div
+              id="home-favorites-panel"
+              ref={(element) => (favoritesPanel = element)}
+              tabindex="-1"
+              class="min-w-0 space-y-3"
+              role="region"
+              aria-label={
+                editingFavorites() ? "Edit favorites" : "Saved favorites"
+              }
+            >
               <CardQueryContent
                 label="favorites"
                 loading={
@@ -629,231 +689,352 @@ export default function Overview() {
                 error={devicesQuery.error ?? scenesQuery.error}
                 fallback={<FavoritesSkeleton />}
               >
-                <div class="space-y-3">
-                  <p class="text-sm text-muted-foreground">
-                    Select or deselect stars below. Favorites stay on this
-                    browser only.
-                  </p>
-                  <div class="flex min-w-0 flex-wrap gap-2">
-                    <For each={devices()}>
-                      {(device) => (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={
-                            favoriteKeys().includes(
-                              `device:${deviceId(device)}`,
-                            )
-                              ? "secondary"
-                              : "outline"
-                          }
-                          aria-pressed={favoriteKeys().includes(
-                            `device:${deviceId(device)}`,
-                          )}
-                          onClick={() =>
-                            toggleFavorite(`device:${deviceId(device)}`)
-                          }
-                          disabled={
-                            !favoriteKeys().includes(
-                              `device:${deviceId(device)}`,
-                            ) && favoriteKeys().length >= MAX_FAVORITES
-                          }
-                          title={
-                            !favoriteKeys().includes(
-                              `device:${deviceId(device)}`,
-                            ) && favoriteKeys().length >= MAX_FAVORITES
-                              ? "Remove a favorite before adding another."
-                              : undefined
-                          }
-                          class="max-w-full min-w-0"
-                        >
-                          <HiOutlineStar data-icon="inline-start" />
-                          <span class="truncate">{device.name}</span>
-                        </Button>
-                      )}
-                    </For>
-                    <For each={scenes()}>
-                      {(scene) => (
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant={
-                            favoriteKeys().includes(`scene:${scene.id}`)
-                              ? "secondary"
-                              : "outline"
-                          }
-                          aria-pressed={favoriteKeys().includes(
-                            `scene:${scene.id}`,
-                          )}
-                          onClick={() => toggleFavorite(`scene:${scene.id}`)}
-                          disabled={
-                            !favoriteKeys().includes(`scene:${scene.id}`) &&
-                            favoriteKeys().length >= MAX_FAVORITES
-                          }
-                          title={
-                            !favoriteKeys().includes(`scene:${scene.id}`) &&
-                            favoriteKeys().length >= MAX_FAVORITES
-                              ? "Remove a favorite before adding another."
-                              : undefined
-                          }
-                          class="max-w-full min-w-0"
-                        >
-                          <HiOutlineStar data-icon="inline-start" />
-                          <span class="truncate">{scene.name}</span>
-                        </Button>
-                      )}
-                    </For>
-                  </div>
-                </div>
-              </CardQueryContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Rooms</CardTitle>
-                <CardDescription>
-                  Reported device assignments by location
-                </CardDescription>
-              </CardHeader>
-              <CardQueryContent
-                label="rooms"
-                loading={
-                  roomsQuery.isPlaceholderData || devicesQuery.isPlaceholderData
-                }
-                error={roomsQuery.error ?? devicesQuery.error}
-                fallback={<RoomsSkeleton />}
-              >
                 <Show
-                  when={rooms().length > 0}
+                  when={editingFavorites()}
                   fallback={
-                    <EmptyState
-                      icon={<HiOutlineHome />}
-                      title="No rooms yet"
-                      description="Create rooms to organize reported device assignments."
-                      action={
-                        <Button as="a" href="#/rooms" size="sm">
-                          Create room
+                    <Show
+                      when={favoriteKeys().length > 0}
+                      fallback={
+                        <Button
+                          ref={(element) => (pinFavorites = element)}
+                          type="button"
+                          onClick={() => changeFavoritesMode(true)}
+                        >
+                          Pin favorites
                         </Button>
                       }
-                    />
+                    >
+                      <p class="text-xs text-muted-foreground">
+                        Shortcuts open the device or scene list; they do not run
+                        actions.
+                      </p>
+                      <ul class="space-y-2">
+                        <For each={favoriteKeys()}>
+                          {(key) => {
+                            const item = () =>
+                              favoriteInventory().find(
+                                (entry) => entry.key === key,
+                              );
+                            return (
+                              <li
+                                class="min-w-0 rounded-md border p-3"
+                                data-home-favorite={key}
+                              >
+                                <Show
+                                  when={item()}
+                                  fallback={
+                                    <div class="space-y-2">
+                                      <p class="wrap-break-word text-sm">
+                                        Unavailable favorite: {key}
+                                      </p>
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() =>
+                                          removeUnavailableFavorite(key)
+                                        }
+                                        aria-label={`Remove unavailable favorite ${key}`}
+                                      >
+                                        Remove favorite
+                                      </Button>
+                                    </div>
+                                  }
+                                >
+                                  {(entry) => (
+                                    <a
+                                      href={entry().href}
+                                      class="block min-w-0 whitespace-normal wrap-break-word text-sm underline-offset-4 hover:underline"
+                                    >
+                                      <span class="block font-medium">
+                                        {entry().name}
+                                      </span>
+                                      <span class="text-xs text-muted-foreground">
+                                        Open {entry().kind} · View{" "}
+                                        {entry().kind} list
+                                      </span>
+                                    </a>
+                                  )}
+                                </Show>
+                              </li>
+                            );
+                          }}
+                        </For>
+                      </ul>
+                    </Show>
                   }
                 >
-                  <Grid cols={1} colsSm={2} class="gap-3">
-                    <For each={rooms().slice(0, 6)}>
-                      {(room) => {
-                        const assigned = () =>
-                          devices().filter(
-                            (device) => deviceRoomId(device) === room.id,
-                          );
-                        const unavailable = () =>
-                          assigned().filter(
-                            (device) =>
-                              device.availability.toLowerCase() !== "online",
-                          ).length;
-                        return (
-                          <div
-                            class={cn(
-                              "rounded-lg border border-l-4 p-3",
-                              roomAccentClass(room.id),
-                            )}
+                  <FavoritesEditor>
+                    <p class="text-sm text-muted-foreground">
+                      {favoriteKeys().length} of {MAX_FAVORITES} selected.
+                      Remove a favorite before adding another at the limit.
+                    </p>
+                    <div class="space-y-2">
+                      <For each={favoriteInventory()}>
+                        {(item) => (
+                          <Button
+                            type="button"
+                            variant={
+                              favoriteKeys().includes(item.key)
+                                ? "secondary"
+                                : "outline"
+                            }
+                            class="h-auto w-full min-w-0 justify-start whitespace-normal py-3 text-left"
+                            aria-pressed={favoriteKeys().includes(item.key)}
+                            disabled={
+                              !favoriteKeys().includes(item.key) &&
+                              favoriteKeys().length >= MAX_FAVORITES
+                            }
+                            onClick={() => toggleFavorite(item.key)}
                           >
-                            <Flex class="min-w-0 gap-3">
-                              <div class="min-w-0 flex-1">
-                                <p
-                                  class="truncate font-medium"
-                                  title={room.name}
-                                >
-                                  {room.name}
-                                </p>
-                                <p class="text-xs text-muted-foreground">
-                                  {assigned().length} reported devices
-                                </p>
-                              </div>
-                              <StatusBadge
-                                class="shrink-0"
-                                tone={
-                                  assigned().length === 0
-                                    ? "muted"
-                                    : unavailable() > 0
-                                      ? "warn"
-                                      : "ok"
-                                }
-                                label={
-                                  unavailable() > 0
-                                    ? `${unavailable()} unavailable`
-                                    : assigned().length > 0
-                                      ? "Available"
-                                      : "Empty"
-                                }
-                              />
-                            </Flex>
-                          </div>
-                        );
-                      }}
-                    </For>
-                  </Grid>
+                            <HiOutlineStar
+                              class={cn(
+                                "shrink-0",
+                                favoriteKeys().includes(item.key) &&
+                                  "fill-current",
+                              )}
+                              data-icon="inline-start"
+                              aria-hidden="true"
+                            />
+                            <span class="min-w-0 wrap-break-word">
+                              {item.name} · {item.kind}
+                            </span>
+                          </Button>
+                        )}
+                      </For>
+                      <For
+                        each={favoriteKeys().filter(
+                          (key) =>
+                            !favoriteInventory().some(
+                              (item) => item.key === key,
+                            ),
+                        )}
+                      >
+                        {(key) => (
+                          <Button
+                            class="h-auto w-full min-w-0 whitespace-normal py-3"
+                            variant="outline"
+                            onClick={() => removeUnavailableFavorite(key)}
+                          >
+                            <span class="min-w-0 wrap-break-word">
+                              Remove unavailable favorite: {key}
+                            </span>
+                          </Button>
+                        )}
+                      </For>
+                    </div>
+                    <Show when={favoriteInventory().length === 0}>
+                      <p class="text-sm text-muted-foreground">
+                        No devices or scenes to pin yet.
+                      </p>
+                      <Flex class="flex-wrap gap-2" justifyContent="start">
+                        <Button as="a" href="#/devices/add" size="sm">
+                          Add device
+                        </Button>
+                        <Button
+                          as="a"
+                          href="#/scenes"
+                          size="sm"
+                          variant="outline"
+                        >
+                          Create scene
+                        </Button>
+                      </Flex>
+                    </Show>
+                  </FavoritesEditor>
                 </Show>
               </CardQueryContent>
-            </Card>
+            </div>
+            <Show when={favoritesFeedback()}>
+              <p role="status" class="px-6 pb-4 text-xs text-muted-foreground">
+                {favoritesFeedback()}
+              </p>
+            </Show>
+          </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Offline or stale devices</CardTitle>
-                <CardDescription>
-                  Availability reported by the current device inventory
-                </CardDescription>
-              </CardHeader>
-              <CardQueryContent
-                label="device availability"
-                loading={devicesQuery.isPlaceholderData}
-                error={devicesQuery.error}
-                fallback={<DeviceAvailabilitySkeleton />}
-              >
+          <Card class="@container/card min-w-0">
+            <CardHeader>
+              <CardTitle>Quick actions</CardTitle>
+              <CardDescription>
+                Real local actions available from the current firmware
+              </CardDescription>
+            </CardHeader>
+            <CardQueryContent
+              label="quick actions"
+              loading={automationsQuery.isPlaceholderData}
+              error={automationsQuery.error}
+              fallback={<QuickActionsSkeleton />}
+            >
+              <div class="space-y-3">
                 <Show
-                  when={unavailableDevices().length > 0}
+                  when={manualAutomations().length > 0}
                   fallback={
                     <p class="text-sm text-muted-foreground">
-                      No offline or stale devices are currently reported.
+                      Create an enabled manual automation to add a working quick
+                      action.
                     </p>
                   }
                 >
-                  <ul class="space-y-2">
-                    <For each={unavailableDevices().slice(0, 8)}>
-                      {(device) => (
-                        <li class="flex items-center justify-between gap-3 rounded-md border p-3">
-                          <span class="truncate text-sm font-medium">
-                            {device.name}
+                  <Grid cols={1} class="gap-2 @min-[26rem]/card:grid-cols-2">
+                    <For each={manualAutomations().slice(0, 4)}>
+                      {(automation) => (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={runMutation.isPending}
+                          onClick={() => void runAutomation(automation.id)}
+                          class="h-auto w-full min-w-0 whitespace-normal py-3"
+                        >
+                          <HiOutlineBolt data-icon="inline-start" />
+                          <span class="min-w-0 wrap-break-word">
+                            {automation.name}
                           </span>
-                          <StatusBadge
-                            tone={availabilityTone(device.availability)}
-                            label={device.availability}
-                          />
-                        </li>
+                        </Button>
                       )}
                     </For>
-                  </ul>
+                  </Grid>
                 </Show>
-              </CardQueryContent>
-            </Card>
+              </div>
+            </CardQueryContent>
+          </Card>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Activity history</CardTitle>
-                <CardDescription>
-                  View retained firmware events, including automation and
-                  configuration outcomes.
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Button as="a" href="#/activity" variant="outline">
-                  <HiOutlineBolt data-icon="inline-start" />
-                  View activity
-                </Button>
-              </CardContent>
-            </Card>
-          </Grid>
-        </CardContent>
-      </Card>
+          <Card class="@container/card min-w-0">
+            <CardHeader>
+              <CardTitle>Rooms</CardTitle>
+              <CardDescription>
+                Reported device assignments by location
+              </CardDescription>
+            </CardHeader>
+            <CardQueryContent
+              label="rooms"
+              loading={
+                roomsQuery.isPlaceholderData || devicesQuery.isPlaceholderData
+              }
+              error={roomsQuery.error ?? devicesQuery.error}
+              fallback={<RoomsSkeleton />}
+            >
+              <Show
+                when={rooms().length > 0}
+                fallback={
+                  <EmptyState
+                    icon={<HiOutlineHome />}
+                    title="No rooms yet"
+                    description="Create rooms to organize reported device assignments."
+                    action={
+                      <Button as="a" href="#/rooms" size="sm">
+                        Create room
+                      </Button>
+                    }
+                  />
+                }
+              >
+                <Grid cols={1} class="gap-3 @min-[26rem]/card:grid-cols-2">
+                  <For each={rooms().slice(0, 6)}>
+                    {(room) => {
+                      const assigned = () =>
+                        devices().filter(
+                          (device) => deviceRoomId(device) === room.id,
+                        );
+                      const unavailable = () =>
+                        assigned().filter(
+                          (device) =>
+                            device.availability.toLowerCase() !== "online",
+                        ).length;
+                      return (
+                        <div
+                          class={cn(
+                            "@container/room min-w-0 rounded-lg border border-l-4 p-3",
+                            roomAccentClass(room.id),
+                          )}
+                        >
+                          <Flex class="min-w-0 flex-col items-start gap-3 @min-[18rem]/room:flex-row @min-[18rem]/room:items-center">
+                            <div class="w-full min-w-0 flex-1">
+                              <p
+                                class="wrap-break-word font-medium"
+                                title={room.name}
+                              >
+                                {room.name}
+                              </p>
+                              <p class="text-xs text-muted-foreground">
+                                {assigned().length} reported devices
+                              </p>
+                            </div>
+                            <StatusBadge
+                              class="shrink-0"
+                              tone={
+                                assigned().length === 0
+                                  ? "muted"
+                                  : unavailable() > 0
+                                    ? "warn"
+                                    : "ok"
+                              }
+                              label={
+                                unavailable() > 0
+                                  ? `${unavailable()} unavailable`
+                                  : assigned().length > 0
+                                    ? "Available"
+                                    : "Empty"
+                              }
+                            />
+                          </Flex>
+                        </div>
+                      );
+                    }}
+                  </For>
+                </Grid>
+              </Show>
+            </CardQueryContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>Offline or stale devices</CardTitle>
+              <CardDescription>
+                Availability reported by the current device inventory
+              </CardDescription>
+            </CardHeader>
+            <CardQueryContent
+              label="device availability"
+              loading={devicesQuery.isPlaceholderData}
+              error={devicesQuery.error}
+              fallback={<DeviceAvailabilitySkeleton />}
+            >
+              <Show
+                when={unavailableDevices().length > 0}
+                fallback={
+                  <p class="text-sm text-muted-foreground">
+                    No offline or stale devices are currently reported.
+                  </p>
+                }
+              >
+                <ul class="space-y-2">
+                  <For each={unavailableDevices().slice(0, 8)}>
+                    {(device) => (
+                      <li class="flex items-center justify-between gap-3 rounded-md border p-3">
+                        <span
+                          class="min-w-0 flex-1 wrap-break-word text-sm font-medium"
+                          title={device.name}
+                        >
+                          {device.name}
+                        </span>
+                        <StatusBadge
+                          class="shrink-0"
+                          tone={availabilityTone(device.availability)}
+                          label={device.availability}
+                        />
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </Show>
+            </CardQueryContent>
+          </Card>
+        </Grid>
+        <footer class="border-t pt-3 text-sm">
+          <a href="#/activity" class="underline underline-offset-4">
+            View activity history
+          </a>
+        </footer>
+      </div>
 
       <Dialog open={rebootDialogOpen()} onOpenChange={setRebootDialogOpen}>
         <DialogContent>
