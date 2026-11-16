@@ -131,7 +131,7 @@ def main() -> int:
             raise ValueError("boot capture exceeds the size limit")
         evidence = inspect_boot(args.capture.read_text(), args.version, args.address)
         check_http("http://" + args.address, args.timeout)
-    except (OSError, ValueError, urllib.error.URLError):
+    except (OSError, TypeError, ValueError, urllib.error.URLError):
         # Do not echo response bodies, captured logs, or server-controlled error text.
         print("Boot/API check failed; verify the capture, memory margin, and production access state.")
         return 1

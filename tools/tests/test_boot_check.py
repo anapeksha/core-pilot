@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 import os
 import pathlib
 import sys
+import tempfile
 import threading
 import unittest
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
@@ -199,9 +201,32 @@ class ProductionHttpSmokeTests(unittest.TestCase):
             "malformed_json",
             "array_json",
         ):
+            expected = TypeError if fault == "array_json" else ValueError
             with self.subTest(fault=fault), fixture_server(fault) as (url, _):
-                with self.assertRaises(ValueError):
+                with self.assertRaises(expected):
                     boot_check.check_http(url, timeout=1)
+
+    def test_cli_reports_response_type_errors_without_echoing_server_details(self):
+        with tempfile.TemporaryDirectory() as directory:
+            capture = pathlib.Path(directory) / "boot.log"
+            capture.write_text(CAPTURE)
+            output = io.StringIO()
+            with (
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    ["boot_check.py", str(capture), "192.0.2.10", "--version", "0.1.2"],
+                ),
+                mock.patch.object(
+                    boot_check,
+                    "check_http",
+                    side_effect=TypeError("untrusted response detail"),
+                ),
+                redirect_stdout(output),
+            ):
+                self.assertEqual(boot_check.main(), 1)
+            self.assertIn("Boot/API check failed", output.getvalue())
+            self.assertNotIn("untrusted response detail", output.getvalue())
 
     def test_does_not_attempt_exchange_when_a_code_is_already_open(self):
         with fixture_server("open_code") as (url, state):
