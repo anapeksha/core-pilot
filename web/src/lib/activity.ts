@@ -7,6 +7,48 @@ export type ActivitySeverity = "info" | "warning" | "error";
 export type ActivityCategory =
   "all" | "automation" | "ai" | "network" | "ota" | "configuration" | "other";
 
+export const MAX_ACTIVITY_EVENT_TYPE_BYTES = 64;
+
+export function activityFilterParams(params: {
+  eventType?: unknown;
+  severity?: unknown;
+  category?: unknown;
+}): {
+  eventType: string;
+  severity: "all" | ActivitySeverity;
+  category: ActivityCategory;
+} {
+  const eventType = params.eventType;
+  const severity = params.severity;
+  const category = params.category;
+  return {
+    eventType:
+      typeof eventType === "string" &&
+      eventType.length > 0 &&
+      new TextEncoder().encode(eventType).length <=
+        MAX_ACTIVITY_EVENT_TYPE_BYTES &&
+      !Array.from(eventType).some((character) => {
+        const code = character.charCodeAt(0);
+        return code < 32 || code === 127;
+      })
+        ? eventType
+        : "all",
+    severity:
+      severity === "info" || severity === "warning" || severity === "error"
+        ? severity
+        : "all",
+    category:
+      category === "automation" ||
+      category === "ai" ||
+      category === "network" ||
+      category === "ota" ||
+      category === "configuration" ||
+      category === "other"
+        ? category
+        : "all",
+  };
+}
+
 export function appendActivityPage(
   current: ActivityEvent[],
   page: ActivityPage,
