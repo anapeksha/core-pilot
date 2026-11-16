@@ -4,6 +4,21 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+### Changed
+
+- Simplify Home, separate saved favorites from editing, and preserve cached data with explicit refresh warnings and retry controls.
+- Add visible device action menus, shareable Activity and device filters, platform-aware command shortcuts, and unsaved-change protection for model editors.
+- Keep Activity scroll position while paging and retain loaded history when older-page requests fail.
+
+### Fixed
+
+- Restore responsive skeleton dimensions, long-name wrapping, keyboard focus recovery, interactive cursors, and accessible navigation, popup, and status semantics.
+- Configure Zed to use ESP-IDF's ESP-Clang with separate production, test, native-host, and H2 compilation databases instead of fallback C++ parsing.
+
+### Tests
+
+- Expand browser coverage for loading, retries, dirty forms, filter history, command acceptance, and keyboard interactions; add automated accessibility scans without rule exclusions.
+
 ## [0.1.4] - 2026-11-15
 
 ### Fixed
