@@ -809,7 +809,7 @@ export default function Automations() {
             <OperationStatus
               title={
                 runMutation.isPending
-                  ? "Automation running"
+                  ? "Waiting for automation completion"
                   : runMutation.isError
                     ? "Automation run failed"
                     : "Automation run complete"
@@ -894,10 +894,10 @@ export default function Automations() {
               <Grid cols={1} colsMd={2} class="gap-4">
                 <For each={response().automations}>
                   {(automation) => (
-                    <Card>
+                    <Card class="min-w-0">
                       <CardHeader>
-                        <Flex class="flex-col items-start gap-3 sm:flex-row">
-                          <CardTitle class="min-w-0 wrap-anywhere">
+                        <Flex alignItems="start" class="flex-wrap gap-3">
+                          <CardTitle class="min-w-0 basis-40 flex-1 wrap-anywhere">
                             {automation.name}
                           </CardTitle>
                           <Badge
@@ -934,7 +934,7 @@ export default function Automations() {
                           </p>
                         </Show>
                       </CardContent>
-                      <CardFooter class="justify-end gap-2">
+                      <CardFooter class="flex-wrap justify-end gap-2">
                         <Show
                           when={
                             automation.enabled &&
@@ -952,11 +952,12 @@ export default function Automations() {
                                   onSuccess: (result) =>
                                     result.accepted
                                       ? toast.success(
-                                          result.detail ?? "Automation queued.",
+                                          result.detail ??
+                                            "Automation completed.",
                                         )
                                       : toast.error(
                                           result.detail ??
-                                            "Automation could not be queued.",
+                                            "Automation could not be run.",
                                         ),
                                   onError: (error) =>
                                     toast.error(error.message),

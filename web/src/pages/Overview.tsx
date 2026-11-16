@@ -10,6 +10,7 @@ import { toast } from "solid-sonner";
 import { Button } from "~/components/button";
 import { CardQueryContent } from "~/components/card-query-content";
 import { PageHeader } from "~/components/page-header";
+import { OperationStatus } from "~/components/operation-status";
 
 import {
   Card,
@@ -453,6 +454,34 @@ export default function Overview() {
               fallback={<QuickActionsSkeleton />}
             >
               <div class="space-y-3">
+                <Show
+                  when={
+                    runMutation.isPending ||
+                    runMutation.isSuccess ||
+                    runMutation.isError
+                  }
+                >
+                  <OperationStatus
+                    title={
+                      runMutation.isPending
+                        ? "Waiting for automation completion"
+                        : runMutation.isError
+                          ? "Automation run failed"
+                          : "Automation run complete"
+                    }
+                    description={
+                      runMutation.isError
+                        ? runMutation.error?.message
+                        : runMutation.isSuccess
+                          ? runMutation.data?.detail
+                          : "The request is being processed; completion has not been confirmed."
+                    }
+                    active={runMutation.isPending}
+                    class={
+                      runMutation.isError ? "border-destructive/40" : undefined
+                    }
+                  />
+                </Show>
                 <Show
                   when={manualAutomations().length > 0}
                   fallback={

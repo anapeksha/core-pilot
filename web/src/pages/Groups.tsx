@@ -348,13 +348,17 @@ export default function Groups() {
               <Grid colsMd={2} class="gap-3">
                 <For each={response().groups}>
                   {(group) => (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>{group.name}</CardTitle>
-                        <CardDescription>{group.id}</CardDescription>
+                    <Card class="min-w-0">
+                      <CardHeader class="min-w-0">
+                        <CardTitle class="wrap-anywhere">
+                          {group.name}
+                        </CardTitle>
+                        <CardDescription class="wrap-anywhere">
+                          {group.id}
+                        </CardDescription>
                       </CardHeader>
                       <CardContent>
-                        <p class="text-sm text-muted-foreground">
+                        <p class="min-w-0 wrap-anywhere text-sm text-muted-foreground">
                           {group.device_ids.length
                             ? group.device_ids.join(", ")
                             : "No devices assigned"}

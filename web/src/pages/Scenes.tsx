@@ -338,12 +338,12 @@ export default function Scenes() {
                     {(scene, sceneIndex) => {
                       const references = () => sceneReferences(scene.id);
                       return (
-                        <Card class="overflow-hidden">
+                        <Card class="min-w-0 overflow-hidden">
                           <CardHeader>
                             <Flex alignItems="start" class="flex-wrap gap-3">
                               <Flex
                                 justifyContent="start"
-                                class="min-w-0 flex-1 gap-3"
+                                class="min-w-0 basis-48 flex-1 gap-3"
                               >
                                 <div
                                   class="grid size-10 shrink-0 place-items-center rounded-full bg-muted"
@@ -352,7 +352,7 @@ export default function Scenes() {
                                   <HiOutlineRectangleGroup />
                                 </div>
                                 <div class="min-w-0">
-                                  <CardTitle class="truncate">
+                                  <CardTitle class="wrap-anywhere">
                                     {scene.name}
                                   </CardTitle>
                                   <CardDescription>
@@ -378,11 +378,11 @@ export default function Scenes() {
                               <ol class="flex flex-col gap-2">
                                 <For each={scene.actions}>
                                   {(action, index) => (
-                                    <li class="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
-                                      <span class="font-mono text-xs text-muted-foreground">
+                                    <li class="flex min-w-0 items-start gap-3 rounded-md border px-3 py-2 text-sm">
+                                      <span class="shrink-0 font-mono text-xs text-muted-foreground">
                                         {index() + 1}
                                       </span>
-                                      <span class="truncate">
+                                      <span class="min-w-0 wrap-anywhere">
                                         {actionSummary(decodeAction(action))}
                                       </span>
                                     </li>
@@ -391,7 +391,7 @@ export default function Scenes() {
                               </ol>
                             </Show>
                           </CardContent>
-                          <CardFooter class="justify-end gap-2">
+                          <CardFooter class="flex-wrap justify-end gap-2">
                             <TooltipIconButton
                               type="button"
                               size="icon"

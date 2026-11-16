@@ -26,6 +26,7 @@ import {
 } from "~/components/card";
 import { EmptyState } from "~/components/empty-state";
 import { Flex } from "~/components/flex";
+import { OperationStatus } from "~/components/operation-status";
 
 import { Skeleton } from "~/components/skeleton";
 import { StatusBadge, type StatusTone } from "~/components/status";
@@ -178,7 +179,7 @@ function powerControlDescription(device: Device, pending: boolean): string {
   if (device.availability.toLowerCase() !== "online")
     return `Power control is unavailable until ${device.name} is online.`;
   if (onOffState(device.state) === undefined)
-    return `The current power state is unknown. Sending a command will establish the displayed state for ${device.name}.`;
+    return `The current power state is unknown. A command requests a change; the displayed state updates only when ${device.name} reports it.`;
   return `Turn ${device.name} on or off.`;
 }
 
@@ -209,18 +210,25 @@ export default function Devices() {
   const [forgottenDevice, setForgottenDevice] = createSignal<Device | null>(
     null,
   );
-  const [commandedOnOff, setCommandedOnOff] = createSignal<
-    Record<string, boolean>
-  >({});
+  const [operationFeedback, setOperationFeedback] = createSignal<{
+    title: string;
+    detail: string;
+  } | null>(null);
   const response = () => devicesQuery.data ?? fallbackDevices;
   const displayedOnOff = (device: Device): boolean | undefined =>
-    onOffState(device.state) ?? commandedOnOff()[deviceKey(device)];
+    onOffState(device.state);
 
   const removeDevice = async (device: Device) => {
     if (!device.node_id)
       throw new Error("Matter node identity is unavailable.");
-    await removeMutation.mutateAsync({ device_id: device.node_id });
-    toast.success("Matter device removal queued.");
+    const result = await removeMutation.mutateAsync({
+      device_id: device.node_id,
+    });
+    setOperationFeedback({
+      title: "Matter removal request accepted",
+      detail: result.detail,
+    });
+    toast.success(result.detail || "Matter device removal queued.");
   };
 
   const forgetDevice = async (device: Device) => {
@@ -234,46 +242,57 @@ export default function Devices() {
   };
 
   const renameDevice = async (device: Device) => {
-    if (!device.node_id || !device.endpoint_id)
-      throw new Error("Matter endpoint identity is unavailable.");
+    setOperationFeedback(null);
     const name = deviceName().trim();
     try {
-      await deviceMutation.mutateAsync({
+      if (!device.node_id || !device.endpoint_id)
+        throw new Error("Matter endpoint identity is unavailable.");
+      const result = await deviceMutation.mutateAsync({
         device_id: device.node_id,
         endpoint_id: device.endpoint_id,
         name,
       });
       setEditingDeviceId(null);
-      toast.success("Device name saved.");
+      setOperationFeedback({
+        title: "Device rename request accepted",
+        detail: result.detail,
+      });
+      toast.success(result.detail || "Device rename request accepted.");
     } catch (error) {
-      toast.error(
-        error instanceof Error ? error.message : "Could not rename device.",
-      );
+      const detail =
+        error instanceof Error ? error.message : "Could not rename device.";
+      setOperationFeedback({ title: "Device rename failed", detail });
+      toast.error(detail);
     }
   };
 
   const setOnOff = async (device: Device, on: boolean) => {
     const id = deviceKey(device);
+    setOperationFeedback(null);
     setPendingDeviceId(id);
     try {
       if (!device.node_id || !device.endpoint_id) {
         throw new Error("Matter endpoint identity is unavailable.");
       }
-      await deviceMutation.mutateAsync({
+      const result = await deviceMutation.mutateAsync({
         device_id: device.node_id,
         endpoint_id: device.endpoint_id,
         on,
       });
-      setCommandedOnOff((current) => ({ ...current, [id]: on }));
+      setOperationFeedback({
+        title: "Matter command request accepted",
+        detail: `${result.detail} Power remains the last reported state, not the requested state.`,
+      });
       toast.success(
         "Matter command queued. Power will update when the device reports state.",
       );
     } catch (error) {
-      toast.error(
+      const detail =
         error instanceof Error
           ? error.message
-          : "Could not queue Matter command.",
-      );
+          : "Could not queue Matter command.";
+      setOperationFeedback({ title: "Matter command request failed", detail });
+      toast.error(detail);
     } finally {
       setPendingDeviceId(null);
     }
@@ -309,8 +328,17 @@ export default function Devices() {
           flexDirection="col"
           alignItems="stretch"
           justifyContent="start"
-          class="gap-5"
+          class="min-w-0 gap-5"
         >
+          <Show when={operationFeedback()}>
+            {(feedback) => (
+              <OperationStatus
+                class="min-w-0 wrap-anywhere"
+                title={feedback().title}
+                description={feedback().detail}
+              />
+            )}
+          </Show>
           <Show
             when={!(devicesQuery.isFetching && !devicesQuery.data)}
             fallback={<DevicesSkeleton />}
@@ -371,7 +399,7 @@ export default function Devices() {
                   </Button>
                 </div>
               </Flex>
-              <div class="scroll-fade-x overflow-x-auto">
+              <div class="scroll-fade-x min-w-0 overflow-x-auto">
                 <ContextMenu>
                   <ContextMenuTrigger>
                     <Table>
@@ -398,7 +426,7 @@ export default function Devices() {
                                   when={editingDeviceId() === deviceKey(device)}
                                   fallback={
                                     <span
-                                      class="block truncate font-medium"
+                                      class="block whitespace-normal wrap-anywhere font-medium"
                                       title={device.name}
                                     >
                                       {device.name}
@@ -455,9 +483,9 @@ export default function Devices() {
                                     {(capability) => {
                                       const Icon = capabilityIcon(capability);
                                       return (
-                                        <span class="inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs">
+                                        <span class="inline-flex min-w-0 items-center gap-1.5 rounded-full border px-2 py-1 text-xs whitespace-normal wrap-anywhere">
                                           <Icon
-                                            class="size-3.5"
+                                            class="size-3.5 shrink-0"
                                             aria-hidden="true"
                                           />
                                           {capability}
