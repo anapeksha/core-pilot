@@ -1,9 +1,11 @@
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
 import { HiOutlineHome, HiOutlinePencil } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { z } from "zod";
 
+import { CardQueryContent } from "~/components/card-query-content";
 import { Button } from "~/components/button";
 import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
@@ -70,23 +72,29 @@ export default function Rooms() {
   const deleteMutation = roomDeleteMutation();
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [isSheetOpen, setIsSheetOpen] = createSignal(false);
-  const { errors, handleSubmit, register, reset } = createForm<RoomFormValues>({
-    defaultValues: { name: "" },
-    mode: "onTouched",
-  });
+  const { errors, handleSubmit, register, reset, values } =
+    createForm<RoomFormValues>({
+      defaultValues: { name: "" },
+      mode: "onTouched",
+    });
   const nameField = register("name", {
     validate: (value) => {
       const result = roomSchema.shape.name.safeParse(value);
       return result.success || result.error.issues[0]?.message;
     },
   });
+  const unsaved = createUnsavedChanges({
+    open: isSheetOpen,
+    values: values,
+    label: "room",
+  });
+
   const shouldShowToast = createToastGate();
 
   const response = () => roomsQuery.data ?? fallbackRooms;
   const devices = () => devicesQuery.data?.devices ?? fallbackDevices.devices;
   const devicesForRoom = (roomId: string) =>
     devices().filter((device) => deviceRoomId(device) === roomId);
-  const isInitialLoading = () => roomsQuery.isFetching && !roomsQuery.data;
 
   const resetForm = () => {
     setIsSheetOpen(false);
@@ -97,12 +105,14 @@ export default function Rooms() {
   const createRoom = () => {
     setEditingId(null);
     reset({ name: "" });
+    unsaved.initialize();
     setIsSheetOpen(true);
   };
 
   const edit = (room: Room) => {
     setEditingId(room.id);
     reset({ name: room.name });
+    unsaved.initialize();
     setIsSheetOpen(true);
   };
 
@@ -164,8 +174,9 @@ export default function Rooms() {
           justifyContent="start"
           class="gap-5"
         >
-          <Show
-            when={!isInitialLoading()}
+          <CardQueryContent
+            queries={[roomsQuery, devicesQuery]}
+            label="rooms"
             fallback={
               <Grid colsMd={2} class="gap-3" aria-busy="true">
                 <For each={[0, 1]}>
@@ -281,15 +292,24 @@ export default function Rooms() {
                             title={`Delete ${room.name}?`}
                             description="This removes the room record. Core Pilot will not silently change devices or other saved models."
                             confirmLabel="Delete room"
-                            disabled={deleteMutation.isPending}
+                            disabled={
+                              deleteMutation.isPending ||
+                              devicesQuery.data === undefined ||
+                              devicesQuery.isPlaceholderData ||
+                              Boolean(devicesQuery.error)
+                            }
                             blockedReason={
-                              assignedDevices().length > 0
-                                ? `Assigned devices: ${assignedDevices()
-                                    .map((device) => device.name)
-                                    .join(
-                                      ", ",
-                                    )}. Reassign them before deleting this room.`
-                                : undefined
+                              devicesQuery.data === undefined ||
+                              devicesQuery.isPlaceholderData ||
+                              devicesQuery.error
+                                ? "Device assignments could not be verified. Refresh devices before deleting this room."
+                                : assignedDevices().length > 0
+                                  ? `Assigned devices: ${assignedDevices()
+                                      .map((device) => device.name)
+                                      .join(
+                                        ", ",
+                                      )}. Reassign them before deleting this room.`
+                                  : undefined
                             }
                             onConfirm={() =>
                               deleteMutation.mutateAsync({ id: room.id })
@@ -302,7 +322,7 @@ export default function Rooms() {
                 </For>
               </Grid>
             </Show>
-          </Show>
+          </CardQueryContent>
         </Flex>
       </CardContent>
 
@@ -310,7 +330,7 @@ export default function Rooms() {
         open={isSheetOpen()}
         onOpenChange={(open) => {
           if (open) setIsSheetOpen(true);
-          else resetForm();
+          else unsaved.request(resetForm);
         }}
       >
         <SheetContent
@@ -350,7 +370,11 @@ export default function Rooms() {
             </div>
 
             <SheetFooter class="shrink-0 gap-2 border-t p-6">
-              <Button type="button" variant="outline" onClick={resetForm}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => unsaved.request(resetForm)}
+              >
                 Cancel
               </Button>
               <Button type="submit" disabled={upsertMutation.isPending}>
@@ -360,6 +384,7 @@ export default function Rooms() {
           </form>
         </SheetContent>
       </Sheet>
+      <unsaved.Confirmation />
     </Card>
   );
 }

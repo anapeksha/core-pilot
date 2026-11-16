@@ -40,6 +40,7 @@ function ConfirmDestructiveAction(props: ConfirmDestructiveActionProps) {
   };
 
   const confirm = async () => {
+    if (pending() || props.disabled || props.blockedReason) return;
     setPending(true);
     try {
       await props.onConfirm();
@@ -112,7 +113,9 @@ function ConfirmDestructiveAction(props: ConfirmDestructiveActionProps) {
           <Button
             variant="destructive"
             class="w-full sm:w-auto"
-            disabled={pending() || Boolean(props.blockedReason)}
+            disabled={
+              pending() || props.disabled || Boolean(props.blockedReason)
+            }
             aria-busy={pending()}
             onClick={() => void confirm()}
           >

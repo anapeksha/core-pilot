@@ -1,9 +1,11 @@
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
 import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
 import { HiOutlinePencil, HiOutlineSquares2x2 } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { z } from "zod";
 
+import { CardQueryContent } from "~/components/card-query-content";
 import { Button } from "~/components/button";
 import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
@@ -85,7 +87,21 @@ export default function Groups() {
     createForm<GroupFormValues>({
       defaultValues: { name: "", members: [] },
     });
+  const unsaved = createUnsavedChanges({
+    open: sheetOpen,
+    values: () => ({
+      name: values().name,
+      members: [...values().members].sort(),
+    }),
+    label: "group",
+  });
+
   const shouldShowToast = createToastGate();
+
+  const inventoryReady = () =>
+    devicesQuery.data !== undefined &&
+    !devicesQuery.isPlaceholderData &&
+    !devicesQuery.error;
 
   const response = () => groupsQuery.data ?? fallbackGroups;
   const deviceOptions = createMemo<DeviceOption[]>(() =>
@@ -98,17 +114,18 @@ export default function Groups() {
     const selectedIds = new Set(values().members);
     return deviceOptions().filter((device) => selectedIds.has(device.id));
   });
-  const isInitialLoading = () => groupsQuery.isFetching && !groupsQuery.data;
 
   const openCreate = () => {
     setEditingId(null);
     reset({ name: "", members: [] });
+    unsaved.initialize();
     setSheetOpen(true);
   };
 
   const edit = (group: Group) => {
     setEditingId(group.id);
     reset({ name: group.name, members: group.device_ids });
+    unsaved.initialize();
     setSheetOpen(true);
   };
 
@@ -120,13 +137,14 @@ export default function Groups() {
 
   const handleSheetOpenChange = (open: boolean) => {
     if (!open) {
-      closeSheet();
+      unsaved.request(closeSheet);
       return;
     }
     setSheetOpen(true);
   };
 
   const submitGroup = handleSubmit((formValues) => {
+    if (!inventoryReady()) return;
     const result = groupSchema.safeParse(formValues);
     if (!result.success) {
       for (const issue of result.error.issues) {
@@ -287,10 +305,17 @@ export default function Groups() {
                   </Select>
                 </div>
                 <SheetFooter class="shrink-0 gap-2 border-t px-6 py-4">
-                  <Button type="button" variant="outline" onClick={closeSheet}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => unsaved.request(closeSheet)}
+                  >
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={upsertMutation.isPending}>
+                  <Button
+                    type="submit"
+                    disabled={upsertMutation.isPending || !inventoryReady()}
+                  >
                     {editingId() ? "Update group" : "Create group"}
                   </Button>
                 </SheetFooter>
@@ -298,8 +323,9 @@ export default function Groups() {
             </SheetContent>
           </Sheet>
 
-          <Show
-            when={!isInitialLoading()}
+          <CardQueryContent
+            queries={[groupsQuery, devicesQuery]}
+            label="groups"
             fallback={
               <Grid colsMd={2} class="gap-3" aria-busy="true">
                 <For each={[0, 1]}>
@@ -391,9 +417,10 @@ export default function Groups() {
                 </For>
               </Grid>
             </Show>
-          </Show>
+          </CardQueryContent>
         </Flex>
       </CardContent>
+      <unsaved.Confirmation />
     </Card>
   );
 }

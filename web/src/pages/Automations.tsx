@@ -1,3 +1,4 @@
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
 import { For, Show, createSignal, type Component } from "solid-js";
 import { createForm } from "solid-hook-form";
 import {
@@ -11,6 +12,7 @@ import { toast } from "solid-sonner";
 import { z } from "zod";
 import { Badge } from "~/components/badge";
 import { AutomationBuilder } from "~/components/automation-builder";
+import { CardQueryContent } from "~/components/card-query-content";
 import { Button } from "~/components/button";
 import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
@@ -200,15 +202,23 @@ export default function Automations() {
   const runMutation = automationRunMutation();
   const deleteMutation = automationDeleteMutation();
 
+  const inventoryReady = () =>
+    devicesQuery.data !== undefined &&
+    !devicesQuery.isPlaceholderData &&
+    !devicesQuery.error &&
+    scenesQuery.data !== undefined &&
+    !scenesQuery.isPlaceholderData &&
+    !scenesQuery.error;
+
   const response = () => automations.data ?? fallbackAutomations;
   const devices = () => devicesQuery.data?.devices ?? fallbackDevices.devices;
   const scenes = () => scenesQuery.data?.scenes ?? fallbackScenes.scenes;
   const automationsInitialLoading = () =>
-    automations.isFetching && !automations.data;
+    automations.data === undefined || automations.isPlaceholderData;
   const devicesInitialLoading = () =>
-    devicesQuery.isFetching && !devicesQuery.data;
+    devicesQuery.data === undefined || devicesQuery.isPlaceholderData;
   const scenesInitialLoading = () =>
-    scenesQuery.isFetching && !scenesQuery.data;
+    scenesQuery.data === undefined || scenesQuery.isPlaceholderData;
 
   const [step, setStep] = createSignal(0);
   const [editingId, setEditingId] = createSignal<string | null>(null);
@@ -234,6 +244,12 @@ export default function Automations() {
         };
       },
     });
+  const unsaved = createUnsavedChanges({
+    open: isSheetOpen,
+    values: values,
+    label: "automation",
+  });
+
   const name = () => values().name;
   const enabled = () => values().enabled;
   const trigger = () => values().trigger;
@@ -328,6 +344,7 @@ export default function Automations() {
 
   function createAutomation() {
     resetForm();
+    unsaved.initialize();
     setIsSheetOpen(true);
   }
 
@@ -353,6 +370,7 @@ export default function Automations() {
     });
     setStep(0);
     setValidationMessage(null);
+    unsaved.initialize();
     setIsSheetOpen(true);
   }
 
@@ -384,6 +402,7 @@ export default function Automations() {
 
   const submitAutomation = handleSubmit(
     (formValues) => {
+      if (!inventoryReady()) return;
       setValidationMessage(null);
       upsertMutation.mutate(
         {
@@ -446,7 +465,7 @@ export default function Automations() {
           <Sheet
             open={isSheetOpen()}
             onOpenChange={(open) =>
-              open ? setIsSheetOpen(true) : closeSheet()
+              open ? setIsSheetOpen(true) : unsaved.request(closeSheet)
             }
           >
             <SheetContent class="flex w-full flex-col gap-0 p-0 sm:max-w-2xl lg:max-w-3xl">
@@ -757,7 +776,7 @@ export default function Automations() {
                     type="button"
                     size="sm"
                     variant="ghost"
-                    onClick={closeSheet}
+                    onClick={() => unsaved.request(closeSheet)}
                   >
                     Cancel
                   </Button>
@@ -781,7 +800,9 @@ export default function Automations() {
                         <Button
                           type="submit"
                           size="sm"
-                          disabled={upsertMutation.isPending}
+                          disabled={
+                            upsertMutation.isPending || !inventoryReady()
+                          }
                         >
                           {editingId()
                             ? "Update automation"
@@ -840,8 +861,9 @@ export default function Automations() {
             </div>
             <Badge variant="outline">Up to 8 actions each</Badge>
           </Flex>
-          <Show
-            when={!automationsInitialLoading()}
+          <CardQueryContent
+            queries={[automations, devicesQuery, scenesQuery]}
+            label="automations"
             fallback={
               <Grid
                 cols={1}
@@ -1006,9 +1028,10 @@ export default function Automations() {
                 </For>
               </Grid>
             </Show>
-          </Show>
+          </CardQueryContent>
         </Flex>
       </CardContent>
+      <unsaved.Confirmation />
     </Card>
   );
 }

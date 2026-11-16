@@ -1,3 +1,4 @@
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
 import { z } from "zod";
@@ -12,6 +13,7 @@ import { toast } from "solid-sonner";
 import { Alert, AlertDescription, AlertTitle } from "~/components/alert";
 import { AutomationBuilder } from "~/components/automation-builder";
 import { Badge } from "~/components/badge";
+import { CardQueryContent } from "~/components/card-query-content";
 import { Button } from "~/components/button";
 import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
@@ -100,8 +102,8 @@ export default function Scenes() {
   const [isSheetOpen, setIsSheetOpen] = createSignal(false);
   const [sceneActions, setSceneActions] = createSignal<ActionDraft[]>([]);
   const [actionError, setActionError] = createSignal<string | null>(null);
-  const { errors, handleSubmit, register, reset } = createForm<SceneFormValues>(
-    {
+  const { errors, handleSubmit, register, reset, values } =
+    createForm<SceneFormValues>({
       defaultValues: { name: "" },
       mode: "onSubmit",
       resolver: async (formValues: SceneFormValues) => {
@@ -118,9 +120,22 @@ export default function Scenes() {
           ),
         };
       },
-    },
-  );
+    });
+  const unsaved = createUnsavedChanges({
+    open: isSheetOpen,
+    values: () => ({ name: values().name, actions: sceneActions() }),
+    label: "scene",
+  });
+
   const shouldShowToast = createToastGate();
+
+  const inventoryReady = () =>
+    devicesQuery.data !== undefined &&
+    !devicesQuery.isPlaceholderData &&
+    !devicesQuery.error &&
+    scenesQuery.data !== undefined &&
+    !scenesQuery.isPlaceholderData &&
+    !scenesQuery.error;
 
   const response = () => scenesQuery.data ?? fallbackScenes;
   const devices = () => devicesQuery.data?.devices ?? fallbackDevices.devices;
@@ -130,9 +145,10 @@ export default function Scenes() {
     automations().filter((automation) =>
       automation.actions.includes(`scene|${sceneId}`),
     );
-  const isInitialLoading = () => scenesQuery.isFetching && !scenesQuery.data;
+  const isInitialLoading = () =>
+    scenesQuery.data === undefined || scenesQuery.isPlaceholderData;
   const devicesInitialLoading = () =>
-    devicesQuery.isFetching && !devicesQuery.data;
+    devicesQuery.data === undefined || devicesQuery.isPlaceholderData;
 
   const resetForm = () => {
     setEditingId(null);
@@ -148,6 +164,7 @@ export default function Scenes() {
 
   const createScene = () => {
     resetForm();
+    unsaved.initialize();
     setIsSheetOpen(true);
   };
 
@@ -156,10 +173,12 @@ export default function Scenes() {
     setSceneActions(scene.actions.map(decodeAction));
     setActionError(null);
     reset({ name: scene.name });
+    unsaved.initialize();
     setIsSheetOpen(true);
   };
 
   const submitScene = (formValues: SceneFormValues) => {
+    if (!inventoryReady()) return;
     const validation = validateAutomationDraft(
       formValues.name,
       { type: "manual" },
@@ -287,8 +306,9 @@ export default function Scenes() {
             </Flex>
             <Separator />
 
-            <Show
-              when={!isInitialLoading()}
+            <CardQueryContent
+              queries={[scenesQuery, devicesQuery, automationsQuery]}
+              label="scenes"
               fallback={
                 <Grid class="gap-4" aria-busy="true" aria-live="polite">
                   <For each={[0, 1]}>
@@ -407,13 +427,24 @@ export default function Scenes() {
                               title={`Delete ${scene.name}?`}
                               description="The scene cannot be deleted while an automation references it. Remove those actions first; Core Pilot never silently rewrites automations."
                               confirmLabel="Delete scene"
-                              disabled={deleteMutation.isPending}
+                              disabled={
+                                deleteMutation.isPending ||
+                                automationsQuery.data === undefined ||
+                                automationsQuery.isPlaceholderData ||
+                                Boolean(automationsQuery.error)
+                              }
                               blockedReason={
-                                references().length > 0
-                                  ? `Used by: ${references()
-                                      .map((automation) => automation.name)
-                                      .join(", ")}. Remove those actions first.`
-                                  : undefined
+                                automationsQuery.data === undefined ||
+                                automationsQuery.isPlaceholderData ||
+                                automationsQuery.error
+                                  ? "Automation references could not be verified. Refresh automations before deleting this scene."
+                                  : references().length > 0
+                                    ? `Used by: ${references()
+                                        .map((automation) => automation.name)
+                                        .join(
+                                          ", ",
+                                        )}. Remove those actions first.`
+                                    : undefined
                               }
                               onConfirm={() =>
                                 deleteMutation.mutateAsync({ id: scene.id })
@@ -426,7 +457,7 @@ export default function Scenes() {
                   </For>
                 </Grid>
               </Show>
-            </Show>
+            </CardQueryContent>
           </Flex>
         </CardContent>
       </Card>
@@ -435,7 +466,7 @@ export default function Scenes() {
         open={isSheetOpen()}
         onOpenChange={(open) => {
           if (open) setIsSheetOpen(true);
-          else closeSheet();
+          else unsaved.request(closeSheet);
         }}
       >
         <SheetContent class="flex w-full max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl lg:max-w-5xl">
@@ -517,16 +548,24 @@ export default function Scenes() {
             </div>
 
             <SheetFooter class="shrink-0 gap-2 border-t bg-background px-6 py-4">
-              <Button type="button" variant="outline" onClick={closeSheet}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => unsaved.request(closeSheet)}
+              >
                 Cancel
               </Button>
-              <Button type="submit" disabled={upsertMutation.isPending}>
+              <Button
+                type="submit"
+                disabled={upsertMutation.isPending || !inventoryReady()}
+              >
                 {editingId() ? "Update scene" : "Create scene"}
               </Button>
             </SheetFooter>
           </form>
         </SheetContent>
       </Sheet>
+      <unsaved.Confirmation />
     </section>
   );
 }
