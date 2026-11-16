@@ -4083,6 +4083,7 @@ for (const [platform, label, shortcut] of [
     });
     await expect(trigger).toBeVisible();
     await expect(trigger).toHaveAttribute("aria-keyshortcuts", shortcut);
+    await expectAccessible(page);
     await page.keyboard.press(shortcut);
     await expect(
       page.getByRole("dialog", { name: "Command palette" }),

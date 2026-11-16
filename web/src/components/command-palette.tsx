@@ -146,7 +146,7 @@ export function CommandPalette() {
         onClick={() => setOpen(true)}
       >
         <HiOutlineMagnifyingGlass />
-        Search
+        Search{" "}
         <kbd
           aria-hidden="true"
           class="rounded border bg-muted px-1.5 py-0.5 text-[0.65rem] text-muted-foreground"
