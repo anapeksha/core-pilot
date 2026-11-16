@@ -42,7 +42,6 @@
           "--background-index",
           "--enable-config",
           "--clang-tidy",
-
           "--header-insertion=never",
         ],
       },
