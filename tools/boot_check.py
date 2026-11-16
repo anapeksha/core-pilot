@@ -97,7 +97,7 @@ def check_http(base_url: str, timeout: float = 5) -> None:
         except (ValueError, UnicodeError):
             raise ValueError("HTTP response is not valid JSON") from None
         if not isinstance(result, dict):
-            raise ValueError("HTTP response must be an object")
+            raise TypeError("HTTP response must be an object")
         return result
 
     def require_idle() -> None:
