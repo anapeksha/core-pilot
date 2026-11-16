@@ -137,12 +137,15 @@ export function CommandPalette() {
         variant="outline"
         size="sm"
         class="ml-auto hidden gap-2 sm:inline-flex"
-        aria-label="Open command palette"
+        aria-label="Search ⌘K — open command palette"
         onClick={() => setOpen(true)}
       >
         <HiOutlineMagnifyingGlass />
         Search
-        <kbd class="rounded border bg-muted px-1.5 py-0.5 text-[0.65rem] text-muted-foreground">
+        <kbd
+          aria-hidden="true"
+          class="rounded border bg-muted px-1.5 py-0.5 text-[0.65rem] text-muted-foreground"
+        >
           ⌘K
         </kbd>
       </Button>

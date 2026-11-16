@@ -1,7 +1,8 @@
 import type { ValidComponent } from "solid-js";
-import { splitProps } from "solid-js";
+import { createEffect, onCleanup, splitProps } from "solid-js";
 
 import * as ContextMenuPrimitive from "@kobalte/core/context-menu";
+import { useMenuContext } from "@kobalte/core/menu";
 import type { PolymorphicProps } from "@kobalte/core/polymorphic";
 
 import { cn } from "~/lib/utils";
@@ -17,7 +18,23 @@ const ContextMenuContent = <T extends ValidComponent = "div">(
 ) => {
   const [local, others] = splitProps(props as ContextMenuContentProps, [
     "class",
+    "onKeyDown",
   ]);
+  const menu = useMenuContext();
+  createEffect(() => {
+    if (!menu.isOpen()) return;
+    const trigger = menu.triggerRef();
+    if (!trigger) return;
+    // Right-click can leave focus on the trigger until deferred menu autofocus.
+    // Let Tab leave normally even during that window, without a global listener.
+    const onTriggerKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Tab") menu.close(true);
+    };
+    trigger.addEventListener("keydown", onTriggerKeyDown, true);
+    onCleanup(() =>
+      trigger.removeEventListener("keydown", onTriggerKeyDown, true),
+    );
+  });
   return (
     <ContextMenuPrimitive.Portal>
       <ContextMenuPrimitive.Content
@@ -26,6 +43,13 @@ const ContextMenuContent = <T extends ValidComponent = "div">(
           local.class,
         )}
         {...others}
+        onKeyDown={(event) => {
+          const handler = local.onKeyDown;
+          if (typeof handler === "function") handler(event);
+          else handler?.[0](handler[1], event);
+          // Tab exits the menu instead of reaching Kobalte's Tab-prevention handler.
+          if (event.key === "Tab") menu.close(true);
+        }}
       />
     </ContextMenuPrimitive.Portal>
   );
@@ -41,7 +65,7 @@ const ContextMenuItem = <T extends ValidComponent = "div">(
   return (
     <ContextMenuPrimitive.Item
       class={cn(
-        "relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none data-[disabled]:pointer-events-none data-[disabled]:cursor-not-allowed data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[disabled]:opacity-50",
         local.class,
       )}
       {...others}

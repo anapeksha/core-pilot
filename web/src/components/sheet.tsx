@@ -119,6 +119,7 @@ const SheetContent = <T extends ValidComponent = "div">(
               stroke-linecap="round"
               stroke-linejoin="round"
               class="size-4"
+              aria-hidden="true"
             >
               <path d="M18 6l-12 12" />
               <path d="M6 6l12 12" />

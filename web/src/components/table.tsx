@@ -6,7 +6,12 @@ import { cn } from "~/lib/utils";
 const Table: Component<ComponentProps<"table">> = (props) => {
   const [local, others] = splitProps(props, ["class"]);
   return (
-    <div class="relative w-full overflow-auto">
+    <div
+      class="relative w-full overflow-auto focus-visible:outline-2 focus-visible:outline-ring"
+      tabindex="0"
+      role="region"
+      aria-label="Scrollable table"
+    >
       <table
         class={cn("w-full caption-bottom text-sm", local.class)}
         {...others}

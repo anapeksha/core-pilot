@@ -206,6 +206,8 @@ export default function Activity() {
                                       )
                                     }
                                     data-index={virtualRow.index}
+                                    aria-posinset={virtualRow.index + 1}
+                                    aria-setsize={filteredEvents().length}
                                     class="absolute top-0 left-0 w-full pb-2"
                                     style={{
                                       transform: `translateY(${virtualRow.start}px)`,

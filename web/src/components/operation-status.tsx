@@ -31,10 +31,9 @@ function OperationStatus(props: OperationStatusProps) {
     <section
       class={cn("space-y-3 rounded-lg border bg-card p-4", props.class)}
       aria-label={props.title}
-      aria-live="polite"
     >
       <Flex alignItems="start" class="gap-3">
-        <div class="min-w-0 flex-1 space-y-1">
+        <div class="min-w-0 flex-1 space-y-1" role="status">
           <Flex justifyContent="start" class="gap-2">
             <Show when={props.active}>
               <Spinner />
@@ -63,6 +62,9 @@ function OperationStatus(props: OperationStatusProps) {
             minValue={0}
             maxValue={props.total}
             aria-label={`${props.title} progress`}
+            getValueLabel={({ value, max }) =>
+              `${value} / ${max}${props.unit ? ` ${props.unit}` : ""}`
+            }
           />
         </div>
       </Show>

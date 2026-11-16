@@ -210,6 +210,7 @@ export default function Devices() {
   const [forgottenDevice, setForgottenDevice] = createSignal<Device | null>(
     null,
   );
+
   const [operationFeedback, setOperationFeedback] = createSignal<{
     title: string;
     detail: string;
@@ -400,7 +401,7 @@ export default function Devices() {
                 </div>
               </Flex>
               <div class="scroll-fade-x min-w-0 overflow-x-auto">
-                <ContextMenu>
+                <ContextMenu modal={false}>
                   <ContextMenuTrigger>
                     <Table>
                       <TableHeader>
@@ -566,7 +567,7 @@ export default function Devices() {
                             <ContextMenuSeparator />
                             <ContextMenuItem
                               class="text-error data-[highlighted]:text-error"
-                              aria-label={`Remove ${device.name}`}
+                              aria-label={`Remove device… ${device.name}`}
                               disabled={
                                 removeMutation.isPending || !device.node_id
                               }
