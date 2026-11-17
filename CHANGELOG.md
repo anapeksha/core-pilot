@@ -4,14 +4,30 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-17
+
 ### Changed
 
 - Manage assistant prompt files and saved context together, with a shared editor and a simpler, unnested layout.
+- Add saved-context creation and confirmed encrypted deletion, searchable lists, UTF-8 byte counts, and explicit unsaved/revert controls.
+- Prefill nonsecret provider settings and protect provider edits and unsent chat drafts from accidental dismissal.
 
 ### Fixed
 
 - Render Markdown with a full parser, sanitized output, readable typography, and keyboard-accessible code and table scrolling. Disable embedded resources and preserve drafts across preview changes.
 - Prevent saving built-in fallback prompts over encrypted overrides that could not be loaded.
+- Clear entered provider credentials when their scope changes and prevent dismissal races during provider saves.
+- Reconcile accepted prompt and saved-context changes before closing the editor so immediate reopening uses the saved content.
+
+### Tests
+
+- Expand sanitizer-backed native coverage for production AI/domain repositories, request validation, and encrypted records using real PSA cryptography; isolate test cases so a failing case does not hide remaining results.
+- Cover saved-context mutations, provider credential handling, unsaved edits, and immediate editor reopening in dashboard regression tests.
+
+### Known limitations
+
+- The v0.2.1 firmware has not been validated on a device. Native and browser tests do not establish hardware readiness.
+- Matter-over-Thread readiness, long-duration hardware stability, and manual screen-reader interoperability remain unverified. This release is not CSA Matter certified.
 
 ## [0.2.0] - 2026-11-17
 
@@ -234,7 +250,8 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Matter-over-Thread and Thread Border Router readiness have not yet been demonstrated on hardware.
 - This release candidate is not CSA Matter certified and does not claim formal Matter specification compliance.
 
-[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/anapeksha/core-pilot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/anapeksha/core-pilot/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/anapeksha/core-pilot/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/anapeksha/core-pilot/compare/v0.1.2...v0.1.3

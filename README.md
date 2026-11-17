@@ -49,6 +49,8 @@ Core Pilot currently serves the dashboard over the trusted local network using H
 
 ## Install a release
 
+See the [v0.2.1 changelog](CHANGELOG.md#021---2026-11-17) for assistant editing changes, fixes, and validation limitations. The v0.2.1 firmware has not been validated on a device.
+
 Download the assets for the desired version from GitHub Releases:
 
 - `core-pilot-<version>.bin` is the single merged image for first-time installation.
