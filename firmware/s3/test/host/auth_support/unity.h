@@ -45,9 +45,12 @@ inline void check(bool condition, int line) {
 #define TEST_ASSERT_EQUAL_UINT32 TEST_ASSERT_EQUAL
 #define TEST_ASSERT_EQUAL_UINT64 TEST_ASSERT_EQUAL
 #define TEST_ASSERT_EQUAL_INT TEST_ASSERT_EQUAL
+#define TEST_ASSERT_EQUAL_CHAR TEST_ASSERT_EQUAL
 #define TEST_ASSERT_EQUAL_HEX8 TEST_ASSERT_EQUAL
 #define TEST_ASSERT_EQUAL_HEX64 TEST_ASSERT_EQUAL
 #define TEST_ASSERT_NOT_EQUAL(a, b) auth_test::check((a) != (b), __LINE__)
+#define TEST_ASSERT_NULL(a) auth_test::check((a) == nullptr, __LINE__)
+#define TEST_ASSERT_EQUAL_MEMORY(a, b, size) auth_test::check(std::memcmp((a), (b), (size)) == 0, __LINE__)
 #define TEST_ASSERT_NOT_NULL(a) auth_test::check((a) != nullptr, __LINE__)
 #define TEST_ASSERT_EQUAL_STRING(a, b) auth_test::check(std::strcmp((a), (b)) == 0, __LINE__)
 #define TEST_ASSERT_GREATER_THAN_UINT32(a, b) auth_test::check((b) > (a), __LINE__)

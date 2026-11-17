@@ -4,6 +4,7 @@
 #include <cstring>
 #include <unity.h>
 #include <unity_test_runner.h>
+#include <vector>
 
 using namespace core_pilot::ai;
 
@@ -17,6 +18,32 @@ ProviderConfig openai_config() {
   config.api_key[0] = 'x';
   return config;
 }
+
+class MemoryStore final : public core_security::EncryptedStore {
+public:
+  std::vector<std::uint8_t> record;
+  bool fail_write{};
+  unsigned writes{};
+  core_security::Status write_atomic(const char*, std::size_t, const std::uint8_t* bytes,
+                                     std::size_t size) override {
+    if (fail_write)
+      return core_security::Status::IoError;
+    record.assign(bytes, bytes + size);
+    ++writes;
+    return core_security::Status::Ok;
+  }
+  core_security::Status read(const char*, std::size_t, std::uint8_t* bytes, std::size_t capacity,
+                             std::size_t& size) override {
+    size = 0;
+    if (record.empty())
+      return core_security::Status::NotFound;
+    if (record.size() > capacity)
+      return core_security::Status::BufferTooSmall;
+    size = record.size();
+    std::memcpy(bytes, record.data(), size);
+    return core_security::Status::Ok;
+  }
+};
 
 } // namespace
 
@@ -32,6 +59,55 @@ TEST_CASE("AI memory identifiers enforce exact byte and alphabet bounds", "[core
   TEST_ASSERT_FALSE(valid_memory_id(nullptr));
   TEST_ASSERT_FALSE(valid_memory_id("room/history"));
   TEST_ASSERT_FALSE(valid_memory_id("room name"));
+}
+
+TEST_CASE("AI memory removal persists absence without losing other sections", "[core_ai]") {
+  core_security::DeviceSeed seed;
+  std::uint8_t seed_bytes[core_security::kSeedBytes]{};
+  seed.assign(seed_bytes);
+  MemoryStore store;
+  core_security::StorageService storage(seed, store);
+  core_security::EspHardwareRandom random;
+  MemoryRepository memory(storage, random);
+  TEST_ASSERT_EQUAL(Status::NotReady, memory.remove("one"));
+  TEST_ASSERT_EQUAL(Status::Ok, memory.start());
+  TEST_ASSERT_EQUAL(Status::InvalidArgument, memory.remove("../bad"));
+  TEST_ASSERT_EQUAL(Status::NotFound, memory.remove("one"));
+  const std::uint8_t text[] = "private context";
+  TEST_ASSERT_EQUAL(Status::Ok, memory.upsert("one", text, sizeof text - 1));
+  TEST_ASSERT_EQUAL(Status::Ok, memory.upsert("two", text, sizeof text - 1));
+  const auto original = store.record;
+  store.fail_write = true;
+  TEST_ASSERT_EQUAL(Status::StorageError, memory.remove("one"));
+  TEST_ASSERT_TRUE(original == store.record);
+  store.fail_write = false;
+  TEST_ASSERT_EQUAL(Status::Ok, memory.remove("one"));
+  MemoryRepository reopened(storage, random);
+  TEST_ASSERT_EQUAL(Status::Ok, reopened.start());
+  std::uint8_t output[64]{};
+  std::size_t size{};
+  TEST_ASSERT_EQUAL(Status::NotFound, reopened.get("one", output, sizeof output, size));
+  TEST_ASSERT_EQUAL(Status::Ok, reopened.get("two", output, sizeof output, size));
+  TEST_ASSERT_EQUAL_MEMORY(text, output, sizeof text - 1);
+  const unsigned writes = store.writes;
+  TEST_ASSERT_EQUAL(Status::NotFound, reopened.remove("one"));
+  TEST_ASSERT_EQUAL_UINT(writes, store.writes);
+  const auto intact = store.record;
+  store.record.back() ^= 1;
+  TEST_ASSERT_EQUAL(Status::CorruptData, reopened.remove("two"));
+  TEST_ASSERT_EQUAL_UINT(writes, store.writes);
+  store.record = intact;
+  TEST_ASSERT_EQUAL(Status::Ok, reopened.remove("two"));
+  unsigned visited = 0;
+  TEST_ASSERT_EQUAL(Status::Ok, reopened.visit(
+                                    [](const MemorySectionView&, void* context) {
+                                      ++*static_cast<unsigned*>(context);
+                                      return true;
+                                    },
+                                    &visited));
+  TEST_ASSERT_EQUAL_UINT(0, visited);
+  TEST_ASSERT_EQUAL(Status::NotFound, reopened.get("two", output, sizeof output, size));
+  TEST_ASSERT_FALSE(store.record.empty());
 }
 
 TEST_CASE("AI prompt paths allow portable path syntax within byte bounds", "[core_ai]") {

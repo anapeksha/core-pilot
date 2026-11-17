@@ -107,6 +107,8 @@ public:
   Status get(const char* id, std::uint8_t* markdown, std::size_t capacity,
              std::size_t& markdown_size);
   Status upsert(const char* id, const std::uint8_t* markdown, std::size_t markdown_size);
+  // Atomically rewrites the encrypted collection; missing IDs do not write storage.
+  Status remove(const char* id);
 
 private:
   struct State;

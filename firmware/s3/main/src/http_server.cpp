@@ -2459,9 +2459,23 @@ esp_err_t aiStatusHandler(httpd_req_t* request, HttpRuntime& runtime) {
   ai::ProviderConfig provider{};
   const ai::Status provider_status = runtime.ai_storage.provider.load(provider);
   const bool configured = provider_status == ai::Status::Ok;
-  ai::clear_provider_config(provider);
-
   cJSON* response = cJSON_CreateObject();
+  if (configured) {
+    cJSON* summary = cJSON_AddObjectToObject(response, "provider");
+    cJSON_AddStringToObject(summary, "backend",
+                            provider.backend == ai::ProviderBackend::OpenAiCompatible
+                                ? "open_ai_compatible"
+                                : "anthropic_compatible");
+    cJSON_AddStringToObject(summary, "auth_type",
+                            provider.auth_type == ai::AuthType::Bearer   ? "bearer"
+                            : provider.auth_type == ai::AuthType::ApiKey ? "api_key"
+                                                                         : "none");
+    cJSON_AddStringToObject(summary, "base_url", provider.base_url);
+    cJSON_AddStringToObject(summary, "model", provider.model);
+    cJSON_AddNumberToObject(summary, "max_output_tokens", provider.max_output_tokens);
+    cJSON_AddNumberToObject(summary, "timeout_ms", provider.timeout_ms);
+  }
+  ai::clear_provider_config(provider);
   cJSON_AddBoolToObject(response, "enabled", false);
   cJSON_AddBoolToObject(response, "provider_configured", configured);
   cJSON_AddBoolToObject(response, "mcp_enabled", true);
@@ -2629,6 +2643,50 @@ esp_err_t aiContentHandler(httpd_req_t* request, bool prompt) {
                         prompt ? core_domain::error_code::AI_PROMPT_INVALID
                                : core_domain::error_code::AI_MEMORY_TOO_LARGE,
                         prompt ? "Encrypted AI prompt saved." : "Encrypted AI memory saved.");
+}
+
+esp_err_t aiMemoryRemoveHandler(httpd_req_t* request) {
+  auto* runtime = static_cast<HttpRuntime*>(request->user_ctx);
+  RequestBody body(core_domain::max_json_body + 1);
+  std::size_t received{};
+  cJSON* document = nullptr;
+  const auto* contract = core_domain::find_contract("POST", "/api/v1/ai/memory/remove");
+  if (!runtime || !body || !contract)
+    return httpd_resp_send_err(request, HTTPD_500_INTERNAL_SERVER_ERROR, "AI removal unavailable");
+  if (readRequestBody(request, body.data(), body.capacity(), received) != ESP_OK)
+    return ESP_FAIL;
+  if (core_domain::parse_contract_request(*contract, body.data(), received, document) !=
+      core_domain::ApiError::ok)
+    return httpd_resp_send_err(request, HTTPD_400_BAD_REQUEST, "Invalid memory removal request");
+  core_domain::ModelUpsert input{};
+  copyJsonString(cJSON_GetObjectItemCaseSensitive(document, "id"), input.id, sizeof input.id);
+  core_domain::delete_json_sensitive(document);
+  ModelRepository::Result result{};
+  if (!runtime->models.submit(ModelRepository::Mutation::remove_ai_memory,
+                              core_domain::ModelKind::room, input, result,
+                              &runtime->ai_storage.memory)) {
+    cJSON* response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "accepted", false);
+    cJSON_AddStringToObject(response, "status", "AI_MEMORY_BUSY");
+    cJSON_AddStringToObject(response, "detail", "The storage owner is unavailable or busy.");
+    return sendJson(request, response);
+  }
+  if (result.ai_status == ai::Status::NotFound) {
+    cJSON* response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "accepted", false);
+    cJSON_AddStringToObject(response, "status", "AI_MEMORY_NOT_FOUND");
+    cJSON_AddStringToObject(response, "detail", "The saved memory section was not found.");
+    return sendJson(request, response);
+  }
+  if (result.ai_status == ai::Status::Ok) {
+    cJSON* response = cJSON_CreateObject();
+    cJSON_AddBoolToObject(response, "accepted", true);
+    cJSON_AddStringToObject(response, "status", "removed");
+    cJSON_AddStringToObject(response, "detail", "Encrypted AI memory removed.");
+    return sendJson(request, response);
+  }
+  return sendAiMutation(request, result.ai_status, "AI_MEMORY_INVALID",
+                        "Encrypted AI memory removed.");
 }
 
 esp_err_t aiMemoryMutationHandler(httpd_req_t* request) {
@@ -3282,6 +3340,10 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
                               .method = HTTP_POST,
                               .handler = aiMemoryMutationHandler,
                               .user_ctx = const_cast<HttpRuntime*>(&runtime)};
+  const httpd_uri_t ai_memory_remove{.uri = "/api/v1/ai/memory/remove",
+                                     .method = HTTP_POST,
+                                     .handler = aiMemoryRemoveHandler,
+                                     .user_ctx = const_cast<HttpRuntime*>(&runtime)};
   const httpd_uri_t ai_prompt{.uri = "/api/v1/ai/prompts/file",
                               .method = HTTP_POST,
                               .handler = aiPromptMutationHandler,
@@ -3343,6 +3405,7 @@ httpd_handle_t startHttpServer(const HttpRuntime& runtime) {
       registerHttpAccessRoute(server, &wifi_scan_page) != ESP_OK ||
       registerHttpAccessRoute(server, &ai_provider) != ESP_OK ||
       registerHttpAccessRoute(server, &ai_memory) != ESP_OK ||
+      registerHttpAccessRoute(server, &ai_memory_remove) != ESP_OK ||
       registerHttpAccessRoute(server, &ai_prompt) != ESP_OK ||
       registerHttpAccessRoute(server, &ai_chat) != ESP_OK ||
       registerHttpAccessRoute(server, &ai_chat_status) != ESP_OK ||

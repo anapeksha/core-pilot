@@ -9,6 +9,7 @@ import {
 import { createForm } from "solid-hook-form";
 import { toast } from "solid-sonner";
 
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
 import { createToastGate } from "~/lib/toast";
 import { z } from "zod";
 
@@ -52,7 +53,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "~/components/sheet";
-import { Skeleton } from "~/components/skeleton";
 
 import {
   TextField,
@@ -70,16 +70,10 @@ import {
   type AiChatHistoryMessage,
   type AiChatMessage,
   type AiChatResponse,
-  type AiMemorySection,
 } from "../lib/api";
 
+import { aiChatMutation, aiProviderMutation } from "../mutations/ai";
 import {
-  aiChatMutation,
-  aiMemoryMutation,
-  aiProviderMutation,
-} from "../mutations/ai";
-import {
-  aiMemoryQuery as createAiMemoryQuery,
   aiQuery as createAiQuery,
   mcpToolsQuery as createMcpToolsQuery,
 } from "../queries/ai";
@@ -116,6 +110,8 @@ export function isOfficialProviderBaseUrl(value: string): boolean {
 }
 
 const providerSchema = z.object({
+  backend: z.enum(["open_ai_compatible", "anthropic_compatible"]),
+  authType: z.enum(["bearer", "api_key", "none"]),
   baseUrl: bytesAtMost(entityLimits.providerUrl, "Base URL is too long.")
     .refine((value) => value.trim().length > 0, "Enter a base URL.")
     .refine(
@@ -142,16 +138,8 @@ const providerSchema = z.object({
   ),
 });
 
-const memorySchema = z.object({
-  markdown: bytesAtMost(
-    entityLimits.memoryMarkdown,
-    "Memory must be 12 KiB or less.",
-  ),
-});
-
 type ChatFormValues = z.input<typeof chatSchema>;
 type ProviderFormValues = z.input<typeof providerSchema>;
-type MemoryFormValues = z.input<typeof memorySchema>;
 
 function zodResolver<T>(schema: z.ZodType<T>) {
   return async (values: T) => {
@@ -351,64 +339,6 @@ const ChatMessage: Component<{
   );
 };
 
-const MemorySectionForm: Component<{
-  section: AiMemorySection;
-  pending: boolean;
-  onSave: (markdown: string) => void;
-}> = (props) => {
-  const { errors, handleSubmit, register, reset, values } =
-    createForm<MemoryFormValues>({
-      defaultValues: { markdown: props.section.markdown },
-      mode: "onSubmit",
-      resolver: zodResolver(memorySchema),
-    });
-
-  createEffect(() => reset({ markdown: props.section.markdown }));
-
-  return (
-    <form
-      onSubmit={handleSubmit((formValues) => props.onSave(formValues.markdown))}
-    >
-      <Card>
-        <CardHeader class="flex-row items-start justify-between">
-          <CardTitle>{props.section.title}</CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            onClick={() => reset({ markdown: props.section.markdown })}
-          >
-            Reset
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <TextField validationState={errors.markdown ? "invalid" : "valid"}>
-            <TextFieldLabel for={`memory-${props.section.id}`} class="sr-only">
-              {props.section.title} markdown
-            </TextFieldLabel>
-            <TextFieldTextArea
-              {...register("markdown")}
-              id={`memory-${props.section.id}`}
-              value={values().markdown}
-              class="min-h-36 font-mono text-xs"
-            />
-            <Show when={errors.markdown?.message}>
-              {(message) => (
-                <TextFieldErrorMessage>{message()}</TextFieldErrorMessage>
-              )}
-            </Show>
-          </TextField>
-        </CardContent>
-        <CardFooter class="justify-end">
-          <Button size="sm" type="submit" disabled={props.pending}>
-            Save encrypted
-          </Button>
-        </CardFooter>
-      </Card>
-    </form>
-  );
-};
-
 const MAX_RENDERED_CHAT_MESSAGES = 50;
 
 function appendChatMessage(
@@ -420,22 +350,20 @@ function appendChatMessage(
 
 const AiAssistant: Component = () => {
   const aiQuery = createAiQuery();
-  const memoryQuery = createAiMemoryQuery();
   const toolsQuery = createMcpToolsQuery();
 
   const providerMutation = aiProviderMutation();
   const chatMutation = aiChatMutation();
-  const memoryMutation = aiMemoryMutation();
 
-  const [providerMode, setProviderMode] =
-    createSignal<ProviderMode>("openai-compatible");
-  const [providerBackend, setProviderBackend] = createSignal<
-    SelectOption<ProviderBackend>
-  >(providerBackendOptions[0]);
-  const [providerAuthType, setProviderAuthType] = createSignal<
-    SelectOption<ProviderAuthType>
-  >(providerAuthOptions[0]);
-
+  const providerDefaults: ProviderFormValues = {
+    backend: "open_ai_compatible",
+    authType: "bearer",
+    baseUrl: "https://api.openai.com/v1",
+    model: "gpt-4o-mini",
+    maxOutputTokens: "1024",
+    timeoutMs: "30000",
+    apiKey: "",
+  };
   const [providerSheetOpen, setProviderSheetOpen] = createSignal(false);
   const {
     errors: providerErrors,
@@ -443,14 +371,10 @@ const AiAssistant: Component = () => {
     register: registerProvider,
     reset: resetProvider,
     values: providerValues,
+    setValue: setProviderValue,
+    formState: providerFormState,
   } = createForm<ProviderFormValues>({
-    defaultValues: {
-      baseUrl: "https://api.openai.com/v1",
-      model: "gpt-4o-mini",
-      maxOutputTokens: "1024",
-      timeoutMs: "30000",
-      apiKey: "",
-    },
+    defaultValues: providerDefaults,
     mode: "onSubmit",
     resolver: zodResolver(providerSchema),
   });
@@ -460,6 +384,7 @@ const AiAssistant: Component = () => {
     register: registerChat,
     reset: resetChat,
     values: chatValues,
+    formState: chatFormState,
   } = createForm<ChatFormValues>({
     defaultValues: { message: "" },
     mode: "onSubmit",
@@ -477,16 +402,12 @@ const AiAssistant: Component = () => {
 
   const shouldShowToast = createToastGate();
   createEffect(() => {
-    const success = providerMutation.isSuccess || memoryMutation.isSuccess;
-    const error = providerMutation.isError || memoryMutation.isError;
+    const success = providerMutation.isSuccess;
+    const error = providerMutation.isError;
     const successMessage =
-      providerMutation.data?.detail ??
-      memoryMutation.data?.detail ??
-      "AI settings updated.";
+      providerMutation.data?.detail ?? "AI settings updated.";
     const errorMessage =
-      providerMutation.error?.message ??
-      memoryMutation.error?.message ??
-      "AI settings could not be updated.";
+      providerMutation.error?.message ?? "AI settings could not be updated.";
     const key = success
       ? `success:${successMessage}`
       : error
@@ -497,44 +418,115 @@ const AiAssistant: Component = () => {
     if (error) toast.error(errorMessage);
   });
 
-  const providerDefaults = (): ProviderFormValues => ({
-    baseUrl: "https://api.openai.com/v1",
-    model: "gpt-4o-mini",
-    maxOutputTokens: "1024",
-    timeoutMs: "30000",
-    apiKey: "",
+  // Status metadata is optional on older firmware; credentials are never read.
+  const savedProvider = () =>
+    (
+      ai() as typeof fallbackAi & {
+        provider?: {
+          backend: ProviderBackend;
+          auth_type: ProviderAuthType;
+          base_url: string;
+          model: string;
+          max_output_tokens: number;
+          timeout_ms: number;
+        };
+      }
+    ).provider;
+  const providerMode = () =>
+    providerValues().backend === "open_ai_compatible"
+      ? "openai-compatible"
+      : "anthropic-compatible";
+  const providerBackend = () =>
+    providerBackendOptions.find(
+      (option) => option.value === providerValues().backend,
+    );
+  const providerAuthType = () =>
+    providerAuthOptions.find(
+      (option) => option.value === providerValues().authType,
+    );
+  const unsaved = createUnsavedChanges({
+    open: () => true,
+    dirty: () =>
+      (providerSheetOpen() && providerFormState.isDirty()) ||
+      chatFormState.isDirty(),
+    label: "provider settings or unsent chat draft",
   });
 
-  function closeProviderSheet() {
+  function openProviderSheet() {
+    if (providerMutation.isPending) return;
+    const saved = savedProvider();
+    Object.assign(providerDefaults, {
+      backend: saved?.backend ?? "open_ai_compatible",
+      authType: saved?.auth_type ?? "bearer",
+      baseUrl: saved?.base_url ?? "https://api.openai.com/v1",
+      model: saved?.model ?? "gpt-4o-mini",
+      maxOutputTokens: String(saved?.max_output_tokens ?? 1024),
+      timeoutMs: String(saved?.timeout_ms ?? 30000),
+      apiKey: "",
+    });
+    resetProvider({ ...providerDefaults });
+    providerMutation.reset();
+    setProviderSheetOpen(true);
+  }
+
+  function dismissProviderSheet() {
     setProviderSheetOpen(false);
-    setProviderMode("openai-compatible");
-    setProviderBackend(providerBackendOptions[0]);
-    setProviderAuthType(providerAuthOptions[0]);
-    resetProvider(providerDefaults());
+    resetProvider({ ...providerDefaults, apiKey: "" });
+  }
+
+  function closeProviderSheet() {
+    if (providerMutation.isPending) return;
+    if (providerFormState.isDirty()) unsaved.request(dismissProviderSheet);
+    else dismissProviderSheet();
   }
 
   function chooseProvider(mode: ProviderMode) {
-    setProviderMode(mode);
-    if (mode === "openai-compatible") {
-      setProviderBackend(providerBackendOptions[0]);
-      setProviderAuthType(providerAuthOptions[0]);
-      resetProvider({
-        ...providerValues(),
-        baseUrl: "https://api.openai.com/v1",
-        model: "gpt-4o-mini",
-      });
-    } else {
-      setProviderBackend(providerBackendOptions[1]);
-      setProviderAuthType(providerAuthOptions[1]);
-      resetProvider({
-        ...providerValues(),
-        baseUrl: "https://api.anthropic.com/v1",
-        model: "claude-sonnet-4-5",
-      });
-    }
+    if (providerMutation.isPending || mode === providerMode()) return;
+    const openAi = mode === "openai-compatible";
+    setProviderValue("apiKey", "", { shouldDirty: true });
+    setProviderValue(
+      "backend",
+      openAi ? "open_ai_compatible" : "anthropic_compatible",
+      { shouldDirty: true },
+    );
+    setProviderValue("authType", openAi ? "bearer" : "api_key", {
+      shouldDirty: true,
+    });
+    setProviderValue(
+      "baseUrl",
+      openAi ? "https://api.openai.com/v1" : "https://api.anthropic.com/v1",
+      { shouldDirty: true },
+    );
+    setProviderValue("model", openAi ? "gpt-4o-mini" : "claude-sonnet-4-5", {
+      shouldDirty: true,
+    });
   }
 
+  const credentialScope = (values: ProviderFormValues) => {
+    try {
+      const url = new URL(values.baseUrl);
+      return JSON.stringify([
+        url.protocol,
+        url.hostname,
+        url.port || (url.protocol === "https:" ? "443" : "80"),
+        values.backend,
+        values.authType,
+      ]);
+    } catch {
+      return JSON.stringify([values.baseUrl, values.backend, values.authType]);
+    }
+  };
+  let previousScope = credentialScope(providerValues());
+  createEffect(() => {
+    const scope = credentialScope(providerValues());
+    if (scope !== previousScope) {
+      previousScope = scope;
+      setProviderValue("apiKey", "", { shouldDirty: true });
+    }
+  });
+
   const submitProvider = handleProviderSubmit((formValues) => {
+    if (providerMutation.isPending) return;
     const apiKey = formValues.apiKey.trim();
     const openAi = providerMode() === "openai-compatible";
     providerMutation.mutate(
@@ -547,10 +539,19 @@ const AiAssistant: Component = () => {
           max_output_tokens: Number(formValues.maxOutputTokens),
           timeout_ms: Number(formValues.timeoutMs),
           api_key: apiKey || null,
-          api_key_redacted: !apiKey && ai().provider_configured,
+          api_key_redacted:
+            !apiKey &&
+            !!savedProvider() &&
+            credentialScope(formValues) === credentialScope(providerDefaults),
         },
       },
-      { onSuccess: (response) => response.accepted && closeProviderSheet() },
+      {
+        onSuccess: (response) => {
+          if (!response.accepted) return;
+          Object.assign(providerDefaults, formValues, { apiKey: "" });
+          dismissProviderSheet();
+        },
+      },
     );
   });
 
@@ -617,580 +618,558 @@ const AiAssistant: Component = () => {
   );
 
   return (
-    <Card class="w-full overflow-hidden">
-      <CardHeader class="gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <Flex
-          flexDirection="col"
-          alignItems="start"
-          justifyContent="start"
-          class="max-w-3xl gap-2"
-        >
-          <Badge variant="secondary" class="w-fit">
-            Optional assistant
-          </Badge>
-          <h1 class="text-xl font-semibold tracking-tight">
-            Optional Assistant
-          </h1>
-          <CardDescription>
-            Optional chat and setup help. Devices, scenes, schedules,
-            automations, and APIs continue working locally when it is off.
-          </CardDescription>
-        </Flex>
-        <Flex class="w-full flex-wrap gap-2 sm:w-auto">
-          <Button as="a" href="#/ai/tools" variant="outline" size="sm">
-            Permissions
-          </Button>
-          <Button as="a" href="#/ai/prompts" variant="outline" size="sm">
-            Prompt files
-          </Button>
-        </Flex>
-      </CardHeader>
-
-      <CardContent>
-        <Flex
-          flexDirection="col"
-          alignItems="stretch"
-          justifyContent="start"
-          class="gap-5"
-        >
+    <>
+      <unsaved.Confirmation />
+      <Card class="w-full overflow-hidden">
+        <CardHeader class="gap-4 sm:flex-row sm:items-start sm:justify-between">
           <Flex
+            flexDirection="col"
             alignItems="start"
-            class="flex-col gap-5 xl:flex-row xl:items-stretch"
+            justifyContent="start"
+            class="max-w-3xl gap-2"
           >
-            <Card class="flex min-w-0 flex-col xl:min-h-155 xl:flex-[1_1_46rem]">
-              <CardHeader>
-                <Flex justifyContent="start" class="gap-3">
-                  <div
-                    class="grid size-10 place-items-center rounded-2xl bg-muted"
-                    aria-hidden="true"
-                  >
-                    AI
-                  </div>
-                  <Flex
-                    flexDirection="col"
-                    alignItems="start"
-                    justifyContent="start"
-                    class="gap-1"
-                  >
-                    <CardTitle>Chat</CardTitle>
-                    <CardDescription>
-                      Answers can use only the local tools enabled in
-                      Permissions.
-                    </CardDescription>
-                  </Flex>
-                </Flex>
-              </CardHeader>
-              <CardContent
-                role="log"
-                aria-label="Assistant conversation"
-                aria-live="polite"
-                aria-relevant="additions text"
-                tabindex="0"
-                class="scroll-fade flex max-h-96 min-h-48 flex-col gap-4 overflow-y-auto focus-visible:outline-2 focus-visible:outline-ring sm:max-h-112 xl:max-h-none xl:min-h-105 xl:flex-1"
-              >
-                <For each={messages()}>
-                  {(message) => <ChatMessage message={message} />}
-                </For>
-                <Show when={chatMutation.isError}>
-                  <Alert>
-                    <AlertTitle>Provider or request failure</AlertTitle>
-                    <AlertDescription>
-                      {chatMutation.error?.message ??
-                        "The provider request failed before a local tool ran."}
-                    </AlertDescription>
-                  </Alert>
-                </Show>
-                <Show
-                  when={
-                    chatMutation.isPending &&
-                    !messages().some(
-                      (message) =>
-                        message.proposal?.state === "approval_required" ||
-                        message.proposal?.state === "executing",
-                    )
-                  }
-                >
-                  <ChatMessage
-                    pending
-                    message={{
-                      role: "assistant",
-                      content: "Core Pilot is thinking…",
-                    }}
-                  />
-                </Show>
-              </CardContent>
-              <CardFooter>
-                <form class="w-full" onSubmit={sendChat}>
-                  <TextField
-                    validationState={chatErrors.message ? "invalid" : "valid"}
-                  >
-                    <TextFieldLabel for="assistant-message" class="sr-only">
-                      Message Core Pilot
-                    </TextFieldLabel>
-                    <TextFieldTextArea
-                      {...registerChat("message")}
-                      id="assistant-message"
-                      value={chatValues().message}
-                      maxlength={entityLimits.chatMessage}
-                      class="min-h-20 resize-none"
-                      placeholder="Ask Core Pilot to check status, list devices, scenes, or automations…"
-                      onKeyDown={(
-                        event: KeyboardEvent & {
-                          currentTarget: HTMLTextAreaElement;
-                        },
-                      ) => {
-                        if (
-                          (event.metaKey || event.ctrlKey) &&
-                          event.key === "Enter"
-                        ) {
-                          event.preventDefault();
-                          event.currentTarget.form?.requestSubmit();
-                        }
-                      }}
-                    />
-                    <Show when={chatErrors.message?.message}>
-                      {(message) => (
-                        <TextFieldErrorMessage>
-                          {message()}
-                        </TextFieldErrorMessage>
-                      )}
-                    </Show>
-                  </TextField>
-                  <Flex
-                    class="mt-3 flex-col gap-3 sm:flex-row"
-                    alignItems="stretch"
-                  >
-                    <Flex justifyContent="end" class="w-auto gap-3">
-                      <span class="hidden text-xs text-foreground/50 sm:inline">
-                        Ctrl+Enter to send
-                      </span>
-                      <Button
-                        size="sm"
-                        disabled={
-                          !chatValues().message.trim() || chatMutation.isPending
-                        }
-                        type="submit"
-                      >
-                        Send
-                      </Button>
-                    </Flex>
-                  </Flex>
-                </form>
-              </CardFooter>
-            </Card>
+            <Badge variant="secondary" class="w-fit">
+              Optional assistant
+            </Badge>
+            <h1 class="text-xl font-semibold tracking-tight">
+              Optional Assistant
+            </h1>
+            <CardDescription>
+              Optional chat and setup help. Devices, scenes, schedules,
+              automations, and APIs continue working locally when it is off.
+            </CardDescription>
+          </Flex>
+          <Flex class="w-full flex-wrap gap-2 sm:w-auto">
+            <Button as="a" href="#/ai/tools" variant="outline" size="sm">
+              Permissions
+            </Button>
+            <Button as="a" href="#/ai/prompts" variant="outline" size="sm">
+              Prompt files
+            </Button>
+            <Button
+              as="a"
+              href="#/ai/prompts?section=memory"
+              variant="outline"
+              size="sm"
+            >
+              Saved context
+            </Button>
+          </Flex>
+        </CardHeader>
 
-            <div class="min-w-0 space-y-5 xl:flex-[1_1_24rem]">
-              <Card data-assistant-provider-card>
+        <CardContent>
+          <Flex
+            flexDirection="col"
+            alignItems="stretch"
+            justifyContent="start"
+            class="gap-5"
+          >
+            <Flex
+              alignItems="start"
+              class="flex-col gap-5 xl:flex-row xl:items-stretch"
+            >
+              <Card class="flex min-w-0 flex-col xl:min-h-155 xl:flex-[1_1_46rem]">
                 <CardHeader>
-                  <Flex alignItems="start" class="flex-col gap-3 sm:flex-row">
+                  <Flex justifyContent="start" class="gap-3">
+                    <div
+                      class="grid size-10 place-items-center rounded-2xl bg-muted"
+                      aria-hidden="true"
+                    >
+                      AI
+                    </div>
                     <Flex
                       flexDirection="col"
                       alignItems="start"
                       justifyContent="start"
-                      class="min-w-0 gap-1"
+                      class="gap-1"
                     >
-                      <CardTitle>Assistant provider</CardTitle>
+                      <CardTitle>Chat</CardTitle>
                       <CardDescription>
-                        Choose an optional model provider. Local home controls
-                        do not depend on this configuration.
+                        Answers can use only the local tools enabled in
+                        Permissions.
                       </CardDescription>
                     </Flex>
-                    <Badge variant="outline" class="shrink-0">
-                      Encrypted
-                    </Badge>
                   </Flex>
                 </CardHeader>
-                <CardContent>
-                  <p class="text-sm text-muted-foreground">
-                    Provider credentials are configured in a focused setup panel
-                    and are never returned by the status API.
-                  </p>
-                </CardContent>
-                <CardFooter class="justify-end">
-                  <Button
-                    type="button"
-                    onClick={() => setProviderSheetOpen(true)}
-                  >
-                    {ai().provider_configured
-                      ? "Update provider"
-                      : "Add provider"}
-                  </Button>
-                </CardFooter>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Assistant access</CardTitle>
-                  <CardDescription>
-                    Core Pilot keeps tool authorization local and checks it
-                    again before every action.
-                  </CardDescription>
-                </CardHeader>
-                <CardContent class="space-y-2">
-                  <p class="text-2xl font-semibold">{enabledTools().length}</p>
-                  <p class="text-sm text-muted-foreground">
-                    {enabledTools().length === 1
-                      ? "local tool is enabled for chat"
-                      : "local tools are enabled for chat"}
-                  </p>
-                </CardContent>
-                <CardFooter class="justify-end">
-                  <Button as="a" href="#/ai/tools" variant="outline">
-                    Manage permissions
-                  </Button>
-                </CardFooter>
-              </Card>
-
-              <Sheet
-                open={providerSheetOpen()}
-                onOpenChange={(open) =>
-                  open ? setProviderSheetOpen(true) : closeProviderSheet()
-                }
-              >
-                <SheetContent
-                  position="right"
-                  class="flex w-full max-w-none flex-col gap-0 overflow-hidden! p-0 sm:max-w-lg"
+                <CardContent
+                  role="log"
+                  aria-label="Assistant conversation"
+                  aria-live="polite"
+                  aria-relevant="additions text"
+                  tabindex="0"
+                  class="scroll-fade flex max-h-96 min-h-48 flex-col gap-4 overflow-y-auto focus-visible:outline-2 focus-visible:outline-ring sm:max-h-112 xl:max-h-none xl:min-h-105 xl:flex-1"
                 >
-                  <SheetHeader class="shrink-0 border-b px-6 py-5 pr-12">
-                    <SheetTitle>Assistant provider</SheetTitle>
-                    <SheetDescription>
-                      Configure an optional encrypted model provider. Local home
-                      controls do not depend on this configuration.
-                    </SheetDescription>
-                  </SheetHeader>
-                  <form
-                    class="flex min-h-0 flex-1 flex-col"
-                    onSubmit={submitProvider}
-                  >
-                    <div class="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5">
-                      <div
-                        class="grid grid-cols-2 gap-2"
-                        role="group"
-                        aria-label="Provider protocol"
-                      >
-                        <Button
-                          type="button"
-                          variant={
-                            providerMode() === "openai-compatible"
-                              ? "default"
-                              : "outline"
-                          }
-                          onClick={() => chooseProvider("openai-compatible")}
-                        >
-                          OpenAI
-                        </Button>
-                        <Button
-                          type="button"
-                          variant={
-                            providerMode() === "anthropic-compatible"
-                              ? "default"
-                              : "outline"
-                          }
-                          onClick={() => chooseProvider("anthropic-compatible")}
-                        >
-                          Anthropic
-                        </Button>
-                      </div>
-                      <TextField
-                        validationState={
-                          providerErrors.baseUrl ? "invalid" : "valid"
-                        }
-                      >
-                        <TextFieldLabel for="provider-base-url">
-                          Base URL
-                        </TextFieldLabel>
-                        <TextFieldInput
-                          {...registerProvider("baseUrl")}
-                          id="provider-base-url"
-                          value={providerValues().baseUrl}
-                          maxlength={entityLimits.providerUrl}
-                          placeholder="https://api.openai.com/v1"
-                          readOnly
-                          required
-                        />
-                        <TextFieldDescription>
-                          Firmware accepts only the official OpenAI or Anthropic
-                          HTTPS API root on port 443.
-                        </TextFieldDescription>
-                        <Show when={providerErrors.baseUrl?.message}>
-                          {(message) => (
-                            <TextFieldErrorMessage>
-                              {message()}
-                            </TextFieldErrorMessage>
-                          )}
-                        </Show>
-                      </TextField>
-                      <TextField
-                        validationState={
-                          providerErrors.model ? "invalid" : "valid"
-                        }
-                      >
-                        <TextFieldLabel for="provider-model">
-                          Model
-                        </TextFieldLabel>
-                        <TextFieldInput
-                          {...registerProvider("model")}
-                          id="provider-model"
-                          value={providerValues().model}
-                          maxlength={entityLimits.providerModel}
-                          placeholder="Model identifier"
-                          required
-                        />
-                        <Show when={providerErrors.model?.message}>
-                          {(message) => (
-                            <TextFieldErrorMessage>
-                              {message()}
-                            </TextFieldErrorMessage>
-                          )}
-                        </Show>
-                      </TextField>
-                      <Grid colsSm={2} class="gap-5">
-                        <Select<SelectOption<ProviderBackend>>
-                          options={providerBackendOptions}
-                          disabled
-                          optionValue="value"
-                          optionTextValue="label"
-                          value={providerBackend()}
-                          onChange={(value) =>
-                            value && setProviderBackend(value)
-                          }
-                          itemComponent={(props) => (
-                            <SelectItem item={props.item}>
-                              {props.item.rawValue.label}
-                            </SelectItem>
-                          )}
-                        >
-                          <SelectLabel>Backend</SelectLabel>
-                          <SelectTrigger>
-                            <SelectValue<SelectOption<ProviderBackend>>>
-                              {(state) => state.selectedOption().label}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent />
-                        </Select>
-                        <Select<SelectOption<ProviderAuthType>>
-                          options={providerAuthOptions}
-                          disabled
-                          optionValue="value"
-                          optionTextValue="label"
-                          value={providerAuthType()}
-                          onChange={(value) =>
-                            value && setProviderAuthType(value)
-                          }
-                          itemComponent={(props) => (
-                            <SelectItem item={props.item}>
-                              {props.item.rawValue.label}
-                            </SelectItem>
-                          )}
-                        >
-                          <SelectLabel>Auth header</SelectLabel>
-                          <SelectTrigger>
-                            <SelectValue<SelectOption<ProviderAuthType>>>
-                              {(state) => state.selectedOption().label}
-                            </SelectValue>
-                          </SelectTrigger>
-                          <SelectContent />
-                        </Select>
-                      </Grid>
-                      <p class="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-muted-foreground">
-                        OpenAI uses Authorization: Bearer; Anthropic uses
-                        X-API-Key. When you chat, prompts, recent chat history,
-                        and enabled tool results are sent to the selected
-                        provider and are subject to that provider’s privacy and
-                        retention policies. API keys remain encrypted on the
-                        device and are not returned by the status API.
-                      </p>
-                      <Grid colsSm={2} class="gap-5">
-                        <TextField
-                          validationState={
-                            providerErrors.maxOutputTokens ? "invalid" : "valid"
-                          }
-                        >
-                          <TextFieldLabel for="provider-max-tokens">
-                            Max tokens
-                          </TextFieldLabel>
-                          <TextFieldInput
-                            {...registerProvider("maxOutputTokens")}
-                            id="provider-max-tokens"
-                            value={providerValues().maxOutputTokens}
-                            inputmode="numeric"
-                            min="1"
-                            max="8192"
-                          />
-                          <Show when={providerErrors.maxOutputTokens?.message}>
-                            {(message) => (
-                              <TextFieldErrorMessage>
-                                {message()}
-                              </TextFieldErrorMessage>
-                            )}
-                          </Show>
-                        </TextField>
-                        <TextField
-                          validationState={
-                            providerErrors.timeoutMs ? "invalid" : "valid"
-                          }
-                        >
-                          <TextFieldLabel for="provider-timeout">
-                            Timeout ms
-                          </TextFieldLabel>
-                          <TextFieldInput
-                            {...registerProvider("timeoutMs")}
-                            id="provider-timeout"
-                            value={providerValues().timeoutMs}
-                            inputmode="numeric"
-                            min="1000"
-                            max="120000"
-                          />
-                          <Show when={providerErrors.timeoutMs?.message}>
-                            {(message) => (
-                              <TextFieldErrorMessage>
-                                {message()}
-                              </TextFieldErrorMessage>
-                            )}
-                          </Show>
-                        </TextField>
-                      </Grid>
-                      <TextField
-                        validationState={
-                          providerErrors.apiKey ? "invalid" : "valid"
-                        }
-                      >
-                        <TextFieldLabel for="provider-api-key">
-                          API key
-                        </TextFieldLabel>
-                        <TextFieldInput
-                          {...registerProvider("apiKey")}
-                          id="provider-api-key"
-                          value={providerValues().apiKey}
-                          type="password"
-                          autocomplete="off"
-                          placeholder="Optional; encrypted on SD"
-                          maxlength={entityLimits.apiKey}
-                        />
-                        <TextFieldDescription>
-                          The key is never returned by the status API.
-                        </TextFieldDescription>
-                        <Show when={providerErrors.apiKey?.message}>
-                          {(message) => (
-                            <TextFieldErrorMessage>
-                              {message()}
-                            </TextFieldErrorMessage>
-                          )}
-                        </Show>
-                      </TextField>
-
-                      <Show
-                        when={
-                          providerMutation.isPending ||
-                          providerMutation.isSuccess ||
-                          providerMutation.isError
-                        }
-                      >
-                        <OperationStatus
-                          title={
-                            providerMutation.isPending
-                              ? "Saving encrypted provider settings"
-                              : providerMutation.isError
-                                ? "Provider setup needs attention"
-                                : "Provider settings saved"
-                          }
-                          description={
-                            providerMutation.error?.message ??
-                            providerMutation.data?.detail ??
-                            "Saving configuration does not validate external provider interoperability."
-                          }
-                          active={providerMutation.isPending}
-                        />
-                      </Show>
-                    </div>
-                    <SheetFooter class="shrink-0 gap-2 border-t px-6 py-4">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={closeProviderSheet}
-                      >
-                        Cancel
-                      </Button>
-                      <Button
-                        type="submit"
-                        disabled={providerMutation.isPending}
-                      >
-                        Save provider
-                      </Button>
-                    </SheetFooter>
-                  </form>
-                </SheetContent>
-              </Sheet>
-            </div>
-          </Flex>
-
-          <Card>
-            <CardHeader>
-              <Flex alignItems="start" class="flex-col gap-3 sm:flex-row">
-                <Flex
-                  flexDirection="col"
-                  alignItems="start"
-                  justifyContent="start"
-                  class="min-w-0 gap-1"
-                >
-                  <CardTitle>Memory</CardTitle>
-                  <CardDescription>
-                    Markdown sections are stored only as encrypted SD records.
-                  </CardDescription>
-                </Flex>
-                <Show
-                  when={!(memoryQuery.isFetching && !memoryQuery.data)}
-                  fallback={<Skeleton class="h-5 w-20 rounded-full" />}
-                >
-                  <Badge variant="outline" class="shrink-0">
-                    {memoryQuery.data?.encrypted ? "encrypted" : "not writable"}
-                  </Badge>
-                </Show>
-              </Flex>
-            </CardHeader>
-            <CardContent>
-              <Show
-                when={!(memoryQuery.isFetching && !memoryQuery.data)}
-                fallback={
-                  <Grid colsLg={2} class="gap-4" aria-busy="true">
-                    <For each={[0, 1]}>
-                      {() => (
-                        <Card>
-                          <CardHeader class="flex-row items-center justify-between gap-3">
-                            <Skeleton class="h-5 w-32" />
-                            <Skeleton class="h-8 w-16" />
-                          </CardHeader>
-                          <CardContent>
-                            <Skeleton class="h-36 w-full" />
-                          </CardContent>
-                          <CardFooter class="justify-end">
-                            <Skeleton class="h-8 w-28" />
-                          </CardFooter>
-                        </Card>
-                      )}
-                    </For>
-                  </Grid>
-                }
-              >
-                <Grid colsLg={2} class="gap-4">
-                  <For each={memoryQuery.data?.sections ?? []}>
-                    {(section) => (
-                      <MemorySectionForm
-                        section={section}
-                        pending={memoryMutation.isPending}
-                        onSave={(markdown) =>
-                          memoryMutation.mutate({ id: section.id, markdown })
-                        }
-                      />
-                    )}
+                  <For each={messages()}>
+                    {(message) => <ChatMessage message={message} />}
                   </For>
-                </Grid>
-              </Show>
-            </CardContent>
-          </Card>
-        </Flex>
-      </CardContent>
-    </Card>
+                  <Show when={chatMutation.isError}>
+                    <Alert>
+                      <AlertTitle>Provider or request failure</AlertTitle>
+                      <AlertDescription>
+                        {chatMutation.error?.message ??
+                          "The provider request failed before a local tool ran."}
+                      </AlertDescription>
+                    </Alert>
+                  </Show>
+                  <Show
+                    when={
+                      chatMutation.isPending &&
+                      !messages().some(
+                        (message) =>
+                          message.proposal?.state === "approval_required" ||
+                          message.proposal?.state === "executing",
+                      )
+                    }
+                  >
+                    <ChatMessage
+                      pending
+                      message={{
+                        role: "assistant",
+                        content: "Core Pilot is thinking…",
+                      }}
+                    />
+                  </Show>
+                </CardContent>
+                <CardFooter>
+                  <form class="w-full" onSubmit={sendChat}>
+                    <TextField
+                      validationState={chatErrors.message ? "invalid" : "valid"}
+                    >
+                      <TextFieldLabel for="assistant-message" class="sr-only">
+                        Message Core Pilot
+                      </TextFieldLabel>
+                      <TextFieldTextArea
+                        {...registerChat("message")}
+                        id="assistant-message"
+                        value={chatValues().message}
+                        maxlength={entityLimits.chatMessage}
+                        class="min-h-20 resize-none"
+                        placeholder="Ask Core Pilot to check status, list devices, scenes, or automations…"
+                        onKeyDown={(
+                          event: KeyboardEvent & {
+                            currentTarget: HTMLTextAreaElement;
+                          },
+                        ) => {
+                          if (
+                            (event.metaKey || event.ctrlKey) &&
+                            event.key === "Enter"
+                          ) {
+                            event.preventDefault();
+                            event.currentTarget.form?.requestSubmit();
+                          }
+                        }}
+                      />
+                      <Show when={chatErrors.message?.message}>
+                        {(message) => (
+                          <TextFieldErrorMessage>
+                            {message()}
+                          </TextFieldErrorMessage>
+                        )}
+                      </Show>
+                    </TextField>
+                    <Flex
+                      class="mt-3 flex-col gap-3 sm:flex-row"
+                      alignItems="stretch"
+                    >
+                      <Flex justifyContent="end" class="w-auto gap-3">
+                        <span class="hidden text-xs text-foreground/50 sm:inline">
+                          Ctrl+Enter to send
+                        </span>
+                        <Button
+                          size="sm"
+                          disabled={
+                            !chatValues().message.trim() ||
+                            chatMutation.isPending
+                          }
+                          type="submit"
+                        >
+                          Send
+                        </Button>
+                      </Flex>
+                    </Flex>
+                  </form>
+                </CardFooter>
+              </Card>
+
+              <div class="min-w-0 space-y-5 xl:flex-[1_1_24rem]">
+                <Card data-assistant-provider-card>
+                  <CardHeader>
+                    <Flex alignItems="start" class="flex-col gap-3 sm:flex-row">
+                      <Flex
+                        flexDirection="col"
+                        alignItems="start"
+                        justifyContent="start"
+                        class="min-w-0 gap-1"
+                      >
+                        <CardTitle>Assistant provider</CardTitle>
+                        <CardDescription>
+                          Choose an optional model provider. Local home controls
+                          do not depend on this configuration.
+                        </CardDescription>
+                      </Flex>
+                      <Badge variant="outline" class="shrink-0">
+                        Encrypted
+                      </Badge>
+                    </Flex>
+                  </CardHeader>
+                  <CardContent>
+                    <p class="text-sm text-muted-foreground">
+                      Provider credentials are configured in a focused setup
+                      panel and are never returned by the status API.
+                    </p>
+                  </CardContent>
+                  <CardFooter class="justify-end">
+                    <Button
+                      type="button"
+                      onClick={openProviderSheet}
+                      disabled={providerMutation.isPending}
+                    >
+                      {ai().provider_configured
+                        ? savedProvider()
+                          ? "Update provider"
+                          : "Replace provider"
+                        : "Add provider"}
+                    </Button>
+                  </CardFooter>
+                </Card>
+
+                <Card>
+                  <CardHeader>
+                    <CardTitle>Assistant access</CardTitle>
+                    <CardDescription>
+                      Core Pilot keeps tool authorization local and checks it
+                      again before every action.
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent class="space-y-2">
+                    <p class="text-2xl font-semibold">
+                      {enabledTools().length}
+                    </p>
+                    <p class="text-sm text-muted-foreground">
+                      {enabledTools().length === 1
+                        ? "local tool is enabled for chat"
+                        : "local tools are enabled for chat"}
+                    </p>
+                  </CardContent>
+                  <CardFooter class="justify-end">
+                    <Button as="a" href="#/ai/tools" variant="outline">
+                      Manage permissions
+                    </Button>
+                  </CardFooter>
+                </Card>
+
+                <Sheet
+                  open={providerSheetOpen()}
+                  onOpenChange={(open) =>
+                    open ? openProviderSheet() : closeProviderSheet()
+                  }
+                >
+                  <SheetContent
+                    position="right"
+                    class="flex w-full max-w-none flex-col gap-0 overflow-hidden! p-0 sm:max-w-lg"
+                  >
+                    <SheetHeader class="shrink-0 border-b px-6 py-5 pr-12">
+                      <SheetTitle>Assistant provider</SheetTitle>
+                      <SheetDescription>
+                        Configure an optional encrypted model provider. Local
+                        home controls do not depend on this configuration.
+                      </SheetDescription>
+                    </SheetHeader>
+                    <form
+                      class="flex min-h-0 flex-1 flex-col"
+                      onSubmit={submitProvider}
+                    >
+                      <fieldset
+                        disabled={providerMutation.isPending}
+                        class="min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-5"
+                      >
+                        <Show
+                          when={ai().provider_configured && !savedProvider()}
+                        >
+                          <p role="status">
+                            Current provider details are unavailable. Saving
+                            replaces the provider configuration; enter a key for
+                            the replacement.
+                          </p>
+                        </Show>
+                        <div
+                          class="grid grid-cols-2 gap-2"
+                          role="group"
+                          aria-label="Provider protocol"
+                        >
+                          <Button
+                            type="button"
+                            variant={
+                              providerMode() === "openai-compatible"
+                                ? "default"
+                                : "outline"
+                            }
+                            onClick={() => chooseProvider("openai-compatible")}
+                          >
+                            OpenAI
+                          </Button>
+                          <Button
+                            type="button"
+                            variant={
+                              providerMode() === "anthropic-compatible"
+                                ? "default"
+                                : "outline"
+                            }
+                            onClick={() =>
+                              chooseProvider("anthropic-compatible")
+                            }
+                          >
+                            Anthropic
+                          </Button>
+                        </div>
+                        <TextField
+                          validationState={
+                            providerErrors.baseUrl ? "invalid" : "valid"
+                          }
+                        >
+                          <TextFieldLabel for="provider-base-url">
+                            Base URL
+                          </TextFieldLabel>
+                          <TextFieldInput
+                            {...registerProvider("baseUrl")}
+                            id="provider-base-url"
+                            value={providerValues().baseUrl}
+                            maxlength={entityLimits.providerUrl}
+                            placeholder="https://api.openai.com/v1"
+                            readOnly
+                            required
+                          />
+                          <TextFieldDescription>
+                            Firmware accepts only the official OpenAI or
+                            Anthropic HTTPS API root on port 443.
+                          </TextFieldDescription>
+                          <Show when={providerErrors.baseUrl?.message}>
+                            {(message) => (
+                              <TextFieldErrorMessage>
+                                {message()}
+                              </TextFieldErrorMessage>
+                            )}
+                          </Show>
+                        </TextField>
+                        <TextField
+                          validationState={
+                            providerErrors.model ? "invalid" : "valid"
+                          }
+                        >
+                          <TextFieldLabel for="provider-model">
+                            Model
+                          </TextFieldLabel>
+                          <TextFieldInput
+                            {...registerProvider("model")}
+                            id="provider-model"
+                            value={providerValues().model}
+                            maxlength={entityLimits.providerModel}
+                            placeholder="Model identifier"
+                            required
+                          />
+                          <Show when={providerErrors.model?.message}>
+                            {(message) => (
+                              <TextFieldErrorMessage>
+                                {message()}
+                              </TextFieldErrorMessage>
+                            )}
+                          </Show>
+                        </TextField>
+                        <Grid colsSm={2} class="gap-5">
+                          <Select<SelectOption<ProviderBackend>>
+                            options={providerBackendOptions}
+                            disabled
+                            optionValue="value"
+                            optionTextValue="label"
+                            value={providerBackend()}
+                            onChange={(value) =>
+                              value &&
+                              setProviderValue("backend", value.value, {
+                                shouldDirty: true,
+                              })
+                            }
+                            itemComponent={(props) => (
+                              <SelectItem item={props.item}>
+                                {props.item.rawValue.label}
+                              </SelectItem>
+                            )}
+                          >
+                            <SelectLabel>Backend</SelectLabel>
+                            <SelectTrigger>
+                              <SelectValue<SelectOption<ProviderBackend>>>
+                                {(state) => state.selectedOption().label}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent />
+                          </Select>
+                          <Select<SelectOption<ProviderAuthType>>
+                            options={providerAuthOptions}
+                            disabled
+                            optionValue="value"
+                            optionTextValue="label"
+                            value={providerAuthType()}
+                            onChange={(value) =>
+                              value &&
+                              setProviderValue("authType", value.value, {
+                                shouldDirty: true,
+                              })
+                            }
+                            itemComponent={(props) => (
+                              <SelectItem item={props.item}>
+                                {props.item.rawValue.label}
+                              </SelectItem>
+                            )}
+                          >
+                            <SelectLabel>Auth header</SelectLabel>
+                            <SelectTrigger>
+                              <SelectValue<SelectOption<ProviderAuthType>>>
+                                {(state) => state.selectedOption().label}
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent />
+                          </Select>
+                        </Grid>
+                        <p class="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-muted-foreground">
+                          OpenAI uses Authorization: Bearer; Anthropic uses
+                          X-API-Key. When you chat, prompts, recent chat
+                          history, and enabled tool results are sent to the
+                          selected provider and are subject to that provider’s
+                          privacy and retention policies. API keys remain
+                          encrypted on the device and are not returned by the
+                          status API.
+                        </p>
+                        <Grid colsSm={2} class="gap-5">
+                          <TextField
+                            validationState={
+                              providerErrors.maxOutputTokens
+                                ? "invalid"
+                                : "valid"
+                            }
+                          >
+                            <TextFieldLabel for="provider-max-tokens">
+                              Max tokens
+                            </TextFieldLabel>
+                            <TextFieldInput
+                              {...registerProvider("maxOutputTokens")}
+                              id="provider-max-tokens"
+                              value={providerValues().maxOutputTokens}
+                              inputmode="numeric"
+                              min="1"
+                              max="8192"
+                            />
+                            <Show
+                              when={providerErrors.maxOutputTokens?.message}
+                            >
+                              {(message) => (
+                                <TextFieldErrorMessage>
+                                  {message()}
+                                </TextFieldErrorMessage>
+                              )}
+                            </Show>
+                          </TextField>
+                          <TextField
+                            validationState={
+                              providerErrors.timeoutMs ? "invalid" : "valid"
+                            }
+                          >
+                            <TextFieldLabel for="provider-timeout">
+                              Timeout ms
+                            </TextFieldLabel>
+                            <TextFieldInput
+                              {...registerProvider("timeoutMs")}
+                              id="provider-timeout"
+                              value={providerValues().timeoutMs}
+                              inputmode="numeric"
+                              min="1000"
+                              max="120000"
+                            />
+                            <Show when={providerErrors.timeoutMs?.message}>
+                              {(message) => (
+                                <TextFieldErrorMessage>
+                                  {message()}
+                                </TextFieldErrorMessage>
+                              )}
+                            </Show>
+                          </TextField>
+                        </Grid>
+                        <TextField
+                          validationState={
+                            providerErrors.apiKey ? "invalid" : "valid"
+                          }
+                        >
+                          <TextFieldLabel for="provider-api-key">
+                            API key
+                          </TextFieldLabel>
+                          <TextFieldInput
+                            {...registerProvider("apiKey")}
+                            id="provider-api-key"
+                            value={providerValues().apiKey}
+                            type="password"
+                            autocomplete="off"
+                            placeholder="Optional; encrypted on SD"
+                            maxlength={entityLimits.apiKey}
+                          />
+                          <TextFieldDescription>
+                            The key is never returned by the status API.
+                          </TextFieldDescription>
+                          <Show when={providerErrors.apiKey?.message}>
+                            {(message) => (
+                              <TextFieldErrorMessage>
+                                {message()}
+                              </TextFieldErrorMessage>
+                            )}
+                          </Show>
+                        </TextField>
+
+                        <Show
+                          when={
+                            providerMutation.isPending ||
+                            providerMutation.isSuccess ||
+                            providerMutation.isError
+                          }
+                        >
+                          <OperationStatus
+                            title={
+                              providerMutation.isPending
+                                ? "Saving encrypted provider settings"
+                                : providerMutation.isError
+                                  ? "Provider setup needs attention"
+                                  : "Provider settings saved"
+                            }
+                            description={
+                              providerMutation.error?.message ??
+                              providerMutation.data?.detail ??
+                              "Saving configuration does not validate external provider interoperability."
+                            }
+                            active={providerMutation.isPending}
+                          />
+                        </Show>
+                      </fieldset>
+                      <SheetFooter class="shrink-0 gap-2 border-t px-6 py-4">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={closeProviderSheet}
+                          disabled={providerMutation.isPending}
+                        >
+                          Cancel
+                        </Button>
+                        <Button
+                          type="submit"
+                          disabled={providerMutation.isPending}
+                        >
+                          Save provider
+                        </Button>
+                      </SheetFooter>
+                    </form>
+                  </SheetContent>
+                </Sheet>
+              </div>
+            </Flex>
+          </Flex>
+        </CardContent>
+      </Card>
+    </>
   );
 };
 

@@ -457,6 +457,25 @@ export const aiChatRequestSchema = z
       utf8.encode(JSON.stringify(request)).length < entityLimits.chatBody,
     "Chat request is too large.",
   );
+export const aiProviderSummarySchema = z.object({
+  backend: z.enum(["open_ai_compatible", "anthropic_compatible"]),
+  auth_type: z.enum(["bearer", "api_key", "none"]),
+  base_url: bytesAtMost(entityLimits.providerUrl, "Base URL is too long."),
+  model: bytesAtMost(entityLimits.providerModel, "Model is too long."),
+  max_output_tokens: z.number().int().min(1).max(8192),
+  timeout_ms: z.number().int().min(1000).max(120_000),
+});
+
+export const aiMemoryRemoveRequestSchema = z
+  .object({
+    id: modelId,
+    confirmation: z.string(),
+  })
+  .strict()
+  .refine(({ id, confirmation }) => confirmation === `DELETE MEMORY ${id}`, {
+    message: "Provide the exact memory-specific delete confirmation.",
+  });
+
 export const aiMemoryRequestSchema = z
   .object({
     id: modelId,

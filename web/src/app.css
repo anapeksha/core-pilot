@@ -1,4 +1,32 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+.markdown-viewer {
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.markdown-viewer pre,
+.markdown-viewer .markdown-viewer-table {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}
+
+.markdown-viewer table {
+  overflow-wrap: normal;
+}
+
+.markdown-viewer pre:focus-visible,
+.markdown-viewer .markdown-viewer-table:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: -2px;
+}
+
+.markdown-viewer pre {
+  overflow-wrap: normal;
+}
 
 @custom-variant dark (&:is(.dark *));
 

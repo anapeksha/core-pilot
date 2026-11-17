@@ -88,13 +88,14 @@ constexpr RouteContract routes[] = {
     {"GET", "/api/v1/ai", nullptr,
      "enabled:b provider_configured:b mcp_enabled:b max_tool_rounds:t "
      "max_repeated_tool_calls:t max_actions:t destructive_confirmation:s "
-     "persistence:s provider_transport:v provider_transport_requirements:a"},
+     "persistence:s provider_transport:v provider_transport_requirements:a provider:o?"},
     {"POST", "/api/v1/ai/provider", "provider:o", "accepted:b status:s detail:s"},
     {"GET", "/api/v1/ai/chat", nullptr, "accepted:b operation_id:s status:s reply:s actions:a"},
     {"POST", "/api/v1/ai/chat", "message:s history:a* chat_id:s?",
      "accepted:b operation_id:s status:s reply:s actions:a"},
     {"GET", "/api/v1/ai/memory", nullptr, "sections:a encrypted:b detail:s"},
     {"POST", "/api/v1/ai/memory/section", "id:s markdown:s", "accepted:b status:s detail:s"},
+    {"POST", "/api/v1/ai/memory/remove", "id:s confirmation:s", "accepted:b status:s detail:s"},
     {"GET", "/api/v1/ai/prompts", nullptr, "files:a encrypted:b detail:s"},
     {"POST", "/api/v1/ai/prompts/file", "path:s markdown:s* markdown_base64:s?",
      "accepted:b status:s detail:s"},
@@ -323,6 +324,19 @@ bool request_bounds(const RouteContract& route, const cJSON* object) {
   }
   if (std::strcmp(p, "/api/v1/ai/chat") == 0)
     return bounded_string(object, "message", 4096, 1);
+  if (std::strcmp(p, "/api/v1/ai/memory/remove") == 0) {
+    if (!bounded_string(object, "id", 48, 1) || !bounded_string(object, "confirmation", 62, 15))
+      return false;
+    const char* id = cJSON_GetObjectItemCaseSensitive(object, "id")->valuestring;
+    for (const char* c = id; *c; ++c)
+      if (!((*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || (*c >= '0' && *c <= '9') ||
+            *c == '_' || *c == '-'))
+        return false;
+    const char* confirmation =
+        cJSON_GetObjectItemCaseSensitive(object, "confirmation")->valuestring;
+    return std::strncmp(confirmation, "DELETE MEMORY ", 14) == 0 &&
+           std::strcmp(confirmation + 14, id) == 0;
+  }
   if (std::strcmp(p, "/api/v1/ai/memory/section") == 0)
     return bounded_string(object, "id", 48, 1) && bounded_string(object, "markdown", 12 * 1024);
   if (std::strcmp(p, "/api/v1/ai/prompts/file") == 0) {
