@@ -1,4 +1,12 @@
-import { For, Show, createSignal, type Component } from "solid-js";
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
+import {
+  For,
+  Show,
+  createSignal,
+  createEffect,
+  on,
+  type Component,
+} from "solid-js";
 import { createForm } from "solid-hook-form";
 import {
   HiOutlineBolt,
@@ -11,7 +19,9 @@ import { toast } from "solid-sonner";
 import { z } from "zod";
 import { Badge } from "~/components/badge";
 import { AutomationBuilder } from "~/components/automation-builder";
+import { CardQueryContent } from "~/components/card-query-content";
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import { TooltipIconButton } from "~/components/tooltip";
 import { EmptyState } from "~/components/empty-state";
@@ -125,7 +135,11 @@ const automationFormSchema = z
       context.addIssue({ code: "custom", path: ["root"], message: error });
   });
 
-type AutomationFormValues = z.input<typeof automationFormSchema>;
+type AutomationFormValues = z.input<typeof automationFormSchema> & {
+  triggerValue?: string;
+  actionSequence?: string;
+  weekdaySelection?: string;
+};
 
 const blankFormValues = (): AutomationFormValues => ({
   name: "",
@@ -199,15 +213,23 @@ export default function Automations() {
   const runMutation = automationRunMutation();
   const deleteMutation = automationDeleteMutation();
 
+  const inventoryReady = () =>
+    devicesQuery.data !== undefined &&
+    !devicesQuery.isPlaceholderData &&
+    !devicesQuery.error &&
+    scenesQuery.data !== undefined &&
+    !scenesQuery.isPlaceholderData &&
+    !scenesQuery.error;
+
   const response = () => automations.data ?? fallbackAutomations;
   const devices = () => devicesQuery.data?.devices ?? fallbackDevices.devices;
   const scenes = () => scenesQuery.data?.scenes ?? fallbackScenes.scenes;
   const automationsInitialLoading = () =>
-    automations.isFetching && !automations.data;
+    automations.data === undefined || automations.isPlaceholderData;
   const devicesInitialLoading = () =>
-    devicesQuery.isFetching && !devicesQuery.data;
+    devicesQuery.data === undefined || devicesQuery.isPlaceholderData;
   const scenesInitialLoading = () =>
-    scenesQuery.isFetching && !scenesQuery.data;
+    scenesQuery.data === undefined || scenesQuery.isPlaceholderData;
 
   const [step, setStep] = createSignal(0);
   const [editingId, setEditingId] = createSignal<string | null>(null);
@@ -215,24 +237,79 @@ export default function Automations() {
   const [validationMessage, setValidationMessage] = createSignal<string | null>(
     null,
   );
-  const { handleSubmit, reset, setValue, values } =
-    createForm<AutomationFormValues>({
-      defaultValues: blankFormValues(),
-      mode: "onSubmit",
-      resolver: async (formValues: AutomationFormValues) => {
-        const result = automationFormSchema.safeParse(formValues);
-        if (result.success) return { values: result.data, errors: {} };
-        return {
-          values: {},
-          errors: Object.fromEntries(
-            result.error.issues.map((issue) => [
-              issue.path.join("."),
-              { type: issue.code, message: issue.message },
-            ]),
-          ),
-        };
+  const defaultValues: AutomationFormValues = {
+    ...blankFormValues(),
+    triggerValue: JSON.stringify({ type: "manual" }),
+    actionSequence: "[]",
+    weekdaySelection: "[]",
+  };
+  const {
+    handleSubmit,
+    reset: resetFields,
+    formState,
+    setValue,
+    values,
+  } = createForm<AutomationFormValues>({
+    defaultValues,
+    mode: "onSubmit",
+    resolver: async (formValues: AutomationFormValues) => {
+      const result = automationFormSchema.safeParse(formValues);
+      if (result.success) return { values: result.data, errors: {} };
+      return {
+        values: {},
+        errors: Object.fromEntries(
+          result.error.issues.map((issue) => [
+            issue.path.join("."),
+            { type: issue.code, message: issue.message },
+          ]),
+        ),
+      };
+    },
+  });
+  // The library compares against this object, even after reset(values).
+  function reset(next: AutomationFormValues) {
+    const initial = {
+      ...next,
+      triggerValue: JSON.stringify(next.trigger),
+      actionSequence: JSON.stringify(next.actions),
+      weekdaySelection: JSON.stringify([...next.selectedWeekdays].sort()),
+    };
+    Object.assign(defaultValues, initial);
+    resetFields(initial);
+  }
+  createEffect(
+    on(
+      () => JSON.stringify(values().trigger),
+      (value) => {
+        if (values().triggerValue !== value)
+          setValue("triggerValue", value, { shouldDirty: true });
       },
-    });
+    ),
+  );
+  createEffect(
+    on(
+      () => JSON.stringify(values().actions),
+      (value) => {
+        if (values().actionSequence !== value)
+          setValue("actionSequence", value, { shouldDirty: true });
+      },
+    ),
+  );
+  createEffect(
+    on(
+      () => JSON.stringify([...values().selectedWeekdays].sort()),
+      (value) => {
+        if (values().weekdaySelection !== value)
+          setValue("weekdaySelection", value, { shouldDirty: true });
+      },
+    ),
+  );
+  const unsaved = createUnsavedChanges({
+    open: isSheetOpen,
+    dirty: formState.isDirty,
+    label: "automation",
+  });
+
   const name = () => values().name;
   const enabled = () => values().enabled;
   const trigger = () => values().trigger;
@@ -333,7 +410,11 @@ export default function Automations() {
   function useTemplate(templateId: AutomationTemplateId) {
     const draft = applyAutomationTemplate(templateId, timezoneOffset());
     if (!draft) return;
-    reset(draft);
+    setValue("name", draft.name, { shouldDirty: true });
+    setValue("enabled", draft.enabled, { shouldDirty: true });
+    setValue("trigger", draft.trigger);
+    setValue("actions", draft.actions);
+    setValue("selectedWeekdays", draft.selectedWeekdays);
     setValidationMessage(null);
   }
 
@@ -383,6 +464,7 @@ export default function Automations() {
 
   const submitAutomation = handleSubmit(
     (formValues) => {
+      if (!inventoryReady()) return;
       setValidationMessage(null);
       upsertMutation.mutate(
         {
@@ -420,27 +502,20 @@ export default function Automations() {
   return (
     <Card class="w-full overflow-hidden">
       <CardHeader>
-        <Flex
-          alignItems="start"
-          justifyContent="between"
-          class="flex-col gap-4 sm:flex-row"
-        >
-          <div class="max-w-3xl">
-            <div class="mb-3 h-px w-12 bg-foreground" />
-            <h1 class="text-xl font-semibold tracking-tight">Automations</h1>
-            <CardDescription>
-              Create bounded local routines that work without the assistant.
-            </CardDescription>
-          </div>
-          <Flex class="w-full flex-wrap gap-2 sm:w-auto" justifyContent="start">
-            <Button as="a" size="sm" variant="outline" href="#/devices">
-              View devices
-            </Button>
-            <Button type="button" size="sm" onClick={createAutomation}>
-              Create automation
-            </Button>
-          </Flex>
-        </Flex>
+        <PageHeader
+          title="Automations"
+          description="Create bounded local routines that work without the assistant."
+          actions={
+            <>
+              <Button as="a" size="sm" variant="outline" href="#/devices">
+                View devices
+              </Button>
+              <Button type="button" size="sm" onClick={createAutomation}>
+                Create automation
+              </Button>
+            </>
+          }
+        />
       </CardHeader>
       <CardContent>
         <Flex
@@ -452,7 +527,7 @@ export default function Automations() {
           <Sheet
             open={isSheetOpen()}
             onOpenChange={(open) =>
-              open ? setIsSheetOpen(true) : closeSheet()
+              open ? setIsSheetOpen(true) : unsaved.request(closeSheet)
             }
           >
             <SheetContent class="flex w-full flex-col gap-0 p-0 sm:max-w-2xl lg:max-w-3xl">
@@ -548,7 +623,9 @@ export default function Automations() {
                         </Show>
                         <TextField
                           value={name()}
-                          onChange={(value) => setValue("name", value)}
+                          onChange={(value) =>
+                            setValue("name", value, { shouldDirty: true })
+                          }
                           validationState={
                             validationMessage() && !name().trim()
                               ? "invalid"
@@ -567,7 +644,9 @@ export default function Automations() {
                         </TextField>
                         <Switch
                           checked={enabled()}
-                          onChange={(value) => setValue("enabled", value)}
+                          onChange={(value) =>
+                            setValue("enabled", value, { shouldDirty: true })
+                          }
                           class="flex items-start gap-3 rounded-md border p-3"
                         >
                           <SwitchControl class="mt-0.5">
@@ -763,7 +842,7 @@ export default function Automations() {
                     type="button"
                     size="sm"
                     variant="ghost"
-                    onClick={closeSheet}
+                    onClick={() => unsaved.request(closeSheet)}
                   >
                     Cancel
                   </Button>
@@ -787,7 +866,9 @@ export default function Automations() {
                         <Button
                           type="submit"
                           size="sm"
-                          disabled={upsertMutation.isPending}
+                          disabled={
+                            upsertMutation.isPending || !inventoryReady()
+                          }
                         >
                           {editingId()
                             ? "Update automation"
@@ -815,7 +896,7 @@ export default function Automations() {
             <OperationStatus
               title={
                 runMutation.isPending
-                  ? "Automation running"
+                  ? "Waiting for automation completion"
                   : runMutation.isError
                     ? "Automation run failed"
                     : "Automation run complete"
@@ -846,8 +927,9 @@ export default function Automations() {
             </div>
             <Badge variant="outline">Up to 8 actions each</Badge>
           </Flex>
-          <Show
-            when={!automationsInitialLoading()}
+          <CardQueryContent
+            queries={[automations, devicesQuery, scenesQuery]}
+            label="automations"
             fallback={
               <Grid
                 cols={1}
@@ -900,10 +982,10 @@ export default function Automations() {
               <Grid cols={1} colsMd={2} class="gap-4">
                 <For each={response().automations}>
                   {(automation) => (
-                    <Card>
+                    <Card class="min-w-0">
                       <CardHeader>
-                        <Flex class="flex-col items-start gap-3 sm:flex-row">
-                          <CardTitle class="min-w-0 wrap-anywhere">
+                        <Flex alignItems="start" class="flex-wrap gap-3">
+                          <CardTitle class="min-w-0 basis-40 flex-1 wrap-anywhere">
                             {automation.name}
                           </CardTitle>
                           <Badge
@@ -940,7 +1022,7 @@ export default function Automations() {
                           </p>
                         </Show>
                       </CardContent>
-                      <CardFooter class="justify-end gap-2">
+                      <CardFooter class="flex-wrap justify-end gap-2">
                         <Show
                           when={
                             automation.enabled &&
@@ -958,11 +1040,12 @@ export default function Automations() {
                                   onSuccess: (result) =>
                                     result.accepted
                                       ? toast.success(
-                                          result.detail ?? "Automation queued.",
+                                          result.detail ??
+                                            "Automation completed.",
                                         )
                                       : toast.error(
                                           result.detail ??
-                                            "Automation could not be queued.",
+                                            "Automation could not be run.",
                                         ),
                                   onError: (error) =>
                                     toast.error(error.message),
@@ -1011,9 +1094,10 @@ export default function Automations() {
                 </For>
               </Grid>
             </Show>
-          </Show>
+          </CardQueryContent>
         </Flex>
       </CardContent>
+      <unsaved.Confirmation />
     </Card>
   );
 }

@@ -1000,7 +1000,7 @@ cJSON* McpService::jsonRpc(const HttpRuntime& runtime, const cJSON* request, boo
     cJSON_AddObjectToObject(server_capabilities, "tools");
     cJSON* server = cJSON_AddObjectToObject(result, "serverInfo");
     cJSON_AddStringToObject(server, "name", "core-pilot");
-    cJSON_AddStringToObject(server, "version", "0.1.4");
+    cJSON_AddStringToObject(server, "version", "0.2.0");
   } else if (std::strcmp(method->valuestring, "tools/list") == 0) {
     result = cJSON_CreateObject();
     cJSON* items = cJSON_AddArrayToObject(result, "tools");

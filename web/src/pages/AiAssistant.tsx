@@ -323,10 +323,7 @@ const ChatMessage: Component<{
 }> = (props) => {
   const isUserMessage = () => props.message.role === "user";
   return (
-    <Message
-      align={isUserMessage() ? "end" : "start"}
-      aria-live={props.pending ? "polite" : undefined}
-    >
+    <Message align={isUserMessage() ? "end" : "start"}>
       <MessageAvatar aria-hidden="true">
         {isUserMessage()
           ? "You"
@@ -683,7 +680,14 @@ const AiAssistant: Component = () => {
                   </Flex>
                 </Flex>
               </CardHeader>
-              <CardContent class="scroll-fade flex max-h-96 min-h-48 flex-col gap-4 overflow-y-auto sm:max-h-112 xl:max-h-none xl:min-h-105 xl:flex-1">
+              <CardContent
+                role="log"
+                aria-label="Assistant conversation"
+                aria-live="polite"
+                aria-relevant="additions text"
+                tabindex="0"
+                class="scroll-fade flex max-h-96 min-h-48 flex-col gap-4 overflow-y-auto focus-visible:outline-2 focus-visible:outline-ring sm:max-h-112 xl:max-h-none xl:min-h-105 xl:flex-1"
+              >
                 <For each={messages()}>
                   {(message) => <ChatMessage message={message} />}
                 </For>

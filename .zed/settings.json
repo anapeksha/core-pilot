@@ -9,9 +9,6 @@
     "JavaScript": {
       "language_servers": ["typescript-language-server", "!vtsls", "..."],
     },
-    "Svelte": {
-      "enable_language_server": false,
-    },
     "CSS": {
       "language_servers": [
         "tailwindcss-intellisense-css",
@@ -40,12 +37,11 @@
     },
     "clangd": {
       "binary": {
-        "path": "clangd",
+        "path": "./tools/clangd.py",
         "arguments": [
           "--background-index",
           "--enable-config",
           "--clang-tidy",
-          "--query-driver=**/xtensa-esp-elf-*",
           "--header-insertion=never",
         ],
       },

@@ -1,12 +1,27 @@
 import { Buffer } from "node:buffer";
 
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page, type Route } from "@playwright/test";
+import type { NetworkStatus } from "../src/lib/api";
 
 type Json = Record<string, unknown>;
 
 type FirmwareState = ReturnType<typeof createFirmwareState>;
 
 function createFirmwareState() {
+  const network: NetworkStatus = {
+    mode: "station",
+    setup_ssid: "CorePilot-Setup-1234",
+    station_ssid: "Lab_WiFi",
+    station_bssid: "aa:bb:cc:dd:ee:ff",
+    ipv4: "192.168.29.2",
+    station_ipv4: "192.168.29.2",
+    hostname: "corepilot.local",
+    dhcp: "started",
+    http: "started",
+    wan_enabled: false,
+    cloud_relay_enabled: false,
+  };
   return {
     health: {
       product: "Core Pilot",
@@ -15,19 +30,7 @@ function createFirmwareState() {
       ai_enabled: true,
       auth: "none-trusted-lan",
     },
-    network: {
-      mode: "station",
-      setup_ssid: "CorePilot-Setup-1234",
-      station_ssid: "Lab_WiFi",
-      station_bssid: "aa:bb:cc:dd:ee:ff",
-      ipv4: "192.168.29.2",
-      station_ipv4: "192.168.29.2",
-      hostname: "corepilot.local",
-      dhcp: "started",
-      http: "started",
-      wan_enabled: false,
-      cloud_relay_enabled: false,
-    },
+    network,
     system: {
       product: "Core Pilot",
       hostname: "corepilot.local",
@@ -620,6 +623,31 @@ async function mockFirmwareApi(page: Page, options: MockFirmwareOptions = {}) {
   return state;
 }
 
+async function expectAccessible(page: Page) {
+  // Let mocked query responses and portal transitions settle before scanning.
+  await page.waitForLoadState("networkidle");
+  const results = await new AxeBuilder({ page })
+    .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
+    .analyze();
+  expect(
+    results.violations,
+    JSON.stringify(
+      results.violations.map(({ id, impact, help, nodes }) => ({
+        rule: id,
+        impact,
+        help,
+        nodes: nodes.map(({ html, target, failureSummary }) => ({
+          html,
+          target,
+          failureSummary,
+        })),
+      })),
+      null,
+      2,
+    ),
+  ).toEqual([]);
+}
+
 async function expectHeading(page: Page, name: string) {
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
 }
@@ -686,27 +714,91 @@ test("exposes connection status and logs out visibly", async ({
 
 test("shows Home card skeletons until its APIs resolve", async ({ page }) => {
   await mockFirmwareApi(page);
-  let releaseHealth!: () => void;
-  const healthReady = new Promise<void>((resolve) => {
-    releaseHealth = resolve;
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
   });
-  await page.route("**/api/v1/health", async (route) => {
-    await healthReady;
-    await json(route, createFirmwareState().health);
+  const heldPaths = new Set([
+    "health",
+    "system",
+    "network",
+    "storage",
+    "devices",
+    "rooms",
+    "scenes",
+    "automations",
+  ]);
+  await page.route("**/api/v1/**", async (route) => {
+    if (
+      heldPaths.has(new URL(route.request().url()).pathname.split("/").at(-1)!)
+    )
+      await ready;
+    await route.fallback();
   });
 
   await page.goto("/");
-  await expect(page.getByText("Loading home status")).toBeAttached();
-  const skeleton = page.locator('[data-home-card-skeleton="home status"]');
-  await expect(skeleton).toBeVisible();
-  await expect(skeleton.locator("[data-home-status-skeleton]")).toHaveCount(4);
-  await expect(page.getByText("Lab_WiFi", { exact: false })).toHaveCount(0);
-
-  releaseHealth();
+  try {
+    await expect(
+      page.getByRole("button", { name: "Edit favorites" }),
+    ).toBeDisabled();
+    for (const [label, count] of [
+      ["home status", 15],
+      ["quick actions", 4],
+      ["favorites", 4],
+      ["rooms", 6],
+      ["device availability", 4],
+    ] as const) {
+      const skeleton = page.locator(`[data-home-card-skeleton="${label}"]`);
+      await expect(skeleton).toBeVisible();
+      await expect(skeleton.locator("p").first()).toHaveText(
+        `Loading ${label}…`,
+      );
+      await expect(skeleton.locator("p").first()).toBeVisible();
+      await expect(skeleton).toHaveAttribute("aria-busy", "true");
+      const bars = skeleton.locator('[aria-hidden="true"] [data-visible]');
+      await expect(bars).toHaveCount(count);
+      expect(
+        await bars.evaluateAll((elements) =>
+          elements.every((element) => {
+            const box = element.getBoundingClientRect();
+            return box.width > 0 && box.height > 0;
+          }),
+        ),
+        `${label} placeholders must have actual geometry`,
+      ).toBe(true);
+    }
+    const tiles = page.locator("[data-home-status-skeleton]");
+    await expect(tiles).toHaveCount(4);
+    for (const tile of await tiles.all()) {
+      const bars = await tile
+        .locator("[data-visible]")
+        .evaluateAll((elements) =>
+          elements.map((element) => {
+            const { width, height } = element.getBoundingClientRect();
+            return { width, height };
+          }),
+        );
+      expect(bars.map((bar) => bar.height)).toEqual([12, 28, 20]);
+      expect(bars[1].width).toBe(28);
+      expect(bars[2].width).toBeGreaterThan(bars[0].width);
+    }
+    await expect(page.getByText("Lab_WiFi", { exact: false })).toHaveCount(0);
+    await expect(page.getByText("Clear", { exact: true })).toHaveCount(0);
+    await expect(page.getByText(/No active network, storage/)).toHaveCount(0);
+  } finally {
+    release();
+  }
   await expect(
     page.getByText("Lab_WiFi", { exact: false }).first(),
   ).toBeVisible();
-  await expect(page.getByText("Loading home status")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Welcome home" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Pin favorites" }),
+  ).toBeVisible();
+  await expect(page.getByText("1 reported devices")).toBeVisible();
+  await expect(page.locator("[data-home-card-skeleton]")).toHaveCount(0);
 });
 
 test("shows a Home card error instead of fallback status data", async ({
@@ -726,9 +818,171 @@ test("shows a Home card error instead of fallback status data", async ({
     "Could not load home status",
   );
   await expect(page.getByText("Lab_WiFi", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("Clear", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("heading", { name: "Alerts", exact: true }),
+  ).toHaveCount(0);
+  await expect(
+    page.locator('[data-home-card-skeleton="home status"]'),
+  ).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Welcome home" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Pin favorites" }),
+  ).toBeVisible();
+  await expect(page.getByText("1 reported devices")).toBeVisible();
 });
 
-test("provides a bounded operational home dashboard", async ({ page }) => {
+for (const width of [320, 390, 768, 1024, 1440]) {
+  test(`keeps Home card geometry bounded at ${width}px with long names`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width, height: 1000 });
+    const state = await mockFirmwareApi(page);
+    const automationName = "A".repeat(64);
+    const roomName = "R".repeat(64);
+    const deviceName = "D".repeat(64);
+    state.automations[0].name = automationName;
+    state.automations[0].trigger = "manual";
+    state.automations.push({
+      ...state.automations[0],
+      id: "second-manual",
+      name: "Second manual action",
+    });
+    state.rooms[0].name = roomName;
+    state.rooms.push({ id: "second-room", name: "Second room" });
+    state.devices[0].name = deviceName;
+    state.devices[0].availability = "offline";
+    state.scenes[0].name = "S".repeat(64);
+    await page.goto("/");
+    await page.getByRole("button", { name: "Pin favorites" }).click();
+    await page
+      .getByRole("button", { name: `${deviceName} · device`, exact: true })
+      .click();
+    await page
+      .getByRole("button", {
+        name: `${state.scenes[0].name} · scene`,
+        exact: true,
+      })
+      .click();
+    // Wait for real content in every affected card before measuring layout.
+    await expect(
+      page.getByRole("button", { name: automationName, exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: `${deviceName} · device`, exact: true }),
+    ).toBeVisible();
+    await expect(
+      page.locator("p[title]").filter({ hasText: roomName }),
+    ).toBeVisible();
+    await expect(
+      page.locator("li span[title]").filter({ hasText: deviceName }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Lab_WiFi", { exact: false }).first(),
+    ).toBeVisible();
+    await expect(page.locator("[data-home-card-skeleton]")).toHaveCount(0);
+
+    for (const favoriteMode of ["editor", "saved"] as const) {
+      if (favoriteMode === "saved") {
+        await page.getByRole("button", { name: "Done", exact: true }).click();
+        await expect(
+          page
+            .getByRole("region", { name: "Saved favorites" })
+            .getByRole("link"),
+        ).toHaveCount(2);
+      }
+      for (const sidebarState of ["expanded", "collapsed"] as const) {
+        if (width >= 768) {
+          const sidebar = page.locator("[data-state][data-collapsible]");
+          if ((await sidebar.getAttribute("data-state")) !== sidebarState)
+            await page.locator('[data-sidebar="trigger"]').click();
+          await expect(sidebar).toHaveAttribute("data-state", sidebarState);
+        } else if (sidebarState === "expanded") {
+          await page.getByRole("button", { name: "Toggle navigation" }).click();
+          await expect(
+            page.locator('[data-slot="sheet-content"]'),
+          ).toBeVisible();
+          await page.getByRole("button", { name: "Close navigation" }).click();
+          await expect(
+            page.locator('[data-slot="sheet-content"]'),
+          ).toBeHidden();
+        }
+
+        await expect
+          .poll(
+            () =>
+              page.locator("#main-content").evaluate((main) => {
+                const failures: string[] = [];
+                const contentWidth = (element: Element) => {
+                  const style = getComputedStyle(element);
+                  return (
+                    element.clientWidth -
+                    parseFloat(style.paddingLeft) -
+                    parseFloat(style.paddingRight)
+                  );
+                };
+                for (const card of main.querySelectorAll(
+                  '[class~="@container/card"]',
+                )) {
+                  const grid = card.querySelector('[class*="grid-cols-"]');
+                  if (!grid) {
+                    if (!card.querySelector("#home-favorites-panel"))
+                      failures.push("missing card grid");
+                    continue;
+                  }
+                  const columns =
+                    getComputedStyle(grid).gridTemplateColumns.split(
+                      " ",
+                    ).length;
+                  const expected = contentWidth(card) >= 416 ? 2 : 1;
+                  if (columns !== expected)
+                    failures.push(
+                      `card ${contentWidth(card)}px: ${columns} columns, expected ${expected}`,
+                    );
+                }
+                for (const room of main.querySelectorAll(
+                  '[class~="@container/room"]',
+                )) {
+                  const row = room.firstElementChild!;
+                  const expected = contentWidth(room) < 288 ? "column" : "row";
+                  if (getComputedStyle(row).flexDirection !== expected)
+                    failures.push(`room badge should use ${expected}`);
+                  const text = row.firstElementChild!.getBoundingClientRect();
+                  const badge = row.lastElementChild!.getBoundingClientRect();
+                  if (expected === "column" && badge.top < text.bottom)
+                    failures.push("room badge overlaps text");
+                }
+                for (const element of main.querySelectorAll(
+                  'button, a, li, [class~="@container/card"], [class~="@container/room"]',
+                )) {
+                  const box = element.getBoundingClientRect();
+                  if (element.scrollWidth > element.clientWidth + 1)
+                    failures.push(`${element.tagName} local overflow`);
+                  if (
+                    box.left < -1 ||
+                    box.right > document.documentElement.clientWidth + 1
+                  )
+                    failures.push(`${element.tagName} outside viewport`);
+                }
+                if (
+                  document.documentElement.scrollWidth >
+                  document.documentElement.clientWidth
+                )
+                  failures.push("page overflow");
+                return failures;
+              }),
+            { message: `${width}px, ${sidebarState} sidebar` },
+          )
+          .toEqual([]);
+      }
+    }
+  });
+}
+
+test("provides a bounded operational Home dashboard", async ({ page }) => {
   const state = await mockFirmwareApi(page);
   await page.goto("/");
 
@@ -740,26 +994,27 @@ test("provides a bounded operational home dashboard", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Hub health" })).toHaveCount(
     0,
   );
-  await expect(page.getByText("Clear", { exact: true })).toBeVisible();
-  await expect(page.getByRole("img", { name: "OK" })).toHaveCount(3);
-  await expect(page.getByText("Lab", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText(/No active network, storage, device-state, or OTA warnings/),
+  ).toBeVisible();
+  await expect(page.getByRole("list", { name: "Active alerts" })).toHaveCount(
+    0,
+  );
+  await expect(page.getByText("Clear", { exact: true })).toHaveCount(0);
   await expect(page.getByText("1 reported devices")).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "All off · unavailable" }),
-  ).toHaveCount(0);
+    page.getByRole("button", { name: "Pin favorites" }),
+  ).toBeVisible();
+  await expect(page.locator("button[aria-pressed]")).toHaveCount(0);
+  const main = page.locator("#main-content");
+  await expect(main.locator("header").first()).toContainText("Home");
   await expect(
-    page.getByRole("button", { name: "Activate scene · unavailable" }),
+    main.locator("header").first().locator('[data-slot="card"]'),
   ).toHaveCount(0);
-
-  const benchLampFavorite = page.getByRole("button", { name: "Bench Lamp" });
-  await benchLampFavorite.click();
-  await expect(benchLampFavorite).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByText("Bench Lamp", { exact: true })).toHaveCount(1);
-  await page.reload();
-  await expect(
-    page.getByRole("button", { name: "Bench Lamp" }),
-  ).toHaveAttribute("aria-pressed", "true");
-
+  const titles = await main.getByRole("heading").allTextContents();
+  expect(titles.indexOf("Favorites")).toBeLessThan(
+    titles.indexOf("Quick actions"),
+  );
   await page.getByRole("button", { name: "Welcome home" }).click();
   await expect
     .poll(() => state.posts.at(-1)?.path)
@@ -767,7 +1022,776 @@ test("provides a bounded operational home dashboard", async ({ page }) => {
   expect(
     state.posts.some((post) => post.path === "/api/v1/automations/run"),
   ).toBe(true);
-  await expect(page.getByRole("link", { name: "View activity" })).toBeVisible();
+  await expect(
+    page.getByRole("link", { name: "View activity history" }),
+  ).toBeVisible();
+});
+
+test("Home favorites persist editor pin/remove and navigate without mutations", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.goto("/");
+  const toggle = page.getByRole("button", {
+    name: "Edit favorites",
+    exact: true,
+  });
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toHaveAttribute("aria-controls", "home-favorites-panel");
+  await page.getByRole("button", { name: "Pin favorites" }).click();
+  const editor = page.getByRole("region", {
+    name: "Edit favorites",
+    exact: true,
+  });
+  await expect(editor).toBeFocused();
+  await expect(
+    page.getByRole("button", { name: "Done", exact: true }),
+  ).toHaveAttribute("aria-expanded", "true");
+  for (const name of ["Bench Lamp · device", "Evening · scene"]) {
+    await editor.getByRole("button", { name, exact: true }).click();
+    await expect(
+      editor.getByRole("button", { name, exact: true }),
+    ).toHaveAttribute("aria-pressed", "true");
+  }
+  await expect
+    .poll(() =>
+      page.evaluate(() => localStorage.getItem("core-pilot-home-favorites")),
+    )
+    .toBe(JSON.stringify(["device:matter-light-1", "scene:evening"]));
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await expect(toggle).toBeFocused();
+  await expect(page.locator("button[aria-pressed]")).toHaveCount(0);
+  await page.reload();
+  for (const [name, href, heading] of [
+    ["Bench Lamp", "#/devices", "Devices"],
+    ["Evening", "#/scenes", "Scenes"],
+  ]) {
+    const link = page
+      .getByRole("region", { name: "Saved favorites" })
+      .getByRole("link", { name: new RegExp(name) });
+    await expect(link).toHaveAttribute("href", href);
+    await link.click();
+    await expectHeading(page, heading);
+    await page.goto("/");
+  }
+  await toggle.click();
+  await editor
+    .getByRole("button", { name: "Bench Lamp · device", exact: true })
+    .click();
+  await expect(
+    editor.getByRole("button", { name: "Bench Lamp · device", exact: true }),
+  ).toHaveAttribute("aria-pressed", "false");
+  await page.reload();
+  await expect(page.locator("[data-home-favorite]")).toHaveCount(1);
+  await expect(
+    page.locator('[data-home-favorite="scene:evening"]'),
+  ).toBeVisible();
+  expect(state.posts).toEqual([]);
+});
+
+test("Home favorites limit includes missing items and permits removal in both views", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "core-pilot-home-favorites",
+      JSON.stringify([
+        "device:matter-light-1",
+        ...Array.from({ length: 7 }, (_, i) => `scene:missing-${i}`),
+      ]),
+    ),
+  );
+  await page.goto("/");
+  await expect(page.locator("[data-home-favorite]")).toHaveCount(8);
+  await page
+    .getByRole("button", { name: "Edit favorites", exact: true })
+    .click();
+  await expect(
+    page.getByText("8 of 8 selected.", { exact: false }),
+  ).toBeVisible();
+  const scene = page.getByRole("button", {
+    name: "Evening · scene",
+    exact: true,
+  });
+  await expect(scene).toBeDisabled();
+  await expect(
+    page.getByRole("button", { name: "Bench Lamp · device", exact: true }),
+  ).toBeEnabled();
+  await page
+    .getByRole("button", {
+      name: "Remove unavailable favorite: scene:missing-0",
+      exact: true,
+    })
+    .click();
+  await expect(scene).toBeEnabled();
+  await scene.click();
+  await expect(
+    page.getByText("8 of 8 selected.", { exact: false }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Done", exact: true }).click();
+  await page
+    .getByRole("button", {
+      name: "Remove unavailable favorite scene:missing-1",
+      exact: true,
+    })
+    .click();
+  await expect(page.locator("[data-home-favorite]")).toHaveCount(7);
+  const saved = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("core-pilot-home-favorites")!),
+  );
+  expect(saved).toHaveLength(7);
+  expect(saved).toContain("scene:evening");
+  expect(saved).not.toContain("scene:missing-1");
+  expect(state.posts).toEqual([]);
+});
+
+for (const [label, stored, count, feedback] of [
+  ["malformed JSON", "{", 0, "Saved favorites could not be read"],
+  [
+    "non-array",
+    '{"device":"matter-light-1"}',
+    0,
+    "Saved favorites could not be read",
+  ],
+  [
+    "invalid and duplicate entries",
+    JSON.stringify([
+      null,
+      1,
+      {},
+      "device:",
+      "group:no",
+      "scene:bad id",
+      "device:matter-light-1",
+      "device:matter-light-1",
+      "scene:evening",
+    ]),
+    2,
+    "Invalid or duplicate favorites were ignored",
+  ],
+] as const) {
+  test(`Home favorites safely ignore ${label}`, async ({ page }) => {
+    await mockFirmwareApi(page);
+    await page.addInitScript(
+      (value) => localStorage.setItem("core-pilot-home-favorites", value),
+      stored,
+    );
+    await page.goto("/");
+    await expect(
+      page.getByRole("region", { name: "Saved favorites" }),
+    ).toBeVisible();
+    await expect(page.locator("[data-home-favorite]")).toHaveCount(count);
+    await expect(
+      page.getByRole("status").filter({ hasText: feedback }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(() =>
+        localStorage.getItem("core-pilot-home-favorites"),
+      ),
+    ).toBe(stored);
+    await page
+      .getByRole("button", { name: "Edit favorites", exact: true })
+      .click();
+    await page
+      .getByRole("button", { name: "Bench Lamp · device", exact: true })
+      .click();
+    expect(
+      await page.evaluate(() =>
+        JSON.parse(localStorage.getItem("core-pilot-home-favorites")!),
+      ),
+    ).toEqual(count ? ["scene:evening"] : ["device:matter-light-1"]);
+  });
+}
+
+test("Home favorites bound oversized saved lists to eight unique items", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.addInitScript(() =>
+    localStorage.setItem(
+      "core-pilot-home-favorites",
+      JSON.stringify(
+        Array.from({ length: 12 }, (_, i) => `scene:missing-${i}`),
+      ),
+    ),
+  );
+  await page.goto("/");
+  await expect(page.locator("[data-home-favorite]")).toHaveCount(8);
+  await expect(
+    page.locator('[data-home-favorite="scene:missing-8"]'),
+  ).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("status")
+      .filter({ hasText: "Invalid or duplicate favorites were ignored" }),
+  ).toBeVisible();
+  await page
+    .getByRole("button", { name: "Edit favorites", exact: true })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Bench Lamp · device", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", {
+      name: "Remove unavailable favorite: scene:missing-0",
+      exact: true,
+    })
+    .click();
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem("core-pilot-home-favorites")!),
+    ),
+  ).toEqual(Array.from({ length: 7 }, (_, i) => `scene:missing-${i + 1}`));
+});
+
+for (const failRead of [false, true]) {
+  test(`Home favorites storage failure is truthful with read failure ${failRead}`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.addInitScript((read) => {
+      if (read)
+        Storage.prototype.getItem = () => {
+          throw new Error("Unavailable");
+        };
+      Storage.prototype.setItem = () => {
+        throw new Error("Unavailable");
+      };
+    }, failRead);
+    await page.goto("/");
+    if (failRead)
+      await expect(
+        page
+          .getByRole("status")
+          .filter({ hasText: "Saved favorites could not be read" }),
+      ).toBeVisible();
+    await page.getByRole("button", { name: "Pin favorites" }).click();
+    await page
+      .getByRole("button", { name: "Bench Lamp · device", exact: true })
+      .click();
+    await expect(
+      page
+        .getByRole("status")
+        .filter({ hasText: "Favorites changed for this visit only" }),
+    ).toBeVisible();
+    await expect(
+      page.getByText("Favorites saved in this browser.", { exact: true }),
+    ).toHaveCount(0);
+    await page.getByRole("button", { name: "Done", exact: true }).click();
+    await expect(page.locator("[data-home-favorite]")).toHaveCount(1);
+    await page.reload();
+    await expect(
+      page.getByRole("button", { name: "Pin favorites" }),
+    ).toBeVisible();
+  });
+}
+
+for (const endpoint of ["devices", "scenes"]) {
+  test(`Home favorites disable editing after ${endpoint} error`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.route(`**/api/v1/${endpoint}`, (route) =>
+      route.fulfill({
+        status: 400,
+        contentType: "application/json",
+        body: JSON.stringify({ detail: "Inventory unavailable" }),
+      }),
+    );
+    await page.goto("/");
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Could not load favorites" }),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Edit favorites" }),
+    ).toBeDisabled();
+    await expect(
+      page.getByRole("button", { name: "Pin favorites" }),
+    ).toHaveCount(0);
+    await expect(page.locator("button[aria-pressed]")).toHaveCount(0);
+  });
+}
+
+for (const mode of ["saved", "editor"] as const) {
+  for (const last of [false, true]) {
+    test(`Home unavailable favorite keyboard removal keeps focus stable in ${mode}, last ${last}`, async ({
+      page,
+    }) => {
+      const state = await mockFirmwareApi(page);
+      await page.addInitScript(
+        (onlyMissing) =>
+          localStorage.setItem(
+            "core-pilot-home-favorites",
+            JSON.stringify(
+              onlyMissing
+                ? ["scene:missing"]
+                : ["scene:missing", "device:matter-light-1"],
+            ),
+          ),
+        last,
+      );
+      await page.goto("/");
+      const panel = page.locator("#home-favorites-panel");
+      await expect(panel).toBeVisible();
+      if (mode === "editor") {
+        const toggle = page.getByRole("button", {
+          name: "Edit favorites",
+          exact: true,
+        });
+        await toggle.focus();
+        await page.keyboard.press("Enter");
+        await expect(panel).toBeFocused();
+      }
+      const remove = panel.getByRole("button", {
+        name:
+          mode === "editor"
+            ? "Remove unavailable favorite: scene:missing"
+            : "Remove unavailable favorite scene:missing",
+        exact: true,
+      });
+      await remove.focus();
+      await expect(remove).toBeFocused();
+      await page.keyboard.press("Enter");
+      await expect(remove).toHaveCount(0);
+      if (mode === "saved" && last) {
+        await expect(
+          panel.getByRole("button", { name: "Pin favorites", exact: true }),
+        ).toBeFocused();
+      } else {
+        await expect(panel).toBeFocused();
+      }
+      await expect(
+        page.getByRole("button", {
+          name: mode === "editor" ? "Done" : "Edit favorites",
+          exact: true,
+        }),
+      ).toHaveAttribute("aria-expanded", String(mode === "editor"));
+      expect(
+        await page.evaluate(() =>
+          JSON.parse(localStorage.getItem("core-pilot-home-favorites")!),
+        ),
+      ).toEqual(last ? [] : ["device:matter-light-1"]);
+      expect(state.posts).toEqual([]);
+    });
+  }
+}
+
+for (const endpoint of ["devices", "scenes"]) {
+  for (const focusInside of [true, false]) {
+    test(`Home ${endpoint} refetch error exits editor and preserves ${focusInside ? "panel" : "outside"} focus`, async ({
+      page,
+      context,
+    }) => {
+      const state = await mockFirmwareApi(page);
+      await page.goto("/");
+      await page
+        .getByRole("button", { name: "Pin favorites", exact: true })
+        .click();
+      const panel = page.locator("#home-favorites-panel");
+      const selection = panel.getByRole("button", {
+        name: "Bench Lamp · device",
+        exact: true,
+      });
+      await selection.click();
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const failInventory = async (route: Route) => {
+        await held;
+        await route.fulfill({
+          status: 400,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: "Inventory refresh unavailable" }),
+        });
+      };
+      await page.route(`**/api/v1/${endpoint}`, failInventory);
+      await context.setOffline(true);
+      await expect(
+        page.getByRole("status", { name: "Offline", exact: true }),
+      ).toBeVisible();
+      const requested = page.waitForRequest(
+        (request) => new URL(request.url()).pathname === `/api/v1/${endpoint}`,
+      );
+      await context.setOffline(false);
+      await requested;
+      const outside = page
+        .locator("#main-content footer")
+        .getByRole("link", { name: "View activity history", exact: true });
+      const focused = focusInside ? selection : outside;
+      try {
+        await focused.focus();
+        await expect(focused).toBeFocused();
+        await expect(
+          page.getByRole("button", { name: "Done", exact: true }),
+        ).toHaveAttribute("aria-expanded", "true");
+      } finally {
+        release();
+      }
+      await expect(panel.getByRole("alert")).toContainText(
+        "Could not refresh favorites",
+      );
+      await expect(
+        panel.getByRole("link", { name: /Bench Lamp/ }),
+      ).toBeVisible();
+      await expect(panel.locator("[data-home-card-skeleton]")).toHaveCount(0);
+      await expect(
+        panel.getByRole("button", { name: "Retry favorites" }),
+      ).toBeEnabled();
+      await expect(panel).toHaveAccessibleName("Saved favorites");
+      const toggle = page.getByRole("button", {
+        name: "Edit favorites",
+        exact: true,
+      });
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(toggle).toHaveAttribute(
+        "aria-controls",
+        "home-favorites-panel",
+      );
+      await expect(toggle).toBeDisabled();
+      await expect(panel.locator("button[aria-pressed]")).toHaveCount(0);
+      await expect(focusInside ? panel : outside).toBeFocused();
+      await expect(
+        page.getByRole("status", { name: "Online", exact: true }),
+      ).toBeVisible();
+
+      // Retry recovers inventory without remounting Home or stealing focus.
+      await page.unroute(`**/api/v1/${endpoint}`, failInventory);
+      await panel
+        .getByRole("button", { name: "Retry favorites" })
+        .evaluate((button: HTMLButtonElement) => button.click());
+      await expect(toggle).toBeEnabled();
+      await expect(panel.getByRole("alert")).toHaveCount(0);
+      await expect(
+        panel.getByRole("link", { name: /Bench Lamp/ }),
+      ).toBeVisible();
+      await expect(toggle).toHaveAttribute("aria-expanded", "false");
+      await expect(focusInside ? panel : outside).toBeFocused();
+      expect(state.posts).toEqual([]);
+    });
+  }
+}
+
+for (const endpoint of ["health", "devices"] as const) {
+  test(`Home cached ${endpoint} refresh retains favorite identity and Retry recovers`, async ({
+    page,
+    context,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    await page.addInitScript(() =>
+      localStorage.setItem(
+        "core-pilot-home-favorites",
+        JSON.stringify(["device:matter-light-1"]),
+      ),
+    );
+    await page.goto("/");
+    const panel = page.locator("#home-favorites-panel");
+    const link = panel.getByRole("link", { name: /Bench Lamp/ });
+    await expect(link).toBeVisible();
+    await expect(page.getByText("Lab_WiFi", { exact: false })).toBeVisible();
+    const original = await link.elementHandle();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const fail = async (route: Route) => {
+      await held;
+      await json(route, { detail: "Refresh unavailable" }, 400);
+    };
+    await page.route(`**/api/v1/${endpoint}`, fail);
+    await context.setOffline(true);
+    await expect(
+      page.getByRole("status", { name: "Offline", exact: true }),
+    ).toBeVisible();
+    const requested = page.waitForRequest(`**/api/v1/${endpoint}`);
+    await context.setOffline(false);
+    await requested;
+    try {
+      await link.focus();
+      await expect(
+        page.getByRole("status").filter({ hasText: "Refreshing home status" }),
+      ).toBeVisible();
+      await expect(page.locator("[data-home-card-skeleton]")).toHaveCount(0);
+      await expect(link).toBeFocused();
+      expect(
+        await link.evaluate(
+          (element, previous) => element === previous,
+          original,
+        ),
+      ).toBe(true);
+    } finally {
+      release();
+    }
+    const warning = page
+      .getByRole("alert")
+      .filter({ hasText: "Could not refresh home status" });
+    await expect(warning).toContainText("Showing previously loaded data");
+    await expect(page.getByText("Lab_WiFi", { exact: false })).toBeVisible();
+    await expect(link).toBeFocused();
+    expect(
+      await link.evaluate(
+        (element, previous) => element === previous,
+        original,
+      ),
+    ).toBe(true);
+    if (endpoint === "devices")
+      await expect(
+        page.getByRole("button", { name: "Edit favorites" }),
+      ).toBeDisabled();
+    await page.unroute(`**/api/v1/${endpoint}`, fail);
+    await warning
+      .getByRole("button", { name: "Retry home status" })
+      .evaluate((button: HTMLButtonElement) => button.click());
+    await expect(
+      page.getByRole("alert").filter({ hasText: "Could not refresh" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Edit favorites" }),
+    ).toBeEnabled();
+    await expect(link).toBeFocused();
+    expect(
+      await link.evaluate(
+        (element, previous) => element === previous,
+        original,
+      ),
+    ).toBe(true);
+    expect(state.posts).toEqual([]);
+  });
+}
+
+for (const endpoint of ["devices", "scenes"]) {
+  test(`Home empty favorites block both editor entry points after cached ${endpoint} failure`, async ({
+    page,
+    context,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.goto("/");
+    const panel = page.locator("#home-favorites-panel");
+    const pin = panel.getByRole("button", {
+      name: "Pin favorites",
+      exact: true,
+    });
+    const edit = page.getByRole("button", {
+      name: "Edit favorites",
+      exact: true,
+    });
+    await expect(pin).toBeEnabled();
+    await page.route(`**/api/v1/${endpoint}`, (route) =>
+      json(route, { detail: "Inventory refresh unavailable" }, 400),
+    );
+    await context.setOffline(true);
+    await expect(
+      page.getByRole("status", { name: "Offline", exact: true }),
+    ).toBeVisible();
+    await context.setOffline(false);
+    await expect(panel.getByRole("alert")).toContainText(
+      "Could not refresh favorites",
+    );
+    await expect(edit).toBeDisabled();
+    await expect(pin).toBeDisabled();
+    // Synthetic dispatch also exercises the mode guard, independently of native disabled clicks.
+    await pin.dispatchEvent("click");
+    await edit.dispatchEvent("click");
+    await expect(panel).toHaveAccessibleName("Saved favorites");
+    await expect(edit).toHaveAttribute("aria-expanded", "false");
+    await expect(panel.locator("button[aria-pressed]")).toHaveCount(0);
+    await expect(
+      page.getByRole("button", { name: "Done", exact: true }),
+    ).toHaveCount(0);
+  });
+}
+
+for (const cached of [false, true]) {
+  for (const result of ["success", "failure", "outside"] as const) {
+    test(`Home keyboard Retry from ${cached ? "cached failure" : "initial error"} preserves ${result} focus`, async ({
+      page,
+      context,
+    }) => {
+      await mockFirmwareApi(page);
+      const fail = (route: Route) =>
+        json(route, { detail: "Health unavailable" }, 400);
+      if (!cached) await page.route("**/api/v1/health", fail);
+      await page.goto("/");
+      if (cached) {
+        await expect(
+          page
+            .getByRole("group", { name: "home status content", exact: true })
+            .getByText("Lab_WiFi", { exact: false }),
+        ).toBeVisible();
+        await page.route("**/api/v1/health", fail);
+        await context.setOffline(true);
+        await expect(
+          page.getByRole("status", { name: "Offline", exact: true }),
+        ).toBeVisible();
+        await context.setOffline(false);
+      }
+      const content = page.getByRole("group", {
+        name: "home status content",
+        exact: true,
+      });
+      await expect(content.getByRole("alert")).toContainText(
+        cached ? "Could not refresh home status" : "Could not load home status",
+      );
+      await page.unroute("**/api/v1/health", fail);
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route("**/api/v1/health", async (route) => {
+        await held;
+        if (result === "failure") return fail(route);
+        return route.fallback();
+      });
+      const retry = content.getByRole("button", {
+        name: "Retry home status",
+        exact: true,
+      });
+      await retry.focus();
+      await expect(retry).toBeFocused();
+      const requested = page.waitForRequest("**/api/v1/health");
+      await page.keyboard.press("Enter");
+      await requested;
+      const outside = page
+        .locator("#main-content footer")
+        .getByRole("link", { name: "View activity history", exact: true });
+      try {
+        if (cached) await expect(content.getByRole("button")).toBeDisabled();
+        else
+          await expect(
+            content.locator('[data-home-card-skeleton="home status"]'),
+          ).toBeVisible();
+        if (result === "outside") {
+          await outside.focus();
+          await expect(outside).toBeFocused();
+        }
+      } finally {
+        release();
+      }
+      if (result === "failure") {
+        await expect(retry).toBeEnabled();
+        await expect(cached ? retry : content).toBeFocused();
+        await expect(content.getByRole("alert")).toBeVisible();
+      } else {
+        await expect(content.getByRole("alert")).toHaveCount(0);
+        await expect(
+          content.getByRole("button", { name: /Retry/ }),
+        ).toHaveCount(0);
+        await expect(result === "outside" ? outside : content).toBeFocused();
+      }
+    });
+  }
+}
+
+for (const terminal of ["complete", "failed"] as const) {
+  test(`Home local automation waits for terminal ${terminal}`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let checks = 0;
+    await page.route(
+      "**/api/v1/automations/operations/status",
+      async (route) => {
+        expect(route.request().postDataJSON()).toEqual({ operation_id: 101 });
+        checks += 1;
+        if (checks === 1)
+          return json(route, {
+            operation_id: 101,
+            state: "pending",
+            action_index: 0,
+            action_count: 1,
+            failure: null,
+            error: null,
+          });
+        await held;
+        return json(route, {
+          operation_id: 101,
+          state: terminal,
+          action_index: 1,
+          action_count: 1,
+          failure: terminal === "failed" ? "Local action failed." : null,
+          error: null,
+        });
+      },
+    );
+    await page.goto("/");
+    const run = page.getByRole("button", { name: "Welcome home", exact: true });
+    await run.click();
+    try {
+      await expect(
+        page.getByRole("region", { name: "Waiting for automation completion" }),
+      ).toContainText("completion has not been confirmed");
+      await expect(run).toBeDisabled();
+      await expect(
+        page.getByRole("region", { name: "Automation run complete" }),
+      ).toHaveCount(0);
+      await expect.poll(() => checks).toBeGreaterThanOrEqual(2);
+    } finally {
+      release();
+    }
+    await expect(
+      page.getByRole("region", {
+        name:
+          terminal === "complete"
+            ? "Automation run complete"
+            : "Automation run failed",
+      }),
+    ).toContainText(
+      terminal === "complete"
+        ? "The automation completed successfully."
+        : "Local action failed.",
+    );
+    await expect(run).toBeEnabled();
+    expect(
+      state.posts.filter((post) => post.path === "/api/v1/automations/run"),
+    ).toHaveLength(1);
+  });
+}
+
+test("Home alerts offer per-condition review links without misleading healthy states", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  state.network.station_ipv4 = null;
+  state.storage.encrypted = false;
+  state.storage.mutations_allowed = false;
+  state.devices[0].availability = "stale";
+  state.system.ota_phase = "failed";
+  await page.goto("/");
+  const alerts = page.getByRole("list", { name: "Active alerts" });
+  await expect(alerts.getByRole("listitem")).toHaveCount(4);
+  for (const [title, action, href] of [
+    ["Home Wi-Fi is not connected", "Review network setup", "#/system"],
+    ["Encrypted storage needs attention", "Review storage", "#/storage"],
+    ["1 device states are stale or offline", "Review devices", "#/devices"],
+    ["Firmware update: failed", "Review firmware update", "#/system"],
+  ]) {
+    const alert = alerts.getByRole("listitem").filter({ hasText: title });
+    await expect(alert).toBeVisible();
+    await expect(
+      alert.getByRole("link", { name: action, exact: true }),
+    ).toHaveAttribute("href", href);
+  }
+  for (const text of [
+    /No active network, storage/,
+    "Encrypted · writable",
+    "No update in progress",
+    "No offline or stale devices are currently reported.",
+    "Clear",
+  ])
+    await expect(
+      page.getByText(text, { exact: typeof text === "string" }),
+    ).toHaveCount(0);
+  await expect(
+    page
+      .locator("#main-content footer")
+      .getByRole("link", { name: "View activity history" }),
+  ).toHaveAttribute("href", "#/activity");
+  expect(state.posts).toEqual([]);
 });
 
 // Navigation contract: sidebar clicks stay inside the SPA, update history/title,
@@ -808,6 +1832,148 @@ test("loads, filters, and infinitely paginates activity history", async ({
   ).toBeVisible();
 });
 
+for (const trigger of ["automatic", "manual"] as const) {
+  test(`activity pagination preserves scroll and viewport on ${trigger} append`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page, { activityPageSize: 20 });
+    state.activity = Array.from({ length: 65 }, (_, index) => ({
+      sequence: 100 - index,
+      unix_seconds: 1_700_000_000 - index,
+      uptime_seconds: 500 - index,
+      kind: "configuration_saved",
+      detail: `History event ${index + 1}: ${"Room lighting configuration saved locally. ".repeat(1 + (index % 4))}`,
+    }));
+    const pending: Route[] = [];
+    await page.route("**/api/v1/activity/page", async (route) => {
+      if (route.request().postDataJSON().before_sequence == null) {
+        await route.fallback();
+        return;
+      }
+      pending.push(route);
+    });
+    await page.goto("/#/activity");
+    const viewport = page.getByRole("region", {
+      name: "Scrollable activity history",
+    });
+    await expect(page.locator("#activity-list-summary")).toContainText(
+      "20 loaded",
+    );
+    const original = await viewport.elementHandle();
+    expect(original).not.toBeNull();
+    await expect
+      .poll(() =>
+        viewport
+          .locator("li")
+          .evaluateAll(
+            (rows) =>
+              new Set(rows.map((row) => row.getBoundingClientRect().height))
+                .size,
+          ),
+      )
+      .toBeGreaterThan(1);
+
+    for (const loaded of [40, 60, 65]) {
+      await viewport.evaluate((element, automatic) => {
+        element.scrollTop = automatic ? element.scrollHeight : 200;
+        element.dispatchEvent(new Event("scroll"));
+      }, trigger === "automatic");
+      await expect
+        .poll(() => viewport.evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(0);
+      if (trigger === "manual") {
+        expect(pending).toHaveLength(0);
+        await page
+          .getByRole("button", { name: "Load older", exact: true })
+          .click();
+      }
+      await expect.poll(() => pending.length).toBe(1);
+      const before = await viewport.evaluate((element) => element.scrollTop);
+      await expect(
+        page.getByRole("button", { name: "Loading older…" }),
+      ).toBeDisabled();
+      expect(
+        await viewport.evaluate(
+          (element, saved) => element === saved,
+          original,
+        ),
+      ).toBe(true);
+      await pending.shift()!.fallback();
+      await expect(page.locator("#activity-list-summary")).toContainText(
+        `${loaded} loaded`,
+      );
+      expect(
+        await viewport.evaluate(
+          (element, saved) => element === saved,
+          original,
+        ),
+      ).toBe(true);
+      expect
+        .soft(
+          await viewport.evaluate((element) => element.scrollTop),
+          `scroll after ${loaded} loaded events (was ${before})`,
+        )
+        .toBeGreaterThan(0);
+    }
+    await expect(
+      page.getByRole("button", { name: "Load older", exact: true }),
+    ).toHaveCount(0);
+    await viewport.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect(viewport.getByText(/History event 65:/)).toBeVisible();
+    await expect
+      .poll(() => viewport.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    expect(pending).toHaveLength(0);
+    expect(
+      state.posts.filter((post) => post.path === "/api/v1/activity/page"),
+    ).toHaveLength(4);
+  });
+}
+
+for (const [filter, option] of [
+  ["Severity", "Info"],
+  ["Event type", "configuration saved"],
+  ["Related category", "Configuration"],
+]) {
+  test(`activity explicit ${filter} change resets same-count results to top`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page, { activityPageSize: 20 });
+    state.activity = Array.from({ length: 20 }, (_, index) => ({
+      sequence: 100 - index,
+      unix_seconds: 1_700_000_000 - index,
+      uptime_seconds: 500 - index,
+      kind: "configuration_saved",
+      detail: `Filter event ${index + 1}: ${"Room configuration saved. ".repeat(1 + (index % 4))}`,
+    }));
+    await page.goto("/#/activity");
+    const viewport = page.getByRole("region", {
+      name: "Scrollable activity history",
+    });
+    await expect(page.locator("#activity-list-summary")).toContainText(
+      "20 loaded",
+    );
+    await viewport.evaluate((element) => {
+      element.scrollTop = 400;
+      element.dispatchEvent(new Event("scroll"));
+    });
+    await expect
+      .poll(() => viewport.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    await page.getByRole("button", { name: filter, exact: false }).click();
+    await page.getByRole("option", { name: option, exact: true }).click();
+    await expect(page.locator("#activity-list-summary")).toContainText(
+      "20 loaded",
+    );
+    await expect
+      .poll(() => viewport.evaluate((element) => element.scrollTop))
+      .toBe(0);
+  });
+}
+
 test("renders and scrolls a full virtualized activity page", async ({
   page,
 }) => {
@@ -843,7 +2009,7 @@ test("uses the keyboard command palette for bounded available actions", async ({
   // Wait for Solid to hydrate and attach the global keyboard listener before
   // sending the shortcut; page load alone does not guarantee hydration.
   await expect(
-    page.getByRole("button", { name: "Open command palette" }),
+    page.getByRole("button", { name: /open command palette/i }),
   ).toBeVisible();
   await page.keyboard.press("Control+K");
   const palette = page.getByRole("dialog", { name: "Command palette" });
@@ -860,7 +2026,7 @@ test("uses the keyboard command palette for bounded available actions", async ({
     .poll(() => state.posts.at(-1)?.path)
     .toBe("/api/v1/automations/operations/status");
 
-  await page.getByRole("button", { name: "Open command palette" }).click();
+  await page.getByRole("button", { name: /open command palette/i }).click();
   const shortcutSearch = page
     .getByRole("dialog", { name: "Command palette" })
     .getByPlaceholder(/Search pages/);
@@ -1033,6 +2199,83 @@ test("keeps every page within mobile and tablet viewports", async ({
   }
 });
 
+for (const width of [320, 1024]) {
+  for (const navigation of ["expanded", "collapsed"] as const) {
+    test(`long model cards wrap locally at ${width} with ${navigation} navigation`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width, height: 900 });
+      const state = await mockFirmwareApi(page);
+      const name = "N".repeat(64);
+      const id = "i".repeat(48);
+      state.groups = [{ id, name, device_ids: [id, "d".repeat(48)] }];
+      state.scenes = [{ id, name, actions: [`scene|${id}`] }];
+      state.automations = [
+        {
+          id,
+          name,
+          enabled: true,
+          trigger: "manual",
+          actions: [`scene|${id}`],
+        },
+      ];
+      await page.goto("/#/groups");
+      if (width >= 768) {
+        const sidebar = page.locator("[data-state][data-collapsible]");
+        if ((await sidebar.getAttribute("data-state")) !== navigation)
+          await page.locator('[data-sidebar="trigger"]').click();
+        await expect(sidebar).toHaveAttribute("data-state", navigation);
+      } else if (navigation === "expanded") {
+        await page.getByRole("button", { name: "Toggle navigation" }).click();
+        await expect(page.locator('[data-slot="sheet-content"]')).toBeVisible();
+        await page.getByRole("button", { name: "Close navigation" }).click();
+        await expect(page.locator('[data-slot="sheet-content"]')).toBeHidden();
+      }
+      for (const route of ["groups", "scenes", "automations"]) {
+        await page.evaluate((path) => {
+          location.hash = `#/${path}`;
+        }, route);
+        await expectHeading(page, route[0].toUpperCase() + route.slice(1));
+        const title = page.getByText(name, { exact: true });
+        await expect(title).toBeVisible();
+        const card = title.locator(
+          "xpath=ancestor::div[contains(@class, 'rounded-lg')][1]",
+        );
+        await expect(card).toBeVisible();
+        expect(
+          await card.evaluate((element) => {
+            const bounds = element.getBoundingClientRect();
+            return Array.from(element.querySelectorAll("*"))
+              .filter(
+                (child) =>
+                  child.textContent?.trim() && child.getClientRects().length,
+              )
+              .every((child) => {
+                const box = child.getBoundingClientRect();
+                return (
+                  box.left >= bounds.left - 1 &&
+                  box.right <= bounds.right + 1 &&
+                  child.scrollWidth <= child.clientWidth + 1
+                );
+              });
+          }),
+        ).toBe(true);
+        expect(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        ).toBe(true);
+        const header = page.locator("#main-content header").first();
+        expect(
+          await header.evaluate(
+            (element) => element.scrollWidth <= element.clientWidth + 1,
+          ),
+        ).toBe(true);
+      }
+    });
+  }
+}
+
 test("contains maximum-length room names within room cards", async ({
   page,
 }) => {
@@ -1199,6 +2442,10 @@ test("prefills automation templates backed by device-side execution", async ({
   await expect(sheet.getByLabel("Time")).toHaveValue("23:00");
   await sheet.getByRole("button", { name: "Continue" }).click();
   await expect(sheet.getByText("Turn off a device")).toBeVisible();
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(
+    page.getByRole("alertdialog", { name: "Discard unsaved changes?" }),
+  ).toBeVisible();
 });
 
 test("shows reported room assignments and blocks deletion of referenced scenes", async ({
@@ -1370,14 +2617,18 @@ test("covers device inventory, Matter diagnostics, and Matter commissioning requ
   ).toBeVisible();
 
   await expect(page.getByRole("columnheader", { name: "Actions" })).toHaveCount(
-    0,
+    1,
   );
   await page
     .locator('[data-device-id="matter-light-1"]')
     .dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
-  await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
+  await page
+    .getByRole("menuitem", { name: "Remove device… Bench Lamp" })
+    .click();
   await page.getByRole("button", { name: "Remove device" }).click();
-  await expect(page.getByText("Matter device removal queued.")).toBeVisible();
+  await expect(
+    page.getByRole("region", { name: "Matter removal request accepted" }),
+  ).toBeVisible();
   expect(state.posts.at(-1)).toMatchObject({
     path: "/api/v1/matter/devices/remove",
     body: { device_id: "0000000000001234" },
@@ -1863,6 +3114,11 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
     state.posts.filter((request) => request.path === "/api/v1/rooms/upsert"),
   ).toHaveLength(0);
 
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page
+    .getByRole("alertdialog", { name: "Discard unsaved changes?" })
+    .getByRole("button", { name: "Discard changes" })
+    .click();
   await page.goto("/#/devices/add");
   await page.getByRole("button", { name: "Validate Wi‑Fi setup code" }).click();
   await page.getByRole("button", { name: "Validate Wi‑Fi code" }).click();
@@ -2220,17 +3476,11 @@ for (const status of ["pending", "failed"] as const) {
     const device = page.locator('[data-device-id="matter-light-1"]');
     await expect(device).toBeVisible();
     await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
-    await page.getByRole("menuitem", { name: "Remove Bench Lamp" }).click();
+    await page
+      .getByRole("menuitem", { name: "Remove device… Bench Lamp" })
+      .click();
     await page.getByRole("button", { name: "Remove device" }).click();
-    await expect(
-      page
-        .getByText(
-          status === "pending"
-            ? "Matter device removal queued."
-            : `Removal ${status}.`,
-        )
-        .first(),
-    ).toBeVisible();
+    await expect(page.getByText(`Removal ${status}.`).first()).toBeVisible();
     await expect(device).toBeVisible();
     await page.reload();
     await expect(device).toBeVisible();
@@ -2269,6 +3519,131 @@ for (const status of ["pending", "failed"] as const) {
         .first(),
     ).toBeVisible();
     await expect(device).toBeVisible();
+  });
+}
+
+test("Devices accepted power command stays Unknown until a fresh report", async ({
+  page,
+  context,
+}) => {
+  const state = await mockFirmwareApi(page);
+  state.devices[0].capabilities = ["on_off"];
+  let reads = 0;
+  let reported = false;
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/devices", async (route) => {
+    if (route.request().method() !== "GET") {
+      expect(route.request().postDataJSON()).toEqual({
+        device_id: "0000000000001234",
+        endpoint_id: 1,
+        on: true,
+      });
+      return json(route, {
+        accepted: true,
+        status: "pending",
+        operation_id: 43,
+        detail: "Power command queued.",
+      });
+    }
+    reads += 1;
+    if (reported) await held;
+    return json(route, {
+      devices: state.devices.map((device) => ({
+        ...device,
+        ...(reported ? { state: [{ OnOff: true }] } : {}),
+      })),
+      detail: "Reported inventory",
+    });
+  });
+  await page.goto("/#/devices");
+  const device = page.locator('[data-device-id="matter-light-1"]');
+  await expect(device.getByText("Unknown", { exact: true })).toBeVisible();
+  await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
+  await page.getByRole("menuitem", { name: "Turn on", exact: true }).click();
+  const accepted = page.getByRole("region", {
+    name: "Matter command request accepted",
+    exact: true,
+  });
+  await expect(accepted).toContainText("Power command queued.");
+  await expect(accepted).toContainText(
+    "Power remains the last reported state, not the requested state.",
+  );
+  expect(reads).toBeGreaterThanOrEqual(2);
+  await expect(device.getByText("Unknown", { exact: true })).toBeVisible();
+  await expect(device.getByText("On", { exact: true })).toHaveCount(0);
+  await expect(
+    page.getByRole("region", { name: /command.*complet/i }),
+  ).toHaveCount(0);
+  await expect(
+    device.locator("#power-matter-light-1-description"),
+  ).toContainText("displayed state updates only when Bench Lamp reports it");
+  reported = true;
+  await context.setOffline(true);
+  await expect(
+    page.getByRole("status", { name: "Offline", exact: true }),
+  ).toBeVisible();
+  const requested = page.waitForRequest("**/api/v1/devices");
+  await context.setOffline(false);
+  await requested;
+  try {
+    await expect(device.getByText("Unknown", { exact: true })).toBeVisible();
+    await expect(device.getByText("On", { exact: true })).toHaveCount(0);
+  } finally {
+    release();
+  }
+  await expect(device.getByText("On", { exact: true })).toBeVisible();
+  await expect(device.getByText("Unknown", { exact: true })).toHaveCount(0);
+  await expect(accepted).toBeVisible();
+});
+
+for (const accepted of [true, false]) {
+  test(`Devices rename shows local ${accepted ? "accepted" : "error"} feedback`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.route("**/api/v1/devices", (route) => {
+      if (route.request().method() === "GET") return route.fallback();
+      expect(route.request().postDataJSON()).toEqual({
+        device_id: "0000000000001234",
+        endpoint_id: 1,
+        name: "Desk Lamp",
+      });
+      return json(route, {
+        accepted,
+        status: accepted ? "pending" : "failed",
+        detail: accepted ? "Rename queued." : "Rename unavailable.",
+      });
+    });
+    await page.goto("/#/devices");
+    const device = page.locator('[data-device-id="matter-light-1"]');
+    await device.dispatchEvent("contextmenu", { clientX: 100, clientY: 100 });
+    await page.getByRole("menuitem", { name: "Rename", exact: true }).click();
+    await device
+      .getByRole("textbox", { name: "Device name" })
+      .fill("Desk Lamp");
+    await device.getByRole("button", { name: "Save", exact: true }).click();
+    await expect(
+      page.getByRole("region", {
+        name: accepted
+          ? "Device rename request accepted"
+          : "Device rename failed",
+        exact: true,
+      }),
+    ).toContainText(accepted ? "Rename queued." : "Rename unavailable.");
+    await expect(
+      page.getByRole("region", { name: /rename.*complet/i }),
+    ).toHaveCount(0);
+    if (accepted)
+      await expect(
+        device.getByText("Bench Lamp", { exact: true }),
+      ).toBeVisible();
+    else
+      await expect(
+        device.getByRole("textbox", { name: "Device name" }),
+      ).toHaveValue("Desk Lamp");
   });
 }
 
@@ -2406,3 +3781,978 @@ for (const outcome of [
     }
   });
 }
+
+// Full-page scans intentionally retain contrast rules and portal content.
+for (const [path, heading] of [
+  ["/", "Home"],
+  ["/#/activity", "Activity"],
+  ["/#/devices", "Devices"],
+  ["/#/devices/add", "Add Matter Device"],
+  ["/#/devices/configure", "Device Setup"],
+  ["/#/rooms", "Rooms"],
+  ["/#/groups", "Groups"],
+  ["/#/scenes", "Scenes"],
+  ["/#/automations", "Automations"],
+  ["/#/ai", "Optional Assistant"],
+  ["/#/ai/tools", "Assistant Permissions"],
+  ["/#/ai/prompts", "Assistant Prompts"],
+  ["/#/system", "System"],
+] as const) {
+  test(`axe desktop loaded ${heading}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await mockFirmwareApi(page);
+    await page.goto(path);
+    await expectHeading(page, heading);
+
+    await expectAccessible(page);
+  });
+}
+
+for (const state of [
+  "Home",
+  "Activity",
+  "access gate",
+  "dialog",
+  "sheet",
+  "command palette",
+  "menu",
+] as const) {
+  test(`axe narrow ${state}`, async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    if (state === "access gate") {
+      const server = await mockCookieAccess(page);
+      await page.goto("/");
+      await expect(
+        page.getByRole("button", { name: "I have a code" }),
+      ).toBeVisible();
+      await expectAccessible(page);
+      server.open = true;
+      await page.getByRole("button", { name: "I have a code" }).click();
+      await expect(page.getByLabel("Bootstrap code")).toBeVisible();
+      await expectAccessible(page);
+      return;
+    }
+    await mockFirmwareApi(page);
+    await page.goto(
+      state === "Activity"
+        ? "/#/activity"
+        : state === "sheet"
+          ? "/#/groups"
+          : state === "menu"
+            ? "/#/devices"
+            : "/",
+    );
+    if (state === "dialog") {
+      await page
+        .locator("#app")
+        .getByRole("button", { name: "Reboot" })
+        .click();
+      await expect(
+        page.getByRole("dialog", { name: "Reboot Core Pilot?" }),
+      ).toBeVisible();
+    } else if (state === "sheet") {
+      await page.getByRole("button", { name: "Create group" }).first().click();
+      await expect(
+        page.getByRole("dialog", { name: "Create group" }),
+      ).toBeVisible();
+    } else if (state === "command palette") {
+      await page.getByRole("button", { name: /open command palette/i }).click();
+      await expect(
+        page.getByRole("dialog", { name: "Command palette" }),
+      ).toBeVisible();
+    } else if (state === "menu") {
+      await page
+        .getByText("Bench Lamp", { exact: true })
+        .click({ button: "right" });
+      await expect(page.getByRole("menu")).toBeVisible();
+    } else {
+      await expectHeading(page, state);
+    }
+    await expectAccessible(page);
+  });
+}
+
+test("computed cursors distinguish actionable, disabled, text, and drag controls", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/groups");
+  const sharedButton = page
+    .getByRole("button", { name: "Create group" })
+    .first();
+  await expect(sharedButton).toHaveCSS("cursor", "pointer");
+  await page
+    .getByRole("link", { name: "Home", exact: true })
+    .first()
+    .evaluate((element) => element.setAttribute("data-cursor-link", ""));
+  await expect(page.locator("[data-cursor-link]")).toHaveCSS(
+    "cursor",
+    "pointer",
+  );
+  await sharedButton.click();
+  const sheet = page.getByRole("dialog", { name: "Create group" });
+  await expect(sheet.getByPlaceholder("Downstairs lights")).toHaveCSS(
+    "cursor",
+    "text",
+  );
+  // Exercise the shared component's disabled styling independently of form validation.
+  await sheet
+    .getByRole("button", { name: "Create group", exact: true })
+    .evaluate((element) => {
+      (element as HTMLButtonElement).disabled = true;
+    });
+  await expect(
+    sheet.getByRole("button", { name: "Create group", exact: true }),
+  ).toBeDisabled();
+  await expect(
+    sheet.getByRole("button", { name: "Create group", exact: true }),
+  ).not.toHaveCSS("cursor", "pointer");
+  await expect(sheet.getByRole("button", { name: /^Devices/ })).toHaveCSS(
+    "cursor",
+    "pointer",
+  );
+
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(sheet).toHaveCount(0);
+
+  // Isolate base semantic CSS from component utility classes, including native
+  // and ARIA controls that may not all occur together on a dashboard route.
+  await page.evaluate(() => {
+    const fixture = document.createElement("section");
+    fixture.id = "cursor-contract";
+    fixture.innerHTML = `
+      <button>Raw button</button><button disabled>Disabled button</button>
+      <a href="#/rooms">Raw link</a>
+      <select aria-label="Native select"><option>One</option></select>
+      <input type="checkbox" aria-label="Native checkbox">
+      <input type="text" aria-label="Text input">
+      <div role="combobox" tabindex="0" aria-label="Combobox"></div>
+      <div role="menuitem" tabindex="0">Menu item</div>
+      <div role="switch" tabindex="0" aria-checked="false">Switch</div>
+      <div role="checkbox" tabindex="0" aria-checked="false">Checkbox</div>
+      <div role="tab" tabindex="0">Tab</div>
+      <div role="button" tabindex="0" aria-disabled="true">Disabled role button</div>
+      <button class="cursor-grab" draggable="true">Drag handle</button>`;
+    document.body.append(fixture);
+  });
+  const fixture = page.locator("#cursor-contract");
+  for (const selector of [
+    "button:not(:disabled):not([draggable])",
+    "a[href]",
+    "select",
+    'input[type="checkbox"]',
+    '[role="combobox"]',
+    '[role="menuitem"]',
+    '[role="switch"]',
+    '[role="checkbox"]',
+    '[role="tab"]',
+  ]) {
+    await expect
+      .soft(fixture.locator(selector), selector)
+      .toHaveCSS("cursor", "pointer");
+  }
+  await expect
+    .soft(fixture.locator("button:disabled"))
+    .not.toHaveCSS("cursor", "pointer");
+  await expect
+    .soft(fixture.locator('[aria-disabled="true"]'))
+    .not.toHaveCSS("cursor", "pointer");
+  await expect
+    .soft(fixture.locator('input[type="text"]'))
+    .toHaveCSS("cursor", "text");
+  await expect
+    .soft(fixture.getByRole("button", { name: "Drag handle" }))
+    .toHaveCSS("cursor", "grab");
+});
+
+test("nonmodal context menu exits with Escape and Tab while confirmation traps focus", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/devices");
+  const device = page.locator('[data-device-id="matter-light-1"]');
+  const openMenu = async () => {
+    await device.click({ button: "right" });
+    await expect(page.getByRole("menu")).toBeVisible();
+    await expect(page.locator("#app")).not.toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    await expect(
+      page.getByRole("menu").locator("[data-focus-trap]"),
+    ).toHaveCount(0);
+  };
+  await openMenu();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await openMenu();
+  await page
+    .getByRole("menuitem", { name: "Remove device… Bench Lamp", exact: true })
+    .click();
+  const dialog = page.getByRole("alertdialog");
+  await expect(dialog).toBeVisible();
+  await expect(page.locator("#app")).toHaveAttribute("aria-hidden", "true");
+  for (const key of ["Tab", "Shift+Tab", "Tab", "Tab"]) {
+    await page.keyboard.press(key);
+    await expect
+      .poll(() =>
+        dialog.evaluate((element) => element.contains(document.activeElement)),
+      )
+      .toBe(true);
+  }
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+  await openMenu();
+  await page.keyboard.press("Tab");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => document.activeElement?.closest('[role="menu"]') === null,
+      ),
+    )
+    .toBe(true);
+});
+
+for (const key of ["Enter", "Space"]) {
+  test(`device actions dropdown supports ${key} and restores focus`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.goto("/#/devices");
+    const trigger = page.getByRole("button", {
+      name: "Device actions for Bench Lamp",
+    });
+    await trigger.focus();
+    await page.keyboard.press(key);
+    const menu = page.getByRole("menu");
+    await expect(menu).toBeVisible();
+    const items = await menu.getByRole("menuitem").allTextContents();
+    await page.keyboard.press("Escape");
+    await expect(trigger).toBeFocused();
+    await page
+      .locator('[data-device-id="matter-light-1"]')
+      .click({ button: "right" });
+    await expect(menu).toBeVisible();
+    expect(await menu.getByRole("menuitem").allTextContents()).toEqual(items);
+  });
+}
+
+test("narrow touch device actions expose accessible removal confirmation", async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 320, height: 568 },
+    hasTouch: true,
+  });
+  const page = await context.newPage();
+  try {
+    await mockFirmwareApi(page);
+    await page.goto("http://127.0.0.1:4173/#/devices");
+    await page
+      .getByRole("button", { name: "Device actions for Bench Lamp" })
+      .tap();
+    await expect(page.getByRole("menu")).toBeVisible();
+    await expectAccessible(page);
+    await page
+      .getByRole("menuitem", { name: "Remove device… Bench Lamp" })
+      .tap();
+    const confirm = page.getByRole("button", {
+      name: "Remove device",
+      exact: true,
+    });
+    await expect(confirm).toBeInViewport();
+    await expect(
+      page.getByRole("button", { name: "Cancel", exact: true }),
+    ).toBeInViewport();
+  } finally {
+    await context.close();
+  }
+});
+
+for (const [platform, label, shortcut] of [
+  ["MacIntel", "⌘K", "Meta+K"],
+  ["Win32", "Ctrl+K", "Control+K"],
+]) {
+  test(`command shortcut follows ${platform}`, async ({ page }) => {
+    await page.addInitScript(
+      (platform) =>
+        Object.defineProperty(navigator, "platform", { get: () => platform }),
+      platform,
+    );
+    await mockFirmwareApi(page);
+    await page.goto("/");
+    const trigger = page.getByRole("button", {
+      name: `Search ${label} — open command palette`,
+    });
+    await expect(trigger).toBeVisible();
+    await expect(trigger).toHaveAttribute("aria-keyshortcuts", shortcut);
+    await expectAccessible(page);
+    await page.keyboard.press(shortcut);
+    await expect(
+      page.getByRole("dialog", { name: "Command palette" }),
+    ).toBeVisible();
+  });
+}
+
+for (const [model, placeholder] of [
+  ["room", "Kitchen"],
+  ["group", "Downstairs lights"],
+  ["scene", "Movie night"],
+  ["automation", "Wind-down routine"],
+]) {
+  test(`${model} sheet guards dirty cancellation and beforeunload`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.goto(`/#/${model}s`);
+    const open = page
+      .getByRole("button", { name: `Create ${model}`, exact: true })
+      .first();
+    await open.click();
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await open.click();
+    const field = page.getByPlaceholder(placeholder);
+    await field.fill("Unsaved draft");
+    expect(
+      await page.evaluate(() => {
+        const event = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      }),
+    ).toBe(true);
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    const warning = page.getByRole("alertdialog", {
+      name: "Discard unsaved changes?",
+    });
+    await expect(warning).toBeVisible();
+    await expect(
+      warning.getByRole("button", { name: "Keep editing" }),
+    ).toBeFocused();
+    if (model === "room") await expectAccessible(page);
+    await warning.getByRole("button", { name: "Keep editing" }).click();
+    await expect(field).toHaveValue("Unsaved draft");
+    await page.getByRole("button", { name: "Cancel", exact: true }).click();
+    await warning.getByRole("button", { name: "Discard changes" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(
+      await page.evaluate(() => {
+        const event = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      }),
+    ).toBe(false);
+  });
+}
+
+test("devices loading boundary hides decorative table until inventory resolves", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/devices", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto("/#/devices");
+  await expect(
+    page.getByRole("status").filter({ hasText: "Loading devices" }),
+  ).toBeVisible();
+  await expect(page.getByRole("table")).toHaveCount(0);
+  release();
+  await expect(page.getByRole("table")).toBeVisible();
+});
+
+test("device URL filters preserve unknown parameters and browser history", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto(
+    "/#/devices?q=Bench&protocol=matter&availability=online&density=compact&future=keep",
+  );
+  await expect(
+    page.getByRole("searchbox", { name: "Search devices" }),
+  ).toHaveValue("Bench");
+  await expect(
+    page.getByRole("button", { name: "Compact", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Bench Lamp", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Comfortable", exact: true }).click();
+  await expect(page).toHaveURL(/future=keep/);
+  await expect(page).not.toHaveURL(/density=/);
+  await page.goBack();
+  await expect(
+    page.getByRole("button", { name: "Compact", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await page.goForward();
+  await expect(
+    page.getByRole("button", { name: "Comfortable", exact: true }),
+  ).toHaveAttribute("aria-pressed", "true");
+});
+
+test("activity URL filters validate values and expose a visible live count", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto(
+    "/#/activity?eventType=wifi_join_failed&severity=error&category=network&future=keep",
+  );
+  const summary = page.locator("#activity-list-summary");
+  await expect(summary).toBeVisible();
+  await expect(summary).toHaveAttribute("role", "status");
+  await expect(
+    page.getByText("Wi-Fi join failed.", { exact: true }),
+  ).toBeVisible();
+  await page.goto(
+    `/#/activity?eventType=${"x".repeat(65)}&severity=invalid&category=invalid&future=keep`,
+  );
+  await expect(page).toHaveURL(/activity\?future=keep$/);
+  await expect(summary).toContainText("3 loaded");
+});
+
+test("assistant conversation log remains stable when a completed reply is appended", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/ai/chat", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto("/#/ai");
+  const log = page.getByRole("log", { name: "Assistant conversation" });
+  await expect(log).toHaveAttribute("aria-live", "polite");
+  await expect(log).toHaveAttribute("aria-relevant", "additions text");
+  const original = await log.elementHandle();
+  await page
+    .getByPlaceholder(
+      "Ask Core Pilot to check status, list devices, scenes, or automations…",
+    )
+    .fill("Check status");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(log.getByText("Core Pilot status looks healthy.")).toHaveCount(
+    0,
+  );
+  release();
+  await expect(log.getByText("Core Pilot status looks healthy.")).toBeVisible();
+  expect(
+    await log.evaluate((element, saved) => element === saved, original),
+  ).toBe(true);
+});
+
+for (const model of ["rooms", "groups", "scenes", "automations"]) {
+  test(`${model} cached content survives refresh errors and explicit retry`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.goto(`/#/${model}`);
+    const content = page.getByRole("group", { name: `${model} content` });
+    await expect(content.getByRole("heading").first()).toBeVisible();
+    const original = await content.elementHandle();
+    let failed = true;
+    await page.route(`**/api/v1/${model}`, async (route) => {
+      if (failed)
+        await json(route, { detail: "Storage temporarily unavailable" }, 503);
+      else await route.fallback();
+    });
+    await page.context().setOffline(true);
+    await expect(
+      page.getByRole("status", { name: "Offline", exact: true }),
+    ).toBeVisible();
+    await page.context().setOffline(false);
+    await expect(content.getByRole("alert")).toContainText(
+      `Could not refresh ${model}`,
+    );
+    expect(
+      await content.evaluate((element, saved) => element === saved, original),
+    ).toBe(true);
+    await expect(content.getByRole("heading").first()).toBeVisible();
+    failed = false;
+    await content
+      .getByRole("button", { name: `Retry ${model}`, exact: true })
+      .click();
+    await expect(content.getByRole("alert")).toHaveCount(0);
+  });
+}
+
+test("activity older error retains viewport and requires explicit retry", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page, { activityPageSize: 20 });
+  state.activity = Array.from({ length: 40 }, (_, index) => ({
+    sequence: 100 - index,
+    unix_seconds: 1_700_000_000 - index,
+    uptime_seconds: 500 - index,
+    kind: "configuration_saved",
+    detail: `Retained history ${index + 1}`,
+  }));
+  let failed = true;
+  let olderReads = 0;
+  let releaseRetry!: () => void;
+  const heldRetry = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  await page.route("**/api/v1/activity/page", async (route) => {
+    if (route.request().postDataJSON().before_sequence != null) {
+      olderReads++;
+      if (failed) {
+        await json(route, { detail: "Older history unavailable" }, 503);
+        return;
+      }
+      await heldRetry;
+    }
+    await route.fallback();
+  });
+  await page.goto("/#/activity");
+  const viewport = page.getByRole("region", {
+    name: "Scrollable activity history",
+  });
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "20 loaded",
+  );
+  const original = await viewport.elementHandle();
+  await viewport.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect(
+    page.getByRole("button", { name: "Retry older", exact: true }),
+  ).toBeVisible();
+  const readsAfterError = olderReads;
+  const scroll = await viewport.evaluate((element) => element.scrollTop);
+  for (let index = 0; index < 3; index++) {
+    await viewport.evaluate((element) =>
+      element.dispatchEvent(new Event("scroll")),
+    );
+    await page.getByRole("button", { name: "Severity" }).click();
+    await page.keyboard.press("Escape");
+  }
+  expect(olderReads).toBe(readsAfterError);
+  expect(
+    await viewport.evaluate((element, saved) => element === saved, original),
+  ).toBe(true);
+  // Virtual row measurements may adjust the offset without resetting history.
+  expect(scroll).toBeGreaterThan(0);
+  expect(
+    await viewport.evaluate((element) => element.scrollTop),
+  ).toBeGreaterThan(0);
+  failed = false;
+  await page.getByRole("button", { name: "Retry older", exact: true }).click();
+  await expect.poll(() => olderReads).toBe(readsAfterError + 1);
+  // Measure a settled, fully visible row while the successful retry is held.
+  await viewport.evaluate(async (element) => {
+    element.scrollTop = 200;
+    element.dispatchEvent(new Event("scroll"));
+    await new Promise<void>((resolve) =>
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+    );
+  });
+  const anchor = await viewport.evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    const row = Array.from(element.querySelectorAll("li")).find(
+      (row) => row.getBoundingClientRect().top >= top,
+    )!;
+    return {
+      label: row.textContent!,
+      offset: row.getBoundingClientRect().top - top,
+      scroll: element.scrollTop,
+    };
+  });
+  releaseRetry();
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "40 loaded",
+  );
+  expect(
+    await viewport.evaluate((element, saved) => element === saved, original),
+  ).toBe(true);
+  await expect
+    .poll(() => viewport.evaluate((element) => element.scrollTop))
+    .toBe(anchor.scroll);
+  await expect
+    .poll(() =>
+      viewport
+        .getByRole("listitem")
+        .filter({ hasText: anchor.label })
+        .evaluate(
+          (row) =>
+            row.getBoundingClientRect().top -
+            row.closest('[role="region"]')!.getBoundingClientRect().top,
+        ),
+    )
+    .toBeCloseTo(anchor.offset, 0);
+});
+
+test("activity background error retains cached history", async ({ page }) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/activity");
+  const viewport = page.getByRole("region", {
+    name: "Scrollable activity history",
+  });
+  await expect(
+    viewport.getByText("Wi-Fi join failed.", { exact: true }),
+  ).toBeVisible();
+  const original = await viewport.elementHandle();
+  await page.route("**/api/v1/activity/page", (route) =>
+    json(route, { detail: "History unavailable" }, 503),
+  );
+  await page.context().setOffline(true);
+  await expect(
+    page.getByRole("status", { name: "Offline", exact: true }),
+  ).toBeVisible();
+  await page.context().setOffline(false);
+  await expect(page.getByRole("alert")).toContainText(
+    "Activity refresh failed. Showing cached activity.",
+  );
+  await expect(
+    viewport.getByText("Wi-Fi join failed.", { exact: true }),
+  ).toBeVisible();
+  expect(
+    await viewport.evaluate((element, saved) => element === saved, original),
+  ).toBe(true);
+});
+
+async function expectDraftDirty(page: Page, dirty: boolean) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const event = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      }),
+    )
+    .toBe(dirty);
+}
+
+for (const [model, name, placeholder] of [
+  ["room", "Lab", "Kitchen"],
+  ["group", "Bench lights", "Downstairs lights"],
+  ["scene", "Evening", "Movie night"],
+  ["automation", "Morning", "Wind-down routine"],
+]) {
+  test(`${model} existing edit stays pristine after name revert`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    await page.goto(`/#/${model}s`);
+    const edit = page.getByRole("button", {
+      name: `Edit ${name}`,
+      exact: true,
+    });
+    await edit.click();
+    const sheet = page.getByRole("dialog");
+    const field = sheet.getByPlaceholder(placeholder);
+    await expect(field).toHaveValue(name);
+    await expectDraftDirty(page, false);
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    await edit.click();
+    await field.fill(`${name} changed`);
+    await expectDraftDirty(page, true);
+    await field.fill(name);
+    await expectDraftDirty(page, false);
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect(state.posts).toHaveLength(0);
+  });
+}
+
+test("group member change and revert restores the pristine edit baseline", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/groups");
+  await page
+    .getByRole("button", { name: "Edit Bench lights", exact: true })
+    .click();
+  const sheet = page.getByRole("dialog");
+  await expectDraftDirty(page, false);
+  await sheet.getByRole("button", { name: /^Devices/ }).click();
+  await page.getByRole("option", { name: "Bench Lamp" }).click();
+  await page.keyboard.press("Escape");
+  await expectDraftDirty(page, true);
+  await sheet.getByRole("button", { name: /^Devices/ }).click();
+  await page.getByRole("option", { name: "Bench Lamp" }).click();
+  await page.keyboard.press("Escape");
+  await expectDraftDirty(page, false);
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});
+
+for (const model of ["scene", "automation"]) {
+  test(`${model} action revert clears dirty while reordered actions persist and reopen pristine`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    const actions = ["notify|Baseline message", "delay|1000"];
+    if (model === "scene") state.scenes[0].actions = actions;
+    else state.automations[0].actions = actions;
+    const name = model === "scene" ? "Evening" : "Morning";
+    await page.goto(`/#/${model}s`);
+    const edit = page.getByRole("button", {
+      name: `Edit ${name}`,
+      exact: true,
+    });
+    const sheet = page.getByRole("dialog");
+    await edit.click();
+    await expectDraftDirty(page, false);
+    if (model === "automation") {
+      await sheet.getByRole("button", { name: "Continue" }).click();
+      await sheet.getByRole("button", { name: "Continue" }).click();
+    }
+    const message = sheet.getByLabel("Message");
+    await message.fill("Changed message");
+    await expectDraftDirty(page, true);
+    await message.fill("Baseline message");
+    await expectDraftDirty(page, false);
+    await sheet.getByRole("button", { name: "Move action 2 up" }).click();
+    await expectDraftDirty(page, true);
+    await sheet.getByRole("button", { name: "Move action 2 up" }).click();
+    await expectDraftDirty(page, false);
+    await sheet.getByRole("button", { name: "Move action 2 up" }).click();
+    await expectDraftDirty(page, true);
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    const warning = page.getByRole("alertdialog", {
+      name: "Discard unsaved changes?",
+    });
+    await expect(warning).toBeVisible();
+    await warning.getByRole("button", { name: "Keep editing" }).click();
+    if (model === "automation")
+      await sheet.getByRole("button", { name: "Continue" }).click();
+    await sheet
+      .getByRole("button", { name: `Update ${model}`, exact: true })
+      .click();
+    await expect(sheet).toHaveCount(0);
+    await expectDraftDirty(page, false);
+    expect(state.posts.at(-1)).toMatchObject({
+      path: `/api/v1/${model}s/upsert`,
+      body: { actions: ["delay|1000", "notify|Baseline message"] },
+    });
+    await edit.click();
+    await expectDraftDirty(page, false);
+    if (model === "automation") {
+      await sheet.getByRole("button", { name: "Continue" }).click();
+      await sheet.getByRole("button", { name: "Continue" }).click();
+    }
+    await expect(
+      sheet
+        .getByRole("list", { name: "Ordered actions" })
+        .getByRole("listitem")
+        .first()
+        .getByLabel("Milliseconds"),
+    ).toHaveValue("1000");
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  });
+}
+
+test("room failed save preserves draft and successful retry closes without warning", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/rooms");
+  await page
+    .getByRole("button", { name: "Create room", exact: true })
+    .first()
+    .click();
+  const field = page.getByPlaceholder("Kitchen");
+  await field.fill("Draft kitchen");
+  const fail = (route: Route) =>
+    json(route, { accepted: false, detail: "Save rejected" });
+  await page.route("**/api/v1/rooms/upsert", fail);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create room", exact: true })
+    .click();
+  await expect(page.getByText("Save rejected", { exact: true })).toBeVisible();
+  await expect(field).toHaveValue("Draft kitchen");
+  await expectDraftDirty(page, true);
+  await page.unroute("**/api/v1/rooms/upsert", fail);
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Create room", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expectDraftDirty(page, false);
+  await page
+    .getByRole("button", { name: "Edit Draft kitchen", exact: true })
+    .click();
+  await expect(field).toHaveValue("Draft kitchen");
+  await expectDraftDirty(page, false);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});
+
+test("dirty room internal navigation waits for discard confirmation", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/rooms");
+  await page
+    .getByRole("button", { name: "Create room", exact: true })
+    .first()
+    .click();
+  await page.getByPlaceholder("Kitchen").fill("Navigation draft");
+  // Drive a real router link from inside the modal, without bypassing its focus trap.
+  await page.getByRole("dialog").evaluate((dialog) => {
+    const link = document.createElement("a");
+    link.href = "#/groups";
+    link.textContent = "Test internal navigation";
+    dialog.append(link);
+    link.click();
+    link.remove();
+  });
+  const warning = page.getByRole("alertdialog", {
+    name: "Discard unsaved changes?",
+  });
+  await expect(warning).toBeVisible();
+  await expect(page).toHaveURL(/#\/rooms$/);
+  await warning.getByRole("button", { name: "Discard changes" }).click();
+  await expectHeading(page, "Groups");
+});
+
+for (const [model, name, dependency, reason] of [
+  [
+    "room",
+    "Lab",
+    "devices",
+    "Device assignments could not be verified. Refresh devices before deleting this room.",
+  ],
+  [
+    "scene",
+    "Evening",
+    "automations",
+    "Automation references could not be verified. Refresh automations before deleting this scene.",
+  ],
+]) {
+  test(`${model} open delete confirmation blocks when required inventory refresh fails`, async ({
+    page,
+    context,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    for (const device of state.devices) device.room = "";
+    state.automations = [];
+    await page.goto(`/#/${model}s`);
+    await page
+      .getByRole("button", { name: `Delete ${name}`, exact: true })
+      .click();
+    const dialog = page.getByRole("alertdialog", { name: `Delete ${name}?` });
+    await expect(
+      dialog.getByRole("button", { name: `Delete ${model}`, exact: true }),
+    ).toBeEnabled();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(`**/api/v1/${dependency}`, async (route) => {
+      await held;
+      await json(route, { detail: "Required inventory unavailable" }, 400);
+    });
+    // Isolate the dependency failure before the independent model refresh completes.
+    let releaseModel!: () => void;
+    const heldModel = new Promise<void>((resolve) => {
+      releaseModel = resolve;
+    });
+    await page.route(`**/api/v1/${model}s`, async (route) => {
+      await heldModel;
+      await route.fallback();
+    });
+    await context.setOffline(true);
+    const requested = page.waitForRequest(`**/api/v1/${dependency}`);
+    await context.setOffline(false);
+    await requested;
+    await expect(dialog).toBeVisible();
+    release();
+    await expect(dialog.getByRole("status")).toHaveText(reason);
+    const confirm = dialog.getByRole("button", {
+      name: "Resolve dependencies first",
+      exact: true,
+    });
+    await expect(confirm).toBeDisabled();
+    // Synthetic dispatch also exercises confirm()'s guard, not just native disabled input.
+    await confirm.dispatchEvent("click");
+    await expect(dialog).toBeVisible();
+    expect(
+      state.posts.filter((post) => post.path === `/api/v1/${model}s/delete`),
+    ).toEqual([]);
+    await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(dialog).toHaveCount(0);
+    expect(
+      state.posts.filter((post) => post.path === `/api/v1/${model}s/delete`),
+    ).toEqual([]);
+    releaseModel();
+  });
+}
+
+test("activity filter Back and Forward restore selected results and unknown parameters", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/activity?future=keep");
+  await page.getByRole("button", { name: "Severity" }).click();
+  await page.getByRole("option", { name: "Error", exact: true }).click();
+  await expect(page).toHaveURL(/severity=error/);
+  await expect(
+    page.getByRole("button", { name: /Severity Error/ }),
+  ).toBeVisible();
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "1 matching",
+  );
+  await page.goBack();
+  await expect(page).not.toHaveURL(/severity=/);
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "3 matching",
+  );
+  await page.goForward();
+  await expect(
+    page.getByRole("button", { name: /Severity Error/ }),
+  ).toBeVisible();
+  await expect(page.locator("#activity-list-summary")).toContainText(
+    "1 matching",
+  );
+  await expect(page).toHaveURL(/future=keep/);
+});
+
+test("devices search and availability update URL and restore through history", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/devices?future=keep");
+  const search = page.getByRole("searchbox", { name: "Search devices" });
+  const availability = page.getByRole("combobox", {
+    name: "Availability",
+    exact: true,
+  });
+  await search.fill("Bench");
+  await expect(page).toHaveURL(/q=Bench/);
+  await availability.selectOption("offline");
+  await expect(page).toHaveURL(/availability=offline/);
+  await expect(
+    page.getByText("No devices match these filters.", { exact: true }),
+  ).toBeVisible();
+  await page.goBack();
+  await expect(search).toHaveValue("Bench");
+  await expect(availability).toHaveValue("all");
+  await expect(page.getByText("Bench Lamp", { exact: true })).toBeVisible();
+  await page.goForward();
+  await expect(availability).toHaveValue("offline");
+  await expect(search).toHaveValue("Bench");
+  await expect(
+    page.getByText("No devices match these filters.", { exact: true }),
+  ).toBeVisible();
+  await expect(page).toHaveURL(/future=keep/);
+});

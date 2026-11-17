@@ -1,10 +1,13 @@
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
 import { createEffect, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
 import { HiOutlineHome, HiOutlinePencil } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { z } from "zod";
 
+import { CardQueryContent } from "~/components/card-query-content";
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import { TooltipIconButton } from "~/components/tooltip";
 import {
@@ -69,8 +72,15 @@ export default function Rooms() {
   const deleteMutation = roomDeleteMutation();
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [isSheetOpen, setIsSheetOpen] = createSignal(false);
-  const { errors, handleSubmit, register, reset } = createForm<RoomFormValues>({
-    defaultValues: { name: "" },
+  const defaultValues: RoomFormValues = { name: "" };
+  const {
+    errors,
+    handleSubmit,
+    register,
+    reset: resetFields,
+    formState,
+  } = createForm<RoomFormValues>({
+    defaultValues,
     mode: "onTouched",
   });
   const nameField = register("name", {
@@ -79,13 +89,25 @@ export default function Rooms() {
       return result.success || result.error.issues[0]?.message;
     },
   });
+  // The library compares against this object, even after reset(values).
+  function reset(next: RoomFormValues) {
+    const initial = next;
+    Object.assign(defaultValues, initial);
+    resetFields(initial);
+  }
+
+  const unsaved = createUnsavedChanges({
+    open: isSheetOpen,
+    dirty: formState.isDirty,
+    label: "room",
+  });
+
   const shouldShowToast = createToastGate();
 
   const response = () => roomsQuery.data ?? fallbackRooms;
   const devices = () => devicesQuery.data?.devices ?? fallbackDevices.devices;
   const devicesForRoom = (roomId: string) =>
     devices().filter((device) => deviceRoomId(device) === roomId);
-  const isInitialLoading = () => roomsQuery.isFetching && !roomsQuery.data;
 
   const resetForm = () => {
     setIsSheetOpen(false);
@@ -137,30 +159,23 @@ export default function Rooms() {
   return (
     <Card class="w-full overflow-hidden">
       <CardHeader>
-        <Flex
-          alignItems="start"
-          class="flex-col gap-4 sm:flex-row sm:items-center"
-        >
-          <div class="max-w-3xl">
-            <div class="mb-3 h-px w-12 bg-foreground" />
-            <h1 class="text-xl font-semibold tracking-tight">Rooms</h1>
-            <CardDescription>Organize devices by location</CardDescription>
-          </div>
-          <Flex
-            justifyContent="start"
-            class="w-full flex-wrap gap-2 self-start sm:w-auto"
-          >
-            <Button type="button" size="sm" onClick={createRoom}>
-              Create room
-            </Button>
-            <Button as="a" href="#/devices" variant="outline" size="sm">
-              View devices
-            </Button>
-            <Button as="a" href="#/devices/add" size="sm">
-              Add device
-            </Button>
-          </Flex>
-        </Flex>
+        <PageHeader
+          title="Rooms"
+          description="Organize devices by location"
+          actions={
+            <>
+              <Button type="button" size="sm" onClick={createRoom}>
+                Create room
+              </Button>
+              <Button as="a" href="#/devices" variant="outline" size="sm">
+                View devices
+              </Button>
+              <Button as="a" href="#/devices/add" size="sm">
+                Add device
+              </Button>
+            </>
+          }
+        />
       </CardHeader>
 
       <CardContent>
@@ -170,8 +185,9 @@ export default function Rooms() {
           justifyContent="start"
           class="gap-5"
         >
-          <Show
-            when={!isInitialLoading()}
+          <CardQueryContent
+            queries={[roomsQuery, devicesQuery]}
+            label="rooms"
             fallback={
               <Grid colsMd={2} class="gap-3" aria-busy="true">
                 <For each={[0, 1]}>
@@ -287,15 +303,24 @@ export default function Rooms() {
                             title={`Delete ${room.name}?`}
                             description="This removes the room record. Core Pilot will not silently change devices or other saved models."
                             confirmLabel="Delete room"
-                            disabled={deleteMutation.isPending}
+                            disabled={
+                              deleteMutation.isPending ||
+                              devicesQuery.data === undefined ||
+                              devicesQuery.isPlaceholderData ||
+                              Boolean(devicesQuery.error)
+                            }
                             blockedReason={
-                              assignedDevices().length > 0
-                                ? `Assigned devices: ${assignedDevices()
-                                    .map((device) => device.name)
-                                    .join(
-                                      ", ",
-                                    )}. Reassign them before deleting this room.`
-                                : undefined
+                              devicesQuery.data === undefined ||
+                              devicesQuery.isPlaceholderData ||
+                              devicesQuery.error
+                                ? "Device assignments could not be verified. Refresh devices before deleting this room."
+                                : assignedDevices().length > 0
+                                  ? `Assigned devices: ${assignedDevices()
+                                      .map((device) => device.name)
+                                      .join(
+                                        ", ",
+                                      )}. Reassign them before deleting this room.`
+                                  : undefined
                             }
                             onConfirm={() =>
                               deleteMutation.mutateAsync({ id: room.id })
@@ -308,7 +333,7 @@ export default function Rooms() {
                 </For>
               </Grid>
             </Show>
-          </Show>
+          </CardQueryContent>
         </Flex>
       </CardContent>
 
@@ -316,7 +341,7 @@ export default function Rooms() {
         open={isSheetOpen()}
         onOpenChange={(open) => {
           if (open) setIsSheetOpen(true);
-          else resetForm();
+          else unsaved.request(resetForm);
         }}
       >
         <SheetContent
@@ -356,7 +381,11 @@ export default function Rooms() {
             </div>
 
             <SheetFooter class="shrink-0 gap-2 border-t p-6">
-              <Button type="button" variant="outline" onClick={resetForm}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => unsaved.request(resetForm)}
+              >
                 Cancel
               </Button>
               <Button type="submit" disabled={upsertMutation.isPending}>
@@ -366,6 +395,7 @@ export default function Rooms() {
           </form>
         </SheetContent>
       </Sheet>
+      <unsaved.Confirmation />
     </Card>
   );
 }

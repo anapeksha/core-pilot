@@ -1,4 +1,5 @@
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
+import { createEffect, on, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
 import { z } from "zod";
 import {
@@ -12,7 +13,9 @@ import { toast } from "solid-sonner";
 import { Alert, AlertDescription, AlertTitle } from "~/components/alert";
 import { AutomationBuilder } from "~/components/automation-builder";
 import { Badge } from "~/components/badge";
+import { CardQueryContent } from "~/components/card-query-content";
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import { TooltipIconButton } from "~/components/tooltip";
 import {
@@ -75,7 +78,9 @@ const sceneFormSchema = z.object({
   ).refine((value) => value.trim().length > 0, "Enter a scene name."),
 });
 
-type SceneFormValues = z.input<typeof sceneFormSchema>;
+type SceneFormValues = z.input<typeof sceneFormSchema> & {
+  actionSequence?: string;
+};
 
 const deviceId = (device: Device) =>
   typeof device.id === "string" ? device.id : device.id[0];
@@ -99,27 +104,63 @@ export default function Scenes() {
   const [isSheetOpen, setIsSheetOpen] = createSignal(false);
   const [sceneActions, setSceneActions] = createSignal<ActionDraft[]>([]);
   const [actionError, setActionError] = createSignal<string | null>(null);
-  const { errors, handleSubmit, register, reset } = createForm<SceneFormValues>(
-    {
-      defaultValues: { name: "" },
-      mode: "onSubmit",
-      resolver: async (formValues: SceneFormValues) => {
-        const result = sceneFormSchema.safeParse(formValues);
-        if (result.success) return { values: result.data, errors: {} };
+  const defaultValues: SceneFormValues = { name: "", actionSequence: "[]" };
+  const {
+    errors,
+    handleSubmit,
+    register,
+    reset: resetFields,
+    formState,
+    setValue,
+    values: formValues,
+  } = createForm<SceneFormValues>({
+    defaultValues,
+    mode: "onSubmit",
+    resolver: async (formValues: SceneFormValues) => {
+      const result = sceneFormSchema.safeParse(formValues);
+      if (result.success) return { values: formValues, errors: {} };
 
-        return {
-          values: {},
-          errors: Object.fromEntries(
-            result.error.issues.map((issue) => [
-              issue.path.join("."),
-              { type: issue.code, message: issue.message },
-            ]),
-          ),
-        };
-      },
+      return {
+        values: {},
+        errors: Object.fromEntries(
+          result.error.issues.map((issue) => [
+            issue.path.join("."),
+            { type: issue.code, message: issue.message },
+          ]),
+        ),
+      };
     },
+  });
+  // The library compares against this object, even after reset(values).
+  function reset(next: SceneFormValues) {
+    const initial = { ...next, actionSequence: JSON.stringify(sceneActions()) };
+    Object.assign(defaultValues, initial);
+    resetFields(initial);
+  }
+  createEffect(
+    on(
+      () => JSON.stringify(sceneActions()),
+      (value) => {
+        if (formValues().actionSequence !== value)
+          setValue("actionSequence", value, { shouldDirty: true });
+      },
+    ),
   );
+  const unsaved = createUnsavedChanges({
+    open: isSheetOpen,
+    dirty: formState.isDirty,
+    label: "scene",
+  });
+
   const shouldShowToast = createToastGate();
+
+  const inventoryReady = () =>
+    devicesQuery.data !== undefined &&
+    !devicesQuery.isPlaceholderData &&
+    !devicesQuery.error &&
+    scenesQuery.data !== undefined &&
+    !scenesQuery.isPlaceholderData &&
+    !scenesQuery.error;
 
   const response = () => scenesQuery.data ?? fallbackScenes;
   const devices = () => devicesQuery.data?.devices ?? fallbackDevices.devices;
@@ -129,9 +170,10 @@ export default function Scenes() {
     automations().filter((automation) =>
       automation.actions.includes(`scene|${sceneId}`),
     );
-  const isInitialLoading = () => scenesQuery.isFetching && !scenesQuery.data;
+  const isInitialLoading = () =>
+    scenesQuery.data === undefined || scenesQuery.isPlaceholderData;
   const devicesInitialLoading = () =>
-    devicesQuery.isFetching && !devicesQuery.data;
+    devicesQuery.data === undefined || devicesQuery.isPlaceholderData;
 
   const resetForm = () => {
     setEditingId(null);
@@ -159,6 +201,7 @@ export default function Scenes() {
   };
 
   const submitScene = (formValues: SceneFormValues) => {
+    if (!inventoryReady()) return;
     const validation = validateAutomationDraft(
       formValues.name,
       { type: "manual" },
@@ -241,32 +284,21 @@ export default function Scenes() {
     <section class="w-full">
       <Card class="w-full overflow-hidden">
         <CardHeader>
-          <Flex
-            alignItems="start"
-            justifyContent="between"
-            class="flex-col gap-4 sm:flex-row"
-          >
-            <div class="max-w-3xl">
-              <div class="mb-3 h-px w-12 bg-foreground" />
-              <h1 class="text-xl font-semibold tracking-tight">Scenes</h1>
-              <CardDescription>
-                Capture an ordered set of local device actions and replay it
-                without AI or cloud access.
-              </CardDescription>
-            </div>
-            <Flex
-              justifyContent="start"
-              class="w-full flex-wrap gap-2 sm:w-auto"
-            >
-              <Button as="a" variant="outline" href="#/devices">
-                View devices
-              </Button>
-              <Button type="button" onClick={createScene}>
-                <HiOutlinePlus data-icon="inline-start" />
-                Create scene
-              </Button>
-            </Flex>
-          </Flex>
+          <PageHeader
+            title="Scenes"
+            description="Capture an ordered set of local device actions and replay it without AI or cloud access."
+            actions={
+              <>
+                <Button as="a" variant="outline" href="#/devices">
+                  View devices
+                </Button>
+                <Button type="button" onClick={createScene}>
+                  <HiOutlinePlus data-icon="inline-start" />
+                  Create scene
+                </Button>
+              </>
+            }
+          />
         </CardHeader>
 
         <CardContent class="p-5 sm:p-7">
@@ -297,8 +329,9 @@ export default function Scenes() {
             </Flex>
             <Separator />
 
-            <Show
-              when={!isInitialLoading()}
+            <CardQueryContent
+              queries={[scenesQuery, devicesQuery, automationsQuery]}
+              label="scenes"
               fallback={
                 <Grid class="gap-4" aria-busy="true" aria-live="polite">
                   <For each={[0, 1]}>
@@ -348,12 +381,12 @@ export default function Scenes() {
                     {(scene, sceneIndex) => {
                       const references = () => sceneReferences(scene.id);
                       return (
-                        <Card class="overflow-hidden">
+                        <Card class="min-w-0 overflow-hidden">
                           <CardHeader>
                             <Flex alignItems="start" class="flex-wrap gap-3">
                               <Flex
                                 justifyContent="start"
-                                class="min-w-0 flex-1 gap-3"
+                                class="min-w-0 basis-48 flex-1 gap-3"
                               >
                                 <div
                                   class="grid size-10 shrink-0 place-items-center rounded-full bg-muted"
@@ -362,7 +395,7 @@ export default function Scenes() {
                                   <HiOutlineRectangleGroup />
                                 </div>
                                 <div class="min-w-0">
-                                  <CardTitle class="truncate">
+                                  <CardTitle class="wrap-anywhere">
                                     {scene.name}
                                   </CardTitle>
                                   <CardDescription>
@@ -388,11 +421,11 @@ export default function Scenes() {
                               <ol class="flex flex-col gap-2">
                                 <For each={scene.actions}>
                                   {(action, index) => (
-                                    <li class="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
-                                      <span class="font-mono text-xs text-muted-foreground">
+                                    <li class="flex min-w-0 items-start gap-3 rounded-md border px-3 py-2 text-sm">
+                                      <span class="shrink-0 font-mono text-xs text-muted-foreground">
                                         {index() + 1}
                                       </span>
-                                      <span class="truncate">
+                                      <span class="min-w-0 wrap-anywhere">
                                         {actionSummary(decodeAction(action))}
                                       </span>
                                     </li>
@@ -401,7 +434,7 @@ export default function Scenes() {
                               </ol>
                             </Show>
                           </CardContent>
-                          <CardFooter class="justify-end gap-2">
+                          <CardFooter class="flex-wrap justify-end gap-2">
                             <TooltipIconButton
                               type="button"
                               size="icon"
@@ -417,13 +450,24 @@ export default function Scenes() {
                               title={`Delete ${scene.name}?`}
                               description="The scene cannot be deleted while an automation references it. Remove those actions first; Core Pilot never silently rewrites automations."
                               confirmLabel="Delete scene"
-                              disabled={deleteMutation.isPending}
+                              disabled={
+                                deleteMutation.isPending ||
+                                automationsQuery.data === undefined ||
+                                automationsQuery.isPlaceholderData ||
+                                Boolean(automationsQuery.error)
+                              }
                               blockedReason={
-                                references().length > 0
-                                  ? `Used by: ${references()
-                                      .map((automation) => automation.name)
-                                      .join(", ")}. Remove those actions first.`
-                                  : undefined
+                                automationsQuery.data === undefined ||
+                                automationsQuery.isPlaceholderData ||
+                                automationsQuery.error
+                                  ? "Automation references could not be verified. Refresh automations before deleting this scene."
+                                  : references().length > 0
+                                    ? `Used by: ${references()
+                                        .map((automation) => automation.name)
+                                        .join(
+                                          ", ",
+                                        )}. Remove those actions first.`
+                                    : undefined
                               }
                               onConfirm={() =>
                                 deleteMutation.mutateAsync({ id: scene.id })
@@ -436,7 +480,7 @@ export default function Scenes() {
                   </For>
                 </Grid>
               </Show>
-            </Show>
+            </CardQueryContent>
           </Flex>
         </CardContent>
       </Card>
@@ -445,7 +489,7 @@ export default function Scenes() {
         open={isSheetOpen()}
         onOpenChange={(open) => {
           if (open) setIsSheetOpen(true);
-          else closeSheet();
+          else unsaved.request(closeSheet);
         }}
       >
         <SheetContent class="flex w-full max-w-none flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl lg:max-w-5xl">
@@ -527,16 +571,24 @@ export default function Scenes() {
             </div>
 
             <SheetFooter class="shrink-0 gap-2 border-t bg-background px-6 py-4">
-              <Button type="button" variant="outline" onClick={closeSheet}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => unsaved.request(closeSheet)}
+              >
                 Cancel
               </Button>
-              <Button type="submit" disabled={upsertMutation.isPending}>
+              <Button
+                type="submit"
+                disabled={upsertMutation.isPending || !inventoryReady()}
+              >
                 {editingId() ? "Update scene" : "Create scene"}
               </Button>
             </SheetFooter>
           </form>
         </SheetContent>
       </Sheet>
+      <unsaved.Confirmation />
     </section>
   );
 }

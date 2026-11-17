@@ -1,11 +1,5 @@
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  For,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, For, Show, on } from "solid-js";
+import { useSearchParams } from "@solidjs/router";
 import { createVirtualizer } from "@tanstack/solid-virtual";
 import {
   HiOutlineArrowPath,
@@ -22,7 +16,7 @@ import {
   CardTitle,
 } from "~/components/card";
 import { EmptyState } from "~/components/empty-state";
-import { Flex } from "~/components/flex";
+import { PageHeader } from "~/components/page-header";
 import { Grid } from "~/components/grid";
 import {
   Select,
@@ -39,10 +33,10 @@ import {
   MAX_ACTIVITY_ITEMS,
   activityCategory,
   activityEventTypeLabel,
+  activityFilterParams,
   activitySeverity,
   activityTimestamp,
   flattenActivityPages,
-  type ActivityCategory,
   type ActivitySeverity,
 } from "~/lib/activity";
 import { activityPagesQuery } from "~/queries/activity";
@@ -55,16 +49,46 @@ const severityTone: Record<ActivitySeverity, StatusTone> = {
 
 export default function Activity() {
   const query = activityPagesQuery();
-  const [eventType, setEventType] = createSignal("all");
-  const [severity, setSeverity] = createSignal<"all" | ActivitySeverity>("all");
-  const [category, setCategory] = createSignal<ActivityCategory>("all");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const filters = createMemo(() => activityFilterParams(searchParams));
+  const eventType = () => filters().eventType;
+  const severity = () => filters().severity;
+  const category = () => filters().category;
+  const setFilter = (
+    key: "eventType" | "severity" | "category",
+    value: string,
+  ) => {
+    const validated = activityFilterParams({ ...filters(), [key]: value })[key];
+    setSearchParams(
+      { [key]: validated === "all" ? undefined : validated },
+      { scroll: false },
+    );
+  };
+  createEffect(() => {
+    const normalized = filters();
+    const updates: Partial<
+      Record<keyof typeof normalized, string | undefined>
+    > = {};
+    for (const key of ["eventType", "severity", "category"] as const) {
+      const value = normalized[key] === "all" ? undefined : normalized[key];
+      if (searchParams[key] !== value) updates[key] = value;
+    }
+    if (Object.keys(updates).length) {
+      setSearchParams(updates, { replace: true, scroll: false });
+    }
+  });
   let activityViewport: HTMLDivElement | undefined;
 
   const pages = () => query.data?.pages ?? [];
   const page = () => pages()[0] ?? null;
   const events = createMemo(() => flattenActivityPages(pages()));
   const eventTypes = createMemo(() =>
-    [...new Set(events().map((event) => event.kind))].sort(),
+    [
+      ...new Set([
+        ...events().map((event) => event.kind),
+        ...(eventType() === "all" ? [] : [eventType()]),
+      ]),
+    ].sort(),
   );
   const filteredEvents = createMemo(() =>
     events().filter(
@@ -87,13 +111,12 @@ export default function Activity() {
     overscan: 6,
   });
 
-  createEffect(() => {
-    void filteredEvents().length;
-    untrack(() => {
+  createEffect(
+    on([eventType, severity, category], () => {
       rowVirtualizer.scrollToOffset(0);
       rowVirtualizer.measure();
-    });
-  });
+    }),
+  );
 
   createEffect(() => {
     const lastRow = rowVirtualizer.getVirtualItems().at(-1);
@@ -101,7 +124,9 @@ export default function Activity() {
       lastRow &&
       lastRow.index >= filteredEvents().length - 3 &&
       canLoadMore() &&
-      !query.isFetchingNextPage
+      !query.isFetchingNextPage &&
+      !query.isFetchNextPageError &&
+      !query.isFetching
     ) {
       void query.fetchNextPage();
     }
@@ -110,20 +135,10 @@ export default function Activity() {
   return (
     <Card class="w-full overflow-hidden">
       <CardHeader>
-        <Flex
-          alignItems="start"
-          justifyContent="between"
-          class="flex-col gap-4 sm:flex-row"
-        >
-          <div class="max-w-3xl">
-            <div class="mb-3 h-px w-12 bg-foreground" />
-            <h1 class="text-xl font-semibold tracking-tight">Activity</h1>
-            <CardDescription>
-              Newest encrypted firmware events first. Event details never
-              include credentials or request content.
-            </CardDescription>
-          </div>
-        </Flex>
+        <PageHeader
+          title="Activity"
+          description="Newest encrypted firmware events first. Event details never include credentials or request content."
+        />
       </CardHeader>
       <CardContent>
         <Show
@@ -131,7 +146,7 @@ export default function Activity() {
           fallback={<ActivitySkeleton />}
         >
           <Show
-            when={!query.isError}
+            when={Boolean(query.data) || !query.isError}
             fallback={
               <EmptyState
                 icon={<HiOutlineExclamationTriangle />}
@@ -149,6 +164,19 @@ export default function Activity() {
               />
             }
           >
+            <Show when={query.isRefetchError && !query.isFetchNextPageError}>
+              <div role="alert" class="mb-4 space-y-2 text-sm text-destructive">
+                <p>Activity refresh failed. Showing cached activity.</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={query.isFetching}
+                  onClick={() => void query.refetch()}
+                >
+                  Retry refresh
+                </Button>
+              </div>
+            </Show>
             <Grid cols={1} colsLg={3} class="items-start gap-4">
               <Card class="lg:col-span-2">
                 <CardHeader>
@@ -176,10 +204,6 @@ export default function Activity() {
                       />
                     }
                   >
-                    <p id="activity-list-summary" class="sr-only">
-                      {filteredEvents().length} loaded events, newest first.
-                      Scroll to load older events.
-                    </p>
                     <div
                       ref={(element) => (activityViewport = element)}
                       class="h-144 max-h-[70vh] overflow-auto rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
@@ -207,6 +231,8 @@ export default function Activity() {
                                       )
                                     }
                                     data-index={virtualRow.index}
+                                    aria-posinset={virtualRow.index + 1}
+                                    aria-setsize={filteredEvents().length}
                                     class="absolute top-0 left-0 w-full pb-2"
                                     style={{
                                       transform: `translateY(${virtualRow.start}px)`,
@@ -246,7 +272,9 @@ export default function Activity() {
                       </Show>
                       {query.isFetchingNextPage
                         ? "Loading older…"
-                        : "Load older"}
+                        : query.isFetchNextPageError
+                          ? "Retry older"
+                          : "Load older"}
                     </Button>
                   </Show>
                 </CardContent>
@@ -263,7 +291,7 @@ export default function Activity() {
                   <FilterSelect
                     label="Event type"
                     value={eventType()}
-                    onChange={setEventType}
+                    onChange={(value) => setFilter("eventType", value)}
                     options={[
                       { value: "all", label: "All event types" },
                       ...eventTypes().map((kind) => ({
@@ -275,9 +303,7 @@ export default function Activity() {
                   <FilterSelect
                     label="Severity"
                     value={severity()}
-                    onChange={(value) =>
-                      setSeverity(value as "all" | ActivitySeverity)
-                    }
+                    onChange={(value) => setFilter("severity", value)}
                     options={[
                       { value: "all", label: "All severities" },
                       { value: "info", label: "Info" },
@@ -288,7 +314,7 @@ export default function Activity() {
                   <FilterSelect
                     label="Related category"
                     value={category()}
-                    onChange={(value) => setCategory(value as ActivityCategory)}
+                    onChange={(value) => setFilter("category", value)}
                     options={[
                       { value: "all", label: "All categories" },
                       { value: "automation", label: "Automation" },
@@ -307,12 +333,18 @@ export default function Activity() {
               </Card>
             </Grid>
 
-            <p class="mt-4 text-sm text-muted-foreground" aria-live="polite">
+            <p
+              id="activity-list-summary"
+              class="mt-4 text-sm text-muted-foreground"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
               {page()?.retained ?? 0} retained events
               {page()?.dropped_events
                 ? ` · ${page()!.dropped_events} dropped`
                 : ""}
-              {` · ${events().length} loaded`}
+              {` · ${events().length} loaded · ${filteredEvents().length} matching loaded events, newest first`}
               {events().length >= MAX_ACTIVITY_ITEMS
                 ? ` · Keeping the newest ${MAX_ACTIVITY_ITEMS}`
                 : ""}

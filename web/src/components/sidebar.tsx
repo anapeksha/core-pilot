@@ -574,8 +574,18 @@ const SidebarMenuButton = <T extends ValidComponent = "button">(
     "class",
   ]);
   const { isMobile, state } = useSidebar();
+  // Let Kobalte compose caller handlers and refs with its tooltip behavior.
+  const [triggerHandlers, buttonProps] = splitProps(others, [
+    "ref",
+    "onPointerEnter",
+    "onPointerLeave",
+    "onPointerDown",
+    "onClick",
+    "onFocus",
+    "onBlur",
+  ]);
 
-  const button = (
+  const MenuButton: Component<ComponentProps<"button">> = (triggerProps) => (
     <Polymorphic<SidebarMenuButtonProps>
       as="button"
       data-sidebar="menu-button"
@@ -585,14 +595,14 @@ const SidebarMenuButton = <T extends ValidComponent = "button">(
         sidebarMenuButtonVariants({ variant: local.variant, size: local.size }),
         local.class,
       )}
-      {...others}
+      {...mergeProps(buttonProps, triggerProps)}
     />
   );
 
   return (
-    <Show when={local.tooltip} fallback={button}>
+    <Show when={local.tooltip} fallback={<MenuButton {...triggerHandlers} />}>
       <Tooltip placement="right">
-        <TooltipTrigger class="w-full">{button}</TooltipTrigger>
+        <TooltipTrigger as={MenuButton} {...triggerHandlers} />
         <TooltipContent hidden={state() !== "collapsed" || isMobile()}>
           {local.tooltip}
         </TooltipContent>

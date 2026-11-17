@@ -7,7 +7,7 @@ import {
   onCleanup,
   onMount,
 } from "solid-js";
-import { HiOutlineCommandLine, HiOutlineMagnifyingGlass } from "solid-icons/hi";
+import { HiOutlineMagnifyingGlass } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { Button } from "~/components/button";
 import { TooltipIconButton } from "~/components/tooltip";
@@ -41,6 +41,9 @@ export function CommandPalette() {
   const automations = automationsQuery();
   const runMutation = automationRunMutation();
   const [open, setOpen] = createSignal(false);
+  const [usesMetaKey, setUsesMetaKey] = createSignal(false);
+  const shortcutLabel = () => (usesMetaKey() ? "⌘K" : "Ctrl+K");
+  const shortcutKeys = () => (usesMetaKey() ? "Meta+K" : "Control+K");
   const [query, setQuery] = createSignal("");
   const [selectedIndex, setSelectedIndex] = createSignal(0);
   let input: HTMLInputElement | undefined;
@@ -68,6 +71,7 @@ export function CommandPalette() {
   });
 
   onMount(() => {
+    setUsesMetaKey(/Mac|iPhone|iPad|iPod/.test(navigator.platform));
     const handleKeyDown = (event: KeyboardEvent) => {
       if (
         event.key.toLowerCase() === "k" &&
@@ -137,13 +141,17 @@ export function CommandPalette() {
         variant="outline"
         size="sm"
         class="ml-auto hidden gap-2 sm:inline-flex"
-        aria-label="Open command palette"
+        aria-label={`Search ${shortcutLabel()} — open command palette`}
+        aria-keyshortcuts={shortcutKeys()}
         onClick={() => setOpen(true)}
       >
         <HiOutlineMagnifyingGlass />
-        Search
-        <kbd class="rounded border bg-muted px-1.5 py-0.5 text-[0.65rem] text-muted-foreground">
-          ⌘K
+        Search{" "}
+        <kbd
+          aria-hidden="true"
+          class="rounded border bg-muted px-1.5 py-0.5 text-[0.65rem] text-muted-foreground"
+        >
+          {shortcutLabel()}
         </kbd>
       </Button>
       <TooltipIconButton
@@ -151,9 +159,10 @@ export function CommandPalette() {
         size="icon"
         class="ml-auto sm:hidden"
         aria-label="Open command palette"
+        aria-keyshortcuts={shortcutKeys()}
         onClick={() => setOpen(true)}
       >
-        <HiOutlineCommandLine aria-hidden="true" />
+        <HiOutlineMagnifyingGlass aria-hidden="true" />
       </TooltipIconButton>
       <Dialog open={open()} onOpenChange={setOpen}>
         <DialogContent class="max-w-xl gap-3 p-4">

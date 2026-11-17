@@ -1,10 +1,20 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
+import {
+  createEffect,
+  on,
+  createMemo,
+  createSignal,
+  For,
+  Show,
+} from "solid-js";
 import { createForm } from "solid-hook-form";
 import { HiOutlinePencil, HiOutlineSquares2x2 } from "solid-icons/hi";
 import { toast } from "solid-sonner";
 import { z } from "zod";
 
+import { CardQueryContent } from "~/components/card-query-content";
 import { Button } from "~/components/button";
+import { PageHeader } from "~/components/page-header";
 import { ConfirmDestructiveAction } from "~/components/confirm-destructive-action";
 import { TooltipIconButton } from "~/components/tooltip";
 import {
@@ -66,7 +76,9 @@ const groupSchema = z.object({
     .max(entityLimits.groupMembers, "A group can contain at most 32 devices."),
 });
 
-type GroupFormValues = z.input<typeof groupSchema>;
+type GroupFormValues = z.input<typeof groupSchema> & {
+  memberSelection?: string;
+};
 type DeviceOption = { id: string; name: string };
 
 function deviceId(device: Device): string {
@@ -80,11 +92,53 @@ export default function Groups() {
   const deleteMutation = groupDeleteMutation();
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [sheetOpen, setSheetOpen] = createSignal(false);
-  const { errors, handleSubmit, register, reset, setError, setValue, values } =
-    createForm<GroupFormValues>({
-      defaultValues: { name: "", members: [] },
-    });
+  const defaultValues: GroupFormValues = {
+    name: "",
+    members: [],
+    memberSelection: "[]",
+  };
+  const {
+    errors,
+    handleSubmit,
+    register,
+    reset: resetFields,
+    formState,
+    setError,
+    setValue,
+    values,
+  } = createForm<GroupFormValues>({
+    defaultValues,
+  });
+  // The library compares against this object, even after reset(values).
+  function reset(next: GroupFormValues) {
+    const initial = {
+      ...next,
+      memberSelection: JSON.stringify([...next.members].sort()),
+    };
+    Object.assign(defaultValues, initial);
+    resetFields(initial);
+  }
+  createEffect(
+    on(
+      () => JSON.stringify([...values().members].sort()),
+      (value) => {
+        if (values().memberSelection !== value)
+          setValue("memberSelection", value, { shouldDirty: true });
+      },
+    ),
+  );
+  const unsaved = createUnsavedChanges({
+    open: sheetOpen,
+    dirty: formState.isDirty,
+    label: "group",
+  });
+
   const shouldShowToast = createToastGate();
+
+  const inventoryReady = () =>
+    devicesQuery.data !== undefined &&
+    !devicesQuery.isPlaceholderData &&
+    !devicesQuery.error;
 
   const response = () => groupsQuery.data ?? fallbackGroups;
   const deviceOptions = createMemo<DeviceOption[]>(() =>
@@ -97,7 +151,6 @@ export default function Groups() {
     const selectedIds = new Set(values().members);
     return deviceOptions().filter((device) => selectedIds.has(device.id));
   });
-  const isInitialLoading = () => groupsQuery.isFetching && !groupsQuery.data;
 
   const openCreate = () => {
     setEditingId(null);
@@ -119,13 +172,14 @@ export default function Groups() {
 
   const handleSheetOpenChange = (open: boolean) => {
     if (!open) {
-      closeSheet();
+      unsaved.request(closeSheet);
       return;
     }
     setSheetOpen(true);
   };
 
   const submitGroup = handleSubmit((formValues) => {
+    if (!inventoryReady()) return;
     const result = groupSchema.safeParse(formValues);
     if (!result.success) {
       for (const issue of result.error.issues) {
@@ -171,30 +225,23 @@ export default function Groups() {
   return (
     <Card class="w-full overflow-hidden">
       <CardHeader>
-        <Flex
-          alignItems="start"
-          class="flex-col gap-4 sm:flex-row sm:items-center"
-        >
-          <div class="max-w-3xl">
-            <div class="mb-3 h-px w-12 bg-foreground" />
-            <h1 class="text-xl font-semibold tracking-tight">Groups</h1>
-            <CardDescription>Control multiple devices together</CardDescription>
-          </div>
-          <Flex
-            justifyContent="start"
-            class="w-full flex-wrap gap-2 self-start sm:w-auto"
-          >
-            <Button as="a" href="#/devices" variant="outline" size="sm">
-              View devices
-            </Button>
-            <Button as="a" href="#/devices/add" variant="outline" size="sm">
-              Add device
-            </Button>
-            <Button type="button" size="sm" onClick={openCreate}>
-              Create group
-            </Button>
-          </Flex>
-        </Flex>
+        <PageHeader
+          title="Groups"
+          description="Control multiple devices together"
+          actions={
+            <>
+              <Button as="a" href="#/devices" variant="outline" size="sm">
+                View devices
+              </Button>
+              <Button as="a" href="#/devices/add" variant="outline" size="sm">
+                Add device
+              </Button>
+              <Button type="button" size="sm" onClick={openCreate}>
+                Create group
+              </Button>
+            </>
+          }
+        />
       </CardHeader>
 
       <CardContent>
@@ -293,10 +340,17 @@ export default function Groups() {
                   </Select>
                 </div>
                 <SheetFooter class="shrink-0 gap-2 border-t px-6 py-4">
-                  <Button type="button" variant="outline" onClick={closeSheet}>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => unsaved.request(closeSheet)}
+                  >
                     Cancel
                   </Button>
-                  <Button type="submit" disabled={upsertMutation.isPending}>
+                  <Button
+                    type="submit"
+                    disabled={upsertMutation.isPending || !inventoryReady()}
+                  >
                     {editingId() ? "Update group" : "Create group"}
                   </Button>
                 </SheetFooter>
@@ -304,8 +358,9 @@ export default function Groups() {
             </SheetContent>
           </Sheet>
 
-          <Show
-            when={!isInitialLoading()}
+          <CardQueryContent
+            queries={[groupsQuery, devicesQuery]}
+            label="groups"
             fallback={
               <Grid colsMd={2} class="gap-3" aria-busy="true">
                 <For each={[0, 1]}>
@@ -354,13 +409,17 @@ export default function Groups() {
               <Grid colsMd={2} class="gap-3">
                 <For each={response().groups}>
                   {(group) => (
-                    <Card>
-                      <CardHeader>
-                        <CardTitle>{group.name}</CardTitle>
-                        <CardDescription>{group.id}</CardDescription>
+                    <Card class="min-w-0">
+                      <CardHeader class="min-w-0">
+                        <CardTitle class="wrap-anywhere">
+                          {group.name}
+                        </CardTitle>
+                        <CardDescription class="wrap-anywhere">
+                          {group.id}
+                        </CardDescription>
                       </CardHeader>
                       <CardContent>
-                        <p class="text-sm text-muted-foreground">
+                        <p class="min-w-0 wrap-anywhere text-sm text-muted-foreground">
                           {group.device_ids.length
                             ? group.device_ids.join(", ")
                             : "No devices assigned"}
@@ -393,9 +452,10 @@ export default function Groups() {
                 </For>
               </Grid>
             </Show>
-          </Show>
+          </CardQueryContent>
         </Flex>
       </CardContent>
+      <unsaved.Confirmation />
     </Card>
   );
 }

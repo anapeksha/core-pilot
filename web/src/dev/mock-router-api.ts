@@ -4,6 +4,36 @@ import { URL } from "node:url";
 
 import type { Plugin, ViteDevServer } from "vite";
 
+import { activityPageRequestSchema } from "../lib/request-contracts";
+import type { ActivityEvent } from "../lib/api";
+
+const activityExamples = [
+  ["automation_completed", "Mock evening lighting automation completed."],
+  ["ai_tool_rejected", "Mock AI tool action rejected by confirmation policy."],
+  ["wifi_connected", "Mock station connection restored."],
+  ["time_sync_warning", "Mock time synchronization pending."],
+  [
+    "ota_failed",
+    "Mock firmware update failed signature verification; no image activated.",
+  ],
+  ["configuration_saved", "Mock room configuration saved."],
+  ["system_started", "Mock controller started; no hardware readiness implied."],
+] as const;
+const activityEvents: ActivityEvent[] = Array.from(
+  { length: 47 },
+  (_, index) => {
+    const sequence = 47 - index;
+    const [kind, detail] = activityExamples[index % activityExamples.length]!;
+    return {
+      sequence,
+      unix_seconds: sequence <= 2 ? null : 1_763_251_200 + sequence * 60,
+      uptime_seconds: sequence * 60,
+      kind,
+      detail,
+    };
+  },
+);
+
 type JsonObject = Record<string, unknown>;
 type ModelCollection = "rooms" | "groups" | "scenes" | "automations";
 type MockModel = JsonObject & { id: string };
@@ -125,6 +155,64 @@ export function mockRouterApi(): Plugin {
         const url = new URL(request.url ?? "/", "http://corepilot.local");
         if (!url.pathname.startsWith("/api/v1/")) {
           next();
+          return;
+        }
+
+        if (url.pathname === "/api/v1/activity/page") {
+          if (request.method !== "POST") {
+            response.setHeader("Allow", "POST");
+            json(response, 405, { error: "Mock activity requires POST." });
+            return;
+          }
+          if (
+            request.headers["content-type"]?.split(";")[0]?.trim() !==
+            "application/json"
+          ) {
+            json(response, 415, {
+              error: "Mock activity requires application/json.",
+            });
+            return;
+          }
+          const chunks: Uint8Array[] = [];
+          let size = 0;
+          for await (const chunk of request) {
+            size += chunk.length;
+            if (size > 1024) {
+              json(response, 413, {
+                error: "Mock activity request exceeds 1024 bytes.",
+              });
+              return;
+            }
+            chunks.push(chunk);
+          }
+          let body: unknown;
+          try {
+            body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          } catch {
+            json(response, 400, { error: "Malformed mock activity JSON." });
+            return;
+          }
+          const parsed = activityPageRequestSchema.safeParse(body);
+          if (!parsed.success) {
+            json(response, 400, {
+              error: "Invalid mock activity page request.",
+            });
+            return;
+          }
+          const { before_sequence: before, limit = 20 } = parsed.data;
+          const remaining = activityEvents.filter(
+            (event) => before == null || event.sequence < before,
+          );
+          const events = remaining.slice(0, limit);
+          json(response, 200, {
+            events,
+            next_before_sequence:
+              remaining.length > events.length ? events.at(-1)!.sequence : null,
+            retained: activityEvents.length,
+            dropped_events: 0,
+            detail:
+              "Deterministic mock activity for dashboard development; not device evidence.",
+          });
           return;
         }
 

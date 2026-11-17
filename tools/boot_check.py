@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check a captured CoreS3 boot and its unauthenticated production API."""
 
 from __future__ import annotations
@@ -30,18 +29,10 @@ def inspect_boot(text: str, version: str, address: str) -> BootEvidence:
         raise ValueError("boot capture exceeds the size limit")
     if len(re.findall(r"\brst:0x[0-9a-fA-F]+", text)) != 1:
         raise ValueError("capture must contain exactly one boot, with no later reset")
-    if any(
-        marker in text
-        for marker in (
-            "Mem alloc fail",
-            "Guru Meditation",
-            "Backtrace:",
-            "panic_abort",
-            "Stack smashing",
-            "stack overflow",
-            "assert failed",
-        )
-    ):
+    if any(marker in text for marker in (
+        "Mem alloc fail", "Guru Meditation", "Backtrace:", "panic_abort",
+        "Stack smashing", "stack overflow", "assert failed",
+    )):
         raise ValueError("boot capture contains a panic or allocation failure")
     versions = re.findall(r"App version:\s+(\S+)", text)
     addresses = re.findall(r"sta ip:\s+([0-9.]+)", text)
@@ -73,14 +64,8 @@ def check_http(base_url: str, timeout: float = 5) -> None:
     """Use no credentials; a session exchange is attempted only while auth is idle."""
     client = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
 
-    def request(
-        path: str,
-        expected: int,
-        *,
-        cookie: str | None = None,
-        body: dict[str, str] | None = None,
-        json_response: bool = True,
-    ) -> dict:
+    def request(path: str, expected: int, *, cookie: str | None = None,
+                body: dict[str, str] | None = None, json_response: bool = True) -> dict:
         headers = {"Accept": "application/json"}
         if cookie is not None:
             headers["Cookie"] = cookie
@@ -112,37 +97,28 @@ def check_http(base_url: str, timeout: float = 5) -> None:
         except (ValueError, UnicodeError):
             raise ValueError("HTTP response is not valid JSON") from None
         if not isinstance(result, dict):
-            raise ValueError("HTTP response must be an object")
+            raise TypeError("HTTP response must be an object")
         return result
 
     def require_idle() -> None:
         auth = request("/api/v1/auth", 200)
-        if (
-            auth.get("authentication_required") is not True
-            or auth.get("session_authenticated") is not False
-            or auth.get("bootstrap_state") != "idle"
-        ):
+        if (auth.get("authentication_required") is not True or
+                auth.get("session_authenticated") is not False or
+                auth.get("bootstrap_state") != "idle"):
             raise ValueError("production authorization must remain idle and locked")
 
     if request("/api/v1/health", 200).get("product") != "Core Pilot":
         raise ValueError("HTTP target did not identify as Core Pilot")
     require_idle()
     request("/api/v1/system", 401, json_response=False)
-    request(
-        "/api/v1/system",
-        401,
-        cookie="core_pilot_session=" + "0" * 64,
-        json_response=False,
-    )
+    request("/api/v1/system", 401, cookie="core_pilot_session=" + "0" * 64, json_response=False)
     request("/api/v1/auth/session", 503, body={"code": "0" * 16, "mode": "cookie"})
     require_idle()
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
-        "capture", type=Path, help="Fresh boot capture from the identified CoreS3"
-    )
+    parser.add_argument("capture", type=Path, help="Fresh boot capture from the identified CoreS3")
     parser.add_argument("address", help="Current CoreS3 DHCP IPv4 address")
     parser.add_argument("--version", required=True)
     parser.add_argument("--timeout", type=float, default=5)
@@ -155,16 +131,12 @@ def main() -> int:
             raise ValueError("boot capture exceeds the size limit")
         evidence = inspect_boot(args.capture.read_text(), args.version, args.address)
         check_http("http://" + args.address, args.timeout)
-    except (OSError, ValueError, urllib.error.URLError):
+    except (OSError, TypeError, ValueError, urllib.error.URLError):
         # Do not echo response bodies, captured logs, or server-controlled error text.
-        print(
-            "Boot/API check failed; verify the capture, memory margin, and production access state."
-        )
+        print("Boot/API check failed; verify the capture, memory margin, and production access state.")
         return 1
-    print(
-        f"Boot/API check passed for {evidence.version}; internal free={evidence.internal_free}, "
-        f"largest={evidence.internal_largest}, DMA free={evidence.dma_free} bytes."
-    )
+    print(f"Boot/API check passed for {evidence.version}; internal free={evidence.internal_free}, "
+          f"largest={evidence.internal_largest}, DMA free={evidence.dma_free} bytes.")
     return 0
 
 
