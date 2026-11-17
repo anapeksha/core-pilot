@@ -15,6 +15,7 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 ### Fixed
 
 - Restore responsive skeleton dimensions, long-name wrapping, keyboard focus recovery, interactive cursors, and accessible navigation, popup, and status semantics.
+- Keep portaled tooltips visible to assistive technology while modal sheets are open.
 - Configure Zed to use ESP-IDF's ESP-Clang with separate production, test, native-host, and H2 compilation databases instead of fallback C++ parsing.
 
 ### Tests

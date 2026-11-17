@@ -55,6 +55,7 @@ const TooltipContent = <T extends ValidComponent = "div">(
   return (
     <TooltipPrimitive.Portal>
       <TooltipPrimitive.Content
+        data-kb-top-layer=""
         class={cn(
           "z-50 origin-[var(--kb-popover-content-transform-origin)] overflow-hidden rounded-md border bg-popover px-3 py-1.5 text-sm text-popover-foreground shadow-md animate-in fade-in-0 zoom-in-95",
           local.class,
