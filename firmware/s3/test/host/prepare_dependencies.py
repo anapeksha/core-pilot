@@ -7,7 +7,16 @@ from pathlib import Path
 import yaml
 from idf_component_tools.hash_tools.validate import validate_hash_eq_hashdir
 from idf_component_tools.manifest import SolvedComponent
-from idf_component_tools.sources.fetcher import ComponentFetcher
+
+
+def prepare_component(component, destination):
+    if not destination.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        # ComponentFetcher changed its directory argument between manager 2.x and
+        # 3.x. Source.download consistently accepts the exact component directory.
+        component.source.download(component, destination.as_posix())
+    # Recompute content against the lock, never trust a downloader's marker file.
+    validate_hash_eq_hashdir(destination, component.component_hash)
 
 
 def main():
@@ -18,10 +27,7 @@ def main():
     entry = yaml.safe_load(lock.read_text())["dependencies"]["espressif/cjson"]
     component = SolvedComponent.model_validate({"espressif/cjson": entry})
     destination = args.build_dir.resolve() / "deps" / "espressif__cjson"
-    if not destination.exists():
-        ComponentFetcher(component, destination).download()
-    # Validate content against the lock, not merely the downloader's marker file.
-    validate_hash_eq_hashdir(destination, component.component_hash)
+    prepare_component(component, destination)
     print(f"Verified {component.name}@{component.version}: {destination}")
 
 

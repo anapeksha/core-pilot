@@ -85,6 +85,8 @@ jobs:
           . "$IDF_PATH/export.sh"
           echo "PATH=$PATH" >> "$GITHUB_ENV"
 
+      - name: Test cold native dependency preparation and integrity
+        run: python -m unittest discover -s firmware/s3/test/host -p 'test_*.py' -v
       - name: Resolve locked native test dependencies
         run: python firmware/s3/test/host/prepare_dependencies.py --build-dir firmware/s3/test/host/build
       - name: Configure native host tests
