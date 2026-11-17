@@ -4,10 +4,12 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-17
+
 ### Changed
 
 - Simplify Home, separate saved favorites from editing, and preserve cached data with explicit refresh warnings and retry controls.
-- Add visible device action menus, shareable Activity and device filters, platform-aware command shortcuts, and unsaved-change protection for model editors.
+- Add visible device action menus, shareable Activity and device filters, platform-aware command shortcuts, and unsaved-change protection for model editors using `solid-hook-form` dirty state.
 - Keep Activity scroll position while paging and retain loaded history when older-page requests fail.
 
 ### Fixed
@@ -18,6 +20,11 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 ### Tests
 
 - Expand browser coverage for loading, retries, dirty forms, filter history, command acceptance, and keyboard interactions; add automated accessibility scans without rule exclusions.
+- Cover pristine edit/reopen, change/revert, structured-selection ordering, rejected saves, and form-library dirty-state resets.
+
+### Known limitations
+
+- Matter-over-Thread readiness, long-duration hardware stability, and manual screen-reader interoperability remain unverified. This release is not CSA Matter certified.
 
 ## [0.1.4] - 2026-11-15
 
@@ -217,7 +224,12 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 - Matter-over-Thread and Thread Border Router readiness have not yet been demonstrated on hardware.
 - This release candidate is not CSA Matter certified and does not claim formal Matter specification compliance.
 
-[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/anapeksha/core-pilot/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/anapeksha/core-pilot/compare/v0.1.4...v0.2.0
+[0.1.4]: https://github.com/anapeksha/core-pilot/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/anapeksha/core-pilot/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/anapeksha/core-pilot/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/anapeksha/core-pilot/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.3...v0.1.0
 [0.1.0-rc.3]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.2...v0.1.0-rc.3
 [0.1.0-rc.2]: https://github.com/anapeksha/core-pilot/compare/v0.1.0-rc.1...v0.1.0-rc.2

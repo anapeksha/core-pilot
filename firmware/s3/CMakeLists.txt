@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.16)
 
 # OTA ordering requires a stable SemVer application version, not Git describe output.
 if(NOT DEFINED PROJECT_VER)
-    set(PROJECT_VER "0.1.4")
+    set(PROJECT_VER "0.2.0")
 endif()
 
 set(gateway_rcp_build "${CMAKE_BINARY_DIR}/h2")
