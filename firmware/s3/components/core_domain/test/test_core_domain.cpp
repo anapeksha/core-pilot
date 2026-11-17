@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <cJSON.h>
+#include <cstdio>
 #include <cstring>
 #include <unity.h>
 #include <unity_test_runner.h>
@@ -43,6 +44,43 @@ TEST_CASE("API JSON bounds, trailing data and origin are rejected", "[core_domai
   TEST_ASSERT_EQUAL(
       static_cast<int>(ApiError::cross_origin_mutation),
       static_cast<int>(same_origin_mutation_allowed("https://corepilot.local", "corepilot.local")));
+}
+
+TEST_CASE("AI memory removal requires exact target-bound confirmation", "[core_domain]") {
+  const auto* route = find_contract("POST", "/api/v1/ai/memory/remove");
+  TEST_ASSERT_NOT_NULL(route);
+  const char* invalid[] = {"{}",
+                           "{\"id\":\"one\"}",
+                           "{\"id\":\"one\",\"confirmation\":\"DELETE MEMORY two\"}",
+                           "{\"id\":\"one\",\"confirmation\":\"DELETE one\"}",
+                           "{\"id\":\"one\",\"confirmation\":\"DELETE MEMORY one \"}",
+                           "{\"id\":\"../one\",\"confirmation\":\"DELETE MEMORY ../one\"}",
+                           "{\"id\":1,\"confirmation\":true}"};
+  for (const char* body : invalid) {
+    cJSON* json = nullptr;
+    TEST_ASSERT_NOT_EQUAL(
+        static_cast<int>(ApiError::ok),
+        static_cast<int>(parse_contract_request(*route, body, std::strlen(body), json)));
+    TEST_ASSERT_NULL(json);
+  }
+  constexpr char valid[] = "{\"id\":\"one\",\"confirmation\":\"DELETE MEMORY one\"}";
+  cJSON* json = nullptr;
+  TEST_ASSERT_EQUAL(static_cast<int>(ApiError::ok), static_cast<int>(parse_contract_request(
+                                                        *route, valid, sizeof valid - 1, json)));
+  delete_json_sensitive(json);
+  char id[50]{};
+  std::memset(id, 'a', 48);
+  char body[200]{};
+  std::snprintf(body, sizeof body, "{\"id\":\"%s\",\"confirmation\":\"DELETE MEMORY %s\"}", id, id);
+  TEST_ASSERT_EQUAL(static_cast<int>(ApiError::ok), static_cast<int>(parse_contract_request(
+                                                        *route, body, std::strlen(body), json)));
+  delete_json_sensitive(json);
+  id[48] = 'a';
+  std::snprintf(body, sizeof body, "{\"id\":\"%s\",\"confirmation\":\"DELETE MEMORY %s\"}", id, id);
+  TEST_ASSERT_NOT_EQUAL(
+      static_cast<int>(ApiError::ok),
+      static_cast<int>(parse_contract_request(*route, body, std::strlen(body), json)));
+  TEST_ASSERT_NULL(json);
 }
 
 TEST_CASE("sensitive JSON cleanup recursively wipes names and values", "[core_domain]") {
@@ -142,7 +180,7 @@ TEST_CASE("model DTOs normalize and preserve ordered duplicate actions", "[core_
   TEST_ASSERT_EQUAL(static_cast<int>(ModelError::too_many_actions),
                     static_cast<int>(parse_model_upsert(json, ModelKind::scene, model)));
   cJSON_Delete(json);
-  json = cJSON_Parse("{\"name\":\"Scheduled\",\"enabled\":true,\"trigger\":\"weekly|127|23:00|0\","
+  json = cJSON_Parse("{\"name\":\"Scheduled\",\"enabled\":true,\"trigger\":\"weekly|127|23:00|+0\","
                      "\"actions\":[\"on|lamp|0\"]}");
   TEST_ASSERT_EQUAL(static_cast<int>(ModelError::ok),
                     static_cast<int>(parse_model_upsert(json, ModelKind::automation, model)));
@@ -192,6 +230,8 @@ TEST_CASE("automation grammar rejects invalid dates, masks, delays and levels", 
   TEST_ASSERT_TRUE(parse_trigger_spec("once|2024-02-29|09:30|+840", trigger));
   TEST_ASSERT_FALSE(parse_trigger_spec("once|2023-02-29|09:30|+0", trigger));
   TEST_ASSERT_FALSE(parse_trigger_spec("weekly|128|09:30|+0", trigger));
+  TEST_ASSERT_FALSE(parse_trigger_spec("weekly|127|23:00|0", trigger));
+  TEST_ASSERT_TRUE(parse_trigger_spec("weekly|127|23:00|+0", trigger));
   TEST_ASSERT_TRUE(parse_trigger_spec("weekly|1|09:30|-720", trigger));
   TEST_ASSERT_TRUE(schedule_matches(trigger, {2024, 2, 29, 9, 30, 1}));
   TEST_ASSERT_FALSE(schedule_matches(trigger, {2024, 2, 29, 9, 30, 2}));

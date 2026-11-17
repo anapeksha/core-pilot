@@ -574,7 +574,7 @@ Status upsert_collection(core_security::StorageService& storage,
                          const char* path, std::size_t path_len, core_security::RecordType type,
                          const std::uint8_t (&magic)[4], std::size_t payload_capacity,
                          const char* key, const std::uint8_t* content, std::size_t content_size,
-                         bool baseline) {
+                         bool baseline, bool remove = false) {
   const std::size_t key_limit = Prompt ? kMaxPromptPathBytes : kMaxMemoryIdBytes;
   const std::size_t content_limit = Prompt ? kMaxPromptMarkdownBytes : kMaxMemoryMarkdownBytes;
   if (!(Prompt ? valid_prompt_path(key) : valid_memory_id(key)) || (!content && content_size))
@@ -593,6 +593,8 @@ Status upsert_collection(core_security::StorageService& storage,
   std::size_t source_pos = 0;
   std::uint8_t count = 0;
   if (loaded == Status::NotFound) {
+    if (remove)
+      return Status::NotFound;
     std::memcpy(source.plaintext, magic, 4);
     source.plaintext[4] = 0;
     size = 5;
@@ -621,8 +623,21 @@ Status upsert_collection(core_security::StorageService& storage,
         !take(source.plaintext, size, source_pos, old_content_size, old_content) ||
         (Prompt && !get8(source.plaintext, size, source_pos, old_flags)))
       return Status::CorruptData;
+    if (remove) {
+      char key_text[kMaxMemoryIdBytes + 1]{};
+      std::memcpy(key_text, old_key, key_size);
+      if (std::memchr(old_key, '\0', key_size) || !valid_memory_id(key_text))
+        return Status::CorruptData;
+    }
     const std::size_t requested = std::strlen(key);
     if (requested == key_size && std::memcmp(key, old_key, key_size) == 0) {
+      if (remove) {
+        if (replaced)
+          return Status::CorruptData;
+        --new_count;
+        replaced = true;
+        continue;
+      }
       if (!put16(static_cast<std::uint16_t>(requested), target.plaintext, target.plaintext_capacity,
                  target_pos) ||
           !putBytes(key, requested, target.plaintext, target.plaintext_capacity, target_pos) ||
@@ -641,6 +656,8 @@ Status upsert_collection(core_security::StorageService& storage,
   if (source_pos != size)
     return Status::CorruptData;
   if (!replaced) {
+    if (remove)
+      return Status::NotFound;
     const std::size_t limit = Prompt ? kMaxPromptFiles : kMaxMemorySections;
     if (count >= limit)
       return Status::CapacityExceeded;
@@ -659,6 +676,14 @@ Status upsert_collection(core_security::StorageService& storage,
   std::memcpy(target.plaintext, magic, 4);
   target.plaintext[4] = new_count;
   return save_record(storage, random, path, path_len, type, target, target_pos, generation);
+}
+
+Status MemoryRepository::remove(const char* id) {
+  if (!state_)
+    return Status::NotReady;
+  return upsert_collection<false>(storage_, random_, state_->mutex, kMemoryPath,
+                                  sizeof(kMemoryPath) - 1, core_security::RecordType::AiMemory,
+                                  kMemoryMagic, kMemoryPayload, id, nullptr, 0, false, true);
 }
 
 MemoryRepository::MemoryRepository(core_security::StorageService& storage,

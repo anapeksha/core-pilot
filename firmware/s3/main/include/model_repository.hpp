@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core_ai.hpp"
 #include "core_security.hpp"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
@@ -15,11 +16,19 @@ namespace core_pilot {
 
 class ModelRepository final {
 public:
-  enum class Mutation { create, update, remove, set_automation_enabled, reset_unreadable };
+  enum class Mutation {
+    create,
+    update,
+    remove,
+    set_automation_enabled,
+    reset_unreadable,
+    remove_ai_memory
+  };
   struct Result final {
     core_security::Status status{core_security::Status::Invalid};
     char id[core_domain::max_id + 1]{};
     bool found{false};
+    ai::Status ai_status{ai::Status::NotReady};
   };
   using Visitor = bool (*)(const core_domain::ModelUpsert& model, void* context);
 
@@ -38,8 +47,10 @@ public:
   // call back into ModelRepository or perform storage I/O.
   bool visit(core_domain::ModelKind kind, Visitor visitor, void* context,
              std::size_t& visited) const;
+  // AI removal reuses this bounded core-0 storage owner. The memory reference is non-owning;
+  // submit waits for completion, so it must remain alive until submit returns.
   bool submit(Mutation mutation, core_domain::ModelKind kind, const core_domain::ModelUpsert& model,
-              Result& result);
+              Result& result, ai::MemoryRepository* memory = nullptr);
   bool resetUnreadable(Result& result);
 
 private:
@@ -49,6 +60,7 @@ private:
     Mutation mutation{Mutation::create};
     core_domain::ModelKind kind{core_domain::ModelKind::room};
     Result result{};
+    ai::MemoryRepository* memory{nullptr};
     StaticSemaphore_t completion_buffer{};
     SemaphoreHandle_t completion{nullptr};
     bool occupied{false};

@@ -151,7 +151,8 @@ bool ModelRepository::resetUnreadable(Result& result) {
 }
 
 bool ModelRepository::submit(Mutation mutation, core_domain::ModelKind kind,
-                             const core_domain::ModelUpsert& model, Result& result) {
+                             const core_domain::ModelUpsert& model, Result& result,
+                             ai::MemoryRepository* memory) {
   if (!queue_ || !task_)
     return false;
   std::uint8_t slot_index = kQueueDepth;
@@ -169,6 +170,7 @@ bool ModelRepository::submit(Mutation mutation, core_domain::ModelKind kind,
   auto& slot = slots_[slot_index];
   slot.mutation = mutation;
   slot.kind = kind;
+  slot.memory = memory;
   payloads_[slot_index] = model;
   slot.result = {};
   while (xSemaphoreTake(slot.completion, 0) == pdTRUE) {
@@ -202,6 +204,12 @@ void ModelRepository::taskLoop() {
 }
 
 void ModelRepository::process(WorkSlot& slot, core_domain::ModelUpsert& input) {
+  if (slot.mutation == Mutation::remove_ai_memory) {
+    slot.result = {};
+    slot.result.ai_status = slot.memory ? slot.memory->remove(input.id) : ai::Status::NotReady;
+    slot.memory = nullptr;
+    return;
+  }
   if (slot.mutation == Mutation::reset_unreadable) {
     reset(slot);
     return;
