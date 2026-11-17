@@ -7,6 +7,8 @@ import {
   activityPageRequestSchema,
   aiChatRequestSchema,
   aiMemoryRequestSchema,
+  aiMemoryRemoveRequestSchema,
+  aiProviderSummarySchema,
   aiPromptRequestSchema,
   aiProviderRequestSchema,
   automationUpsertRequestSchema,
@@ -350,7 +352,10 @@ export type ProviderTransportStatus = {
   detail: string;
 };
 
+export type AiProviderSummary = z.infer<typeof aiProviderSummarySchema>;
+
 export type AiStatus = {
+  provider?: AiProviderSummary;
   enabled: boolean;
   provider_configured: boolean;
   mcp_enabled: boolean;
@@ -455,6 +460,8 @@ export type AiMemoryResponse = {
   encrypted: boolean;
   detail: string;
 };
+
+export type AiMemoryRemoveRequest = { id: string; confirmation: string };
 
 export type AiMemoryUpdateRequest = {
   id: string;
@@ -1076,6 +1083,7 @@ const requestSchemas: Readonly<Record<string, z.ZodType>> = {
   "/api/v1/ai/provider": aiProviderRequestSchema,
   "/api/v1/ai/chat": aiChatRequestSchema,
   "/api/v1/ai/memory/section": aiMemoryRequestSchema,
+  "/api/v1/ai/memory/remove": aiMemoryRemoveRequestSchema,
   "/api/v1/ai/prompts/file": aiPromptRequestSchema,
   "/api/v1/ai/mcp/tool": mcpToolPermissionRequestSchema,
   "/api/v1/ai/mcp/invoke": mcpInvokeRequestSchema,
@@ -1461,6 +1469,10 @@ export async function loadAi(signal?: AbortSignal): Promise<AiStatus> {
   return {
     ...fallbackAi,
     ...response,
+    provider:
+      response.provider === undefined
+        ? undefined
+        : aiProviderSummarySchema.parse(response.provider),
     provider_transport: {
       ...fallbackAi.provider_transport,
       ...response.provider_transport,
@@ -1471,6 +1483,15 @@ export async function loadAi(signal?: AbortSignal): Promise<AiStatus> {
       ? response.provider_transport_requirements
       : fallbackAi.provider_transport_requirements,
   };
+}
+
+export function removeAiMemory(
+  request: AiMemoryRemoveRequest,
+): Promise<MutationResponse> {
+  return postJson<MutationResponse, AiMemoryRemoveRequest>(
+    "/api/v1/ai/memory/remove",
+    request,
+  );
 }
 
 export function loadAiMemory(signal?: AbortSignal): Promise<AiMemoryResponse> {

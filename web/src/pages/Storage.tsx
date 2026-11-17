@@ -22,13 +22,23 @@ import {
   TextField,
   TextFieldErrorMessage,
   TextFieldLabel,
+  TextFieldInput,
   TextFieldTextArea,
 } from "~/components/text-field";
 import type { AiMemorySection, AiPromptFile } from "~/lib/api";
-import { bytesAtMost, entityLimits } from "~/lib/request-contracts";
+import {
+  aiMemoryRequestSchema,
+  bytesAtMost,
+  entityLimits,
+} from "~/lib/request-contracts";
 import { createUnsavedChanges } from "~/lib/unsaved-changes";
-import { aiMemoryMutation, aiPromptMutation } from "~/mutations/ai";
+import {
+  aiMemoryMutation,
+  aiMemoryRemoveMutation,
+  aiPromptMutation,
+} from "~/mutations/ai";
 import { aiMemoryQuery, aiPromptsQuery } from "~/queries/ai";
+import { storageQuery } from "~/queries/storage";
 
 type EditorTarget =
   | { kind: "prompt"; file: AiPromptFile }
@@ -52,17 +62,25 @@ const baselinePrompts: readonly AiPromptFile[] = [
 ];
 
 export default function AiPrompts() {
+  const storageResult = storageQuery();
+  const storageWritable = () =>
+    !storageResult.isPlaceholderData &&
+    !storageResult.isError &&
+    storageResult.data?.mutations_allowed === true;
   const promptsResult = aiPromptsQuery();
   const memoryResult = aiMemoryQuery();
   const promptMutation = aiPromptMutation();
   const memoryMutation = aiMemoryMutation();
+  const removeMutation = aiMemoryRemoveMutation();
+  const [creating, setCreating] = createSignal(false);
+  const [confirmation, setConfirmation] = createSignal("");
   const [searchParams, setSearchParams] = useSearchParams();
   const section = () =>
     searchParams.section === "memory" ? "memory" : "prompts";
   const [target, setTarget] = createSignal<EditorTarget | null>(null);
   const [editorTab, setEditorTab] = createSignal("editor");
   const [previewOnly, setPreviewOnly] = createSignal(false);
-  const defaultValues = { markdown: "" };
+  const defaultValues = { markdown: "", id: "" };
   const {
     register,
     reset: resetFields,
@@ -71,6 +89,21 @@ export default function AiPrompts() {
     handleSubmit,
     formState,
   } = createForm({ defaultValues, mode: "onTouched" });
+  const idField = register("id", {
+    validate: (id) => {
+      if (!creating()) return true;
+      const result = aiMemoryRequestSchema.shape.id.safeParse(id);
+      if (!result.success) return result.error.issues[0]?.message;
+      return (
+        !memoryResult.data?.sections.some((section) => section.id === id) ||
+        "This ID already exists."
+      );
+    },
+  });
+  const search = () =>
+    typeof searchParams.q === "string" ? searchParams.q.slice(0, 128) : "";
+  const matches = (...parts: string[]) =>
+    parts.join(" ").toLowerCase().includes(search().toLowerCase());
   const markdownField = register("markdown", {
     validate: (value) => {
       const memory = target()?.kind === "memory";
@@ -91,11 +124,17 @@ export default function AiPrompts() {
       ? entityLimits.memoryMarkdown
       : entityLimits.promptMarkdown;
   const previewAllowed = () => markdownBytes() <= markdownLimit();
-  const pending = () => promptMutation.isPending || memoryMutation.isPending;
+  const pending = () =>
+    promptMutation.isPending ||
+    memoryMutation.isPending ||
+    removeMutation.isPending;
   const contentVerified = (kind: EditorTarget["kind"]) => {
     const query = kind === "prompt" ? promptsResult : memoryResult;
     return (
-      query.data !== undefined && !query.isPlaceholderData && !query.isError
+      storageWritable() &&
+      query.data !== undefined &&
+      !query.isPlaceholderData &&
+      !query.isError
     );
   };
   const saveAllowed = () => {
@@ -105,8 +144,9 @@ export default function AiPrompts() {
     );
   };
   function reset(markdown: string) {
-    Object.assign(defaultValues, { markdown });
-    resetFields({ markdown });
+    const id = target()?.kind === "memory" ? (identifier() ?? "") : "";
+    Object.assign(defaultValues, { markdown, id });
+    resetFields({ markdown, id });
   }
   const unsaved = createUnsavedChanges({
     open: () => target() !== null,
@@ -115,6 +155,8 @@ export default function AiPrompts() {
   });
   function close() {
     setTarget(null);
+    setCreating(false);
+    setConfirmation("");
     reset("");
     setEditorTab("editor");
     setPreviewOnly(false);
@@ -128,7 +170,7 @@ export default function AiPrompts() {
     reset(next.kind === "prompt" ? next.file.markdown : next.section.markdown);
     setEditorTab("editor");
   }
-  const save = handleSubmit(async ({ markdown }) => {
+  const save = handleSubmit(async ({ markdown, id }) => {
     const selected = target();
     if (!selected || pending() || !saveAllowed()) return;
     try {
@@ -139,7 +181,7 @@ export default function AiPrompts() {
               markdown,
             })
           : await memoryMutation.mutateAsync({
-              id: selected.section.id,
+              id: creating() ? id : selected.section.id,
               markdown,
             });
       close();
@@ -170,6 +212,7 @@ export default function AiPrompts() {
       files.set(file.path, file);
     const folders = new Map<string, AiPromptFile[]>();
     for (const file of files.values()) {
+      if (!matches(file.path, file.title)) continue;
       const folder = file.path.includes("/")
         ? file.path.slice(0, file.path.lastIndexOf("/"))
         : "root";
@@ -202,6 +245,34 @@ export default function AiPrompts() {
           </>
         }
       />
+      <Show when={!storageWritable()}>
+        <Alert>
+          <p>
+            Saved context is read-only:{" "}
+            {storageResult.isError
+              ? "storage status could not be verified."
+              : storageResult.isPlaceholderData
+                ? "storage status is loading."
+                : storageResult.data?.detail ||
+                  "encrypted storage is unavailable."}
+          </p>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={storageResult.isFetching}
+            onClick={() => void storageResult.refetch()}
+          >
+            Retry storage status
+          </Button>
+        </Alert>
+      </Show>
+      <TextField
+        value={search()}
+        onChange={(q) => setSearchParams({ q: q || undefined })}
+      >
+        <TextFieldLabel>Search assistant context</TextFieldLabel>
+        <TextFieldInput type="search" maxLength={128} />
+      </TextField>
       <Tabs
         value={section()}
         onChange={(value) =>
@@ -293,6 +364,19 @@ export default function AiPrompts() {
         <TabsContent value="memory" class="space-y-5">
           <div>
             <h2 class="font-semibold">Saved context</h2>
+            <Button
+              variant="outline"
+              disabled={!contentVerified("memory") || pending()}
+              onClick={() => {
+                edit({
+                  kind: "memory",
+                  section: { id: "", title: "New saved context", markdown: "" },
+                });
+                setCreating(true);
+              }}
+            >
+              Create saved context
+            </Button>
             <p class="text-sm text-muted-foreground">
               Information the assistant remembers, stored as encrypted Markdown
               sections.
@@ -326,7 +410,9 @@ export default function AiPrompts() {
             <Show when={memoryResult.data && !memoryResult.isPlaceholderData}>
               <div class="divide-y border-y">
                 <For
-                  each={memoryResult.data?.sections}
+                  each={memoryResult.data?.sections.filter((saved) =>
+                    matches(saved.id, saved.title),
+                  )}
                   fallback={
                     <p class="py-4 text-sm text-muted-foreground">
                       No saved context sections are available.
@@ -372,13 +458,65 @@ export default function AiPrompts() {
             </DialogDescription>
           </DialogHeader>
           <Show when={target() !== null && !saveAllowed()}>
-            <p role="status" class="text-sm text-muted-foreground">
+            <div role="status" class="text-sm text-muted-foreground">
               This is a read-only preview because current content could not be
               verified. Close it, retry loading, and reopen the current entry
               before saving.
-            </p>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending()}
+                onClick={() => {
+                  const kind = target()?.kind;
+                  unsaved.request(() => {
+                    close();
+                    if (kind === "prompt") void promptsResult.refetch();
+                    else void memoryResult.refetch();
+                  });
+                }}
+              >
+                Close and retry loading
+              </Button>
+            </div>
           </Show>
           <form onSubmit={save} class="min-w-0 space-y-4">
+            <Show when={creating()}>
+              <TextField
+                value={values().id}
+                validationState={errors.id ? "invalid" : "valid"}
+                disabled={pending()}
+              >
+                <TextFieldLabel>Saved context ID</TextFieldLabel>
+                <TextFieldInput {...idField} value={values().id} />
+                <TextFieldErrorMessage>
+                  {errors.id?.message}
+                </TextFieldErrorMessage>
+              </TextField>
+              <p class="text-sm text-muted-foreground">
+                {new TextEncoder().encode(values().id).length} / 48 UTF-8 bytes;
+                letters, numbers, _ and - only.
+              </p>
+            </Show>
+            <p role="status" class="text-sm text-muted-foreground">
+              {markdownBytes()} / {markdownLimit()} UTF-8 bytes
+              {formState.isDirty() ? " · Unsaved changes" : ""}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={pending() || !formState.isDirty()}
+              onClick={() => {
+                const selected = target();
+                if (selected)
+                  reset(
+                    selected.kind === "prompt"
+                      ? selected.file.markdown
+                      : selected.section.markdown,
+                  );
+              }}
+            >
+              Revert changes
+            </Button>
             <Tabs
               value={editorTab()}
               onChange={(value) => !pending() && setEditorTab(value)}
@@ -443,6 +581,45 @@ export default function AiPrompts() {
                 </div>
               </TabsContent>
             </Tabs>
+            <Show when={target()?.kind === "memory" && !creating()}>
+              <TextField
+                value={confirmation()}
+                onChange={setConfirmation}
+                disabled={pending() || !saveAllowed()}
+              >
+                <TextFieldLabel>
+                  Type DELETE MEMORY {identifier()} to confirm deletion
+                </TextFieldLabel>
+                <TextFieldInput />
+              </TextField>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={
+                  pending() ||
+                  !saveAllowed() ||
+                  confirmation() !== `DELETE MEMORY ${identifier()}`
+                }
+                onClick={async () => {
+                  try {
+                    await removeMutation.mutateAsync({
+                      id: identifier()!,
+                      confirmation: confirmation(),
+                    });
+                    close();
+                    toast.success("Saved context deleted.");
+                  } catch (error) {
+                    toast.error(
+                      error instanceof Error
+                        ? error.message
+                        : "Saved context could not be deleted.",
+                    );
+                  }
+                }}
+              >
+                Delete saved context
+              </Button>
+            </Show>
             <DialogFooter>
               <Button
                 type="button"

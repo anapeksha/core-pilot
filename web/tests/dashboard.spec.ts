@@ -2721,7 +2721,7 @@ test("covers AI chat, provider setup, encrypted memory, and tool permissions", a
     body: { message: "Check status" },
   });
 
-  await page.getByRole("button", { name: "Update provider" }).click();
+  await page.getByRole("button", { name: "Replace provider" }).click();
   await page.getByRole("button", { name: "OpenAI", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "OpenAI compatible" }),
@@ -2869,9 +2869,9 @@ test("unverified baseline preview cannot overwrite an unseen encrypted prompt", 
   const field = dialog.getByRole("textbox", { name: "Prompt Markdown" });
   await expect(field).toHaveJSProperty("readOnly", true);
   await expect(field).toHaveValue(/Core Pilot assistant/);
-  await expect(dialog.getByRole("status")).toContainText(
-    "Close it, retry loading, and reopen",
-  );
+  await expect(
+    dialog.getByRole("status").filter({ hasText: "read-only preview" }),
+  ).toContainText("Close it, retry loading, and reopen");
   await expect(
     dialog.getByRole("button", { name: "Save encrypted" }),
   ).toBeDisabled();
@@ -2965,9 +2965,9 @@ test("prompt refresh failure makes cached entries read-only and preserves an exi
   await expect(save).toBeDisabled();
   await expect(field).toHaveValue(draft);
   await expect(field).toHaveJSProperty("readOnly", true);
-  await expect(dialog.getByRole("status")).toContainText(
-    "current content could not be verified",
-  );
+  await expect(
+    dialog.getByRole("status").filter({ hasText: "read-only preview" }),
+  ).toContainText("current content could not be verified");
   await dialog
     .locator("form")
     .evaluate((form) =>
@@ -3632,7 +3632,7 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
 
   await page.goto("/#/ai");
   await expect(page.getByRole("button", { name: "Send" })).toBeDisabled();
-  await page.getByRole("button", { name: "Update provider" }).click();
+  await page.getByRole("button", { name: "Replace provider" }).click();
   await page.getByLabel("Model").fill("");
   await expect(
     page.getByRole("button", { name: "Save provider" }),
@@ -3641,6 +3641,8 @@ test("blocks incomplete dashboard forms", async ({ page }) => {
   expect(
     state.posts.filter((request) => request.path === "/api/v1/ai/provider"),
   ).toHaveLength(0);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Discard changes" }).click();
 
   await page.goto("/#/system");
   await expect(
@@ -5252,4 +5254,240 @@ test("devices search and availability update URL and restore through history", a
     page.getByText("No devices match these filters.", { exact: true }),
   ).toBeVisible();
   await expect(page).toHaveURL(/future=keep/);
+});
+
+test("assistant regression provider metadata, credential scope and dirty discard", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  Object.assign(state.ai, {
+    provider: {
+      backend: "anthropic_compatible",
+      auth_type: "api_key",
+      base_url: "https://api.anthropic.com/v1",
+      model: "saved-model",
+      max_output_tokens: 2048,
+      timeout_ms: 45000,
+    },
+  });
+  await page.goto("/#/ai");
+  const open = page.getByRole("button", { name: "Update provider" });
+  await open.click();
+  const sheet = page.getByRole("dialog", { name: "Assistant provider" });
+  await expect(sheet.getByLabel("Model", { exact: true })).toHaveValue(
+    "saved-model",
+  );
+  await expect(sheet.getByLabel("Max tokens")).toHaveValue("2048");
+  await expect(sheet.getByLabel("Timeout ms")).toHaveValue("45000");
+  await expect(sheet.getByLabel("Base URL")).toHaveValue(
+    "https://api.anthropic.com/v1",
+  );
+  await expect(sheet.getByLabel("Base URL")).toHaveAttribute("readonly", "");
+  const key = sheet.getByLabel("API key", { exact: true });
+  await expect(key).toHaveValue("");
+  await expectDraftDirty(page, false);
+  await key.fill("never-cross-provider");
+  await sheet.getByRole("button", { name: "OpenAI", exact: true }).click();
+  await expect(key).toHaveValue("");
+  await key.fill("never-cross-back");
+  await sheet.getByRole("button", { name: "Anthropic", exact: true }).click();
+  await expect(key).toHaveValue("");
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Keep editing" }).click();
+  await expect(sheet).toBeVisible();
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.getByRole("button", { name: "Discard changes" }).click();
+  await expect(sheet).toHaveCount(0);
+  await open.click();
+  await expect(key).toHaveValue("");
+  await expectDraftDirty(page, false);
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  const chat = page.getByPlaceholder(
+    "Ask Core Pilot to check status, list devices, scenes, or automations…",
+  );
+  await chat.fill("Unsent draft");
+  await expectDraftDirty(page, true);
+  await page.getByRole("link", { name: "Saved context", exact: true }).click();
+  await page.getByRole("button", { name: "Keep editing" }).click();
+  await expect(chat).toHaveValue("Unsent draft");
+  await page.getByRole("link", { name: "Saved context", exact: true }).click();
+  await page.getByRole("button", { name: "Discard changes" }).click();
+  await expect(page).toHaveURL(/\/ai\/prompts/);
+  expect(state.posts).toEqual([]);
+});
+
+test("assistant regression pending provider cannot dismiss or leak into a reopened sheet", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/v1/ai/provider", async (route) => {
+    state.posts.push({
+      path: "/api/v1/ai/provider",
+      body: route.request().postDataJSON(),
+    });
+    await held;
+    await json(route, {
+      accepted: true,
+      detail: "Provider saved after delay.",
+    });
+  });
+  await page.goto("/#/ai");
+  await page.getByRole("button", { name: "Replace provider" }).click();
+  const sheet = page.getByRole("dialog", { name: "Assistant provider" });
+  await sheet.getByLabel("API key", { exact: true }).fill("pending-secret");
+  const requested = page.waitForRequest("**/api/v1/ai/provider");
+  await sheet.getByRole("button", { name: "Save provider" }).click();
+  await requested;
+  try {
+    await expect(
+      sheet.getByRole("button", { name: "Cancel", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      sheet.getByRole("button", { name: "Anthropic", exact: true }),
+    ).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  } finally {
+    release();
+  }
+  await expect(sheet).toHaveCount(0);
+  expect(state.posts).toHaveLength(1);
+  await page.getByRole("button", { name: "Replace provider" }).click();
+  await expect(sheet.getByLabel("API key", { exact: true })).toHaveValue("");
+  await expectDraftDirty(page, false);
+});
+
+for (const kind of ["prompt", "memory"] as const) {
+  test(`assistant regression ${kind} save reopens immediately with background refresh deferred`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    await page.goto(
+      kind === "prompt" ? "/#/ai/prompts" : "/#/ai/prompts?section=memory",
+    );
+    const open = page.getByRole("button", {
+      name: kind === "prompt" ? /System prompt/ : /Preferences/,
+    });
+    await open.click();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const refresh = page.waitForRequest("**/api/v1/storage");
+    await page.route("**/api/v1/storage", async (route) => {
+      await held;
+      await json(route, state.storage);
+    });
+    const field = page.getByRole("textbox", {
+      name: kind === "prompt" ? "Prompt Markdown" : "Saved context Markdown",
+    });
+    await field.fill("Saved immediately é");
+    await page.getByRole("button", { name: "Save encrypted" }).click();
+    try {
+      await refresh;
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await open.click();
+      await expect(field).toHaveValue("Saved immediately é");
+      await expectDraftDirty(page, false);
+      await expect(
+        page.getByRole("button", { name: "Revert changes" }),
+      ).toBeDisabled();
+      await field.fill("é");
+      await expect(page.getByRole("dialog").getByRole("status")).toContainText(
+        "2 /",
+      );
+      await page.getByRole("button", { name: "Revert changes" }).click();
+      await expect(field).toHaveValue("Saved immediately é");
+      await expectDraftDirty(page, false);
+      expect(state.posts.at(-1)).toMatchObject({
+        path:
+          kind === "prompt"
+            ? "/api/v1/ai/prompts/file"
+            : "/api/v1/ai/memory/section",
+        body:
+          kind === "prompt"
+            ? {
+                markdown: "",
+                markdown_base64: Buffer.from("Saved immediately é").toString(
+                  "base64",
+                ),
+              }
+            : { markdown: "Saved immediately é" },
+      });
+    } finally {
+      release();
+    }
+  });
+}
+
+test("assistant regression saved context create, search and exact deletion confirmation send real requests", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.route("**/api/v1/ai/memory/section", async (route) => {
+    const body = route.request().postDataJSON();
+    state.posts.push({ path: "/api/v1/ai/memory/section", body });
+    state.aiMemory.sections.push({
+      id: body.id,
+      title: body.id,
+      markdown: body.markdown,
+    });
+    await json(route, { accepted: true, detail: "Created encrypted context." });
+  });
+  await page.route("**/api/v1/ai/memory/remove", async (route) => {
+    const body = route.request().postDataJSON();
+    state.posts.push({ path: "/api/v1/ai/memory/remove", body });
+    state.aiMemory.sections = state.aiMemory.sections.filter(
+      (section) => section.id !== body.id,
+    );
+    await json(route, { accepted: true, detail: "Deleted encrypted context." });
+  });
+  await page.goto("/#/ai/prompts?section=memory&extra=keep");
+  await page.getByRole("button", { name: "Create saved context" }).click();
+  await page
+    .getByLabel("Saved context ID", { exact: true })
+    .fill("e2e_context");
+  await page
+    .getByRole("textbox", { name: "Saved context Markdown" })
+    .fill("Remember verified state.");
+  await page.getByRole("button", { name: "Save encrypted" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(state.posts).toEqual([
+    {
+      path: "/api/v1/ai/memory/section",
+      body: { id: "e2e_context", markdown: "Remember verified state." },
+    },
+  ]);
+  await page.getByLabel("Search assistant context").fill("E2E_CONTEXT");
+  await expect(page).toHaveURL(/extra=keep/);
+  await expect(page.getByRole("button", { name: /Preferences/ })).toHaveCount(
+    0,
+  );
+  await page.getByRole("button", { name: /e2e_context/ }).click();
+  const remove = page.getByRole("button", { name: "Delete saved context" });
+  const confirmation = page.getByLabel(
+    "Type DELETE MEMORY e2e_context to confirm deletion",
+  );
+  await expect(remove).toBeDisabled();
+  await confirmation.fill("DELETE MEMORY e2e_context ");
+  await expect(remove).toBeDisabled();
+  expect(state.posts).toHaveLength(1);
+  await confirmation.fill("DELETE MEMORY e2e_context");
+  await remove.click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(state.posts).toHaveLength(2);
+  expect(state.posts[1]).toEqual({
+    path: "/api/v1/ai/memory/remove",
+    body: { id: "e2e_context", confirmation: "DELETE MEMORY e2e_context" },
+  });
+  await expect(page.getByRole("button", { name: /e2e_context/ })).toHaveCount(
+    0,
+  );
+  await page.getByLabel("Search assistant context").fill("");
+  await expect(page.getByRole("button", { name: /Preferences/ })).toBeVisible();
 });
