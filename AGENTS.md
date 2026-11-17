@@ -64,6 +64,16 @@ Component names retain the `core_` prefix to avoid collisions with ESP-IDF and t
 - Keep dashboard access on HTTP until there is a real per-device certificate enrollment, hostname/SAN, renewal, and recovery design. A shared or silently generated self-signed certificate is not an acceptable way to claim browser camera secure-context support.
 - Do not enable WAN exposure, NAT, UPnP, NAT-PMP, or cloud relay by default.
 
+## Dashboard changes
+
+- Use `solid-hook-form`'s `formState.isDirty` for unsaved model edits. Keep discard/navigation confirmation separate from form state; do not introduce a second whole-form snapshot tracker.
+- The installed form library compares structured values by reference and retains its original defaults object after `reset(values)`. Keep edit defaults synchronized and use bounded canonical form fields for structured selections; action order matters, group-member order does not. Test change/revert and pristine reopen behavior.
+- Distinguish initial loading/errors from refresh failures. Retain cached content with an explicit stale-data notice and Retry; do not render placeholder data as real status.
+- Preserve the Activity viewport when appending pages or retrying pagination. Reset it only for filter changes, and stop automatic pagination after an error until explicit retry.
+- Keep filter state in hash-router search parameters; validate values and preserve unrelated parameters and browser history.
+- Preserve accessible names, keyboard focus, and popup semantics. Run the existing axe checks without blanket rule exclusions; automated checks do not establish screen-reader interoperability.
+- Give each Clang target its own generated `SDKCONFIG`. Editor/test configuration must not mutate production configuration or change its libc selection.
+
 ## Validation
 
 Run formatting and builds sequentially; `tools/format.py` may remove generated dashboard artifacts while `npm run build` is writing them. The normal commands below keep authentication enabled. When a temporary local auth bypass is necessary, use the documented development overlay command in `CONTRIBUTING.md`; do not alter source authorization logic or commit generated development configuration.

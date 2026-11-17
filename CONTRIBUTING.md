@@ -69,7 +69,7 @@ A local hardware-development build may bypass bearer authentication when repeate
 Build it in a dedicated directory with the checked-in defaults overlay:
 
 ```sh
-eim run 'idf.py -C firmware/s3 -B firmware/s3/build-development -D PROJECT_VER=0.1.4-dev -D SDKCONFIG=sdkconfig.development.generated -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.development;sdkconfig.development.defaults" reconfigure build' v6.0.2
+eim run 'idf.py -C firmware/s3 -B firmware/s3/build-development -D PROJECT_VER=0.2.0-dev -D SDKCONFIG=sdkconfig.development.generated -D "SDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.development;sdkconfig.development.defaults" reconfigure build' v6.0.2
 ```
 
 The development image reports `authentication_required:false` from `/api/v1/auth` and emits a prominent boot warning. Host, Origin, content-type, setup-mode, and request validation remain active.
@@ -94,7 +94,6 @@ Rules for this mode:
 - Keep user-visible text clear and action-oriented.
 - Add or update tests when behavior changes.
 
-Dashboard loading, retry, URL-filter, editor, and accessibility behavior is documented in [`docs/dashboard.md`](docs/dashboard.md).
 
 The detailed ownership, concurrency, hardware, and security rules for the project are documented in [`AGENTS.md`](AGENTS.md). Contributors changing firmware should read it before editing component boundaries or hardware access.
 
@@ -172,7 +171,7 @@ Playwright runs against the built dashboard with simulated firmware responses. I
 After flashing a signed production image to a positively identified CoreS3, capture a complete boot and confirm its current DHCP address. Keep captures in ignored local scratch space and redact secrets. Check the boot and unauthenticated API with:
 
 ```sh
-uv run --project tools --locked python tools/boot_check.py <fresh-boot-capture> <current-core-s3-ip> --version 0.1.4
+uv run --project tools --locked python tools/boot_check.py <fresh-boot-capture> <current-core-s3-ip> --version 0.2.0
 ```
 
 This bounded smoke check requires exactly one boot, PSRAM/storage self-test completion, the expected version/address, and application-loop entry. It rejects panic/allocation failures and startup memory below 16 KiB internal free, 8 KiB largest internal block, or 8 KiB DMA-capable free. These are regression floors, not proof of workload headroom. It checks idle production authentication, unauthenticated/invalid-cookie rejection, and that an exchange before a physical tap cannot issue a session or code. It never uses an environment bearer token and stops before exchanging if a code is already open.
