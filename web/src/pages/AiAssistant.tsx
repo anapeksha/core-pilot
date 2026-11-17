@@ -52,7 +52,6 @@ import {
   SheetHeader,
   SheetTitle,
 } from "~/components/sheet";
-import { Skeleton } from "~/components/skeleton";
 
 import {
   TextField,
@@ -70,16 +69,10 @@ import {
   type AiChatHistoryMessage,
   type AiChatMessage,
   type AiChatResponse,
-  type AiMemorySection,
 } from "../lib/api";
 
+import { aiChatMutation, aiProviderMutation } from "../mutations/ai";
 import {
-  aiChatMutation,
-  aiMemoryMutation,
-  aiProviderMutation,
-} from "../mutations/ai";
-import {
-  aiMemoryQuery as createAiMemoryQuery,
   aiQuery as createAiQuery,
   mcpToolsQuery as createMcpToolsQuery,
 } from "../queries/ai";
@@ -142,16 +135,8 @@ const providerSchema = z.object({
   ),
 });
 
-const memorySchema = z.object({
-  markdown: bytesAtMost(
-    entityLimits.memoryMarkdown,
-    "Memory must be 12 KiB or less.",
-  ),
-});
-
 type ChatFormValues = z.input<typeof chatSchema>;
 type ProviderFormValues = z.input<typeof providerSchema>;
-type MemoryFormValues = z.input<typeof memorySchema>;
 
 function zodResolver<T>(schema: z.ZodType<T>) {
   return async (values: T) => {
@@ -351,64 +336,6 @@ const ChatMessage: Component<{
   );
 };
 
-const MemorySectionForm: Component<{
-  section: AiMemorySection;
-  pending: boolean;
-  onSave: (markdown: string) => void;
-}> = (props) => {
-  const { errors, handleSubmit, register, reset, values } =
-    createForm<MemoryFormValues>({
-      defaultValues: { markdown: props.section.markdown },
-      mode: "onSubmit",
-      resolver: zodResolver(memorySchema),
-    });
-
-  createEffect(() => reset({ markdown: props.section.markdown }));
-
-  return (
-    <form
-      onSubmit={handleSubmit((formValues) => props.onSave(formValues.markdown))}
-    >
-      <Card>
-        <CardHeader class="flex-row items-start justify-between">
-          <CardTitle>{props.section.title}</CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            type="button"
-            onClick={() => reset({ markdown: props.section.markdown })}
-          >
-            Reset
-          </Button>
-        </CardHeader>
-        <CardContent>
-          <TextField validationState={errors.markdown ? "invalid" : "valid"}>
-            <TextFieldLabel for={`memory-${props.section.id}`} class="sr-only">
-              {props.section.title} markdown
-            </TextFieldLabel>
-            <TextFieldTextArea
-              {...register("markdown")}
-              id={`memory-${props.section.id}`}
-              value={values().markdown}
-              class="min-h-36 font-mono text-xs"
-            />
-            <Show when={errors.markdown?.message}>
-              {(message) => (
-                <TextFieldErrorMessage>{message()}</TextFieldErrorMessage>
-              )}
-            </Show>
-          </TextField>
-        </CardContent>
-        <CardFooter class="justify-end">
-          <Button size="sm" type="submit" disabled={props.pending}>
-            Save encrypted
-          </Button>
-        </CardFooter>
-      </Card>
-    </form>
-  );
-};
-
 const MAX_RENDERED_CHAT_MESSAGES = 50;
 
 function appendChatMessage(
@@ -420,12 +347,10 @@ function appendChatMessage(
 
 const AiAssistant: Component = () => {
   const aiQuery = createAiQuery();
-  const memoryQuery = createAiMemoryQuery();
   const toolsQuery = createMcpToolsQuery();
 
   const providerMutation = aiProviderMutation();
   const chatMutation = aiChatMutation();
-  const memoryMutation = aiMemoryMutation();
 
   const [providerMode, setProviderMode] =
     createSignal<ProviderMode>("openai-compatible");
@@ -477,16 +402,12 @@ const AiAssistant: Component = () => {
 
   const shouldShowToast = createToastGate();
   createEffect(() => {
-    const success = providerMutation.isSuccess || memoryMutation.isSuccess;
-    const error = providerMutation.isError || memoryMutation.isError;
+    const success = providerMutation.isSuccess;
+    const error = providerMutation.isError;
     const successMessage =
-      providerMutation.data?.detail ??
-      memoryMutation.data?.detail ??
-      "AI settings updated.";
+      providerMutation.data?.detail ?? "AI settings updated.";
     const errorMessage =
-      providerMutation.error?.message ??
-      memoryMutation.error?.message ??
-      "AI settings could not be updated.";
+      providerMutation.error?.message ?? "AI settings could not be updated.";
     const key = success
       ? `success:${successMessage}`
       : error
@@ -642,6 +563,14 @@ const AiAssistant: Component = () => {
           </Button>
           <Button as="a" href="#/ai/prompts" variant="outline" size="sm">
             Prompt files
+          </Button>
+          <Button
+            as="a"
+            href="#/ai/prompts?section=memory"
+            variant="outline"
+            size="sm"
+          >
+            Saved context
           </Button>
         </Flex>
       </CardHeader>
@@ -1123,71 +1052,6 @@ const AiAssistant: Component = () => {
               </Sheet>
             </div>
           </Flex>
-
-          <Card>
-            <CardHeader>
-              <Flex alignItems="start" class="flex-col gap-3 sm:flex-row">
-                <Flex
-                  flexDirection="col"
-                  alignItems="start"
-                  justifyContent="start"
-                  class="min-w-0 gap-1"
-                >
-                  <CardTitle>Memory</CardTitle>
-                  <CardDescription>
-                    Markdown sections are stored only as encrypted SD records.
-                  </CardDescription>
-                </Flex>
-                <Show
-                  when={!(memoryQuery.isFetching && !memoryQuery.data)}
-                  fallback={<Skeleton class="h-5 w-20 rounded-full" />}
-                >
-                  <Badge variant="outline" class="shrink-0">
-                    {memoryQuery.data?.encrypted ? "encrypted" : "not writable"}
-                  </Badge>
-                </Show>
-              </Flex>
-            </CardHeader>
-            <CardContent>
-              <Show
-                when={!(memoryQuery.isFetching && !memoryQuery.data)}
-                fallback={
-                  <Grid colsLg={2} class="gap-4" aria-busy="true">
-                    <For each={[0, 1]}>
-                      {() => (
-                        <Card>
-                          <CardHeader class="flex-row items-center justify-between gap-3">
-                            <Skeleton class="h-5 w-32" />
-                            <Skeleton class="h-8 w-16" />
-                          </CardHeader>
-                          <CardContent>
-                            <Skeleton class="h-36 w-full" />
-                          </CardContent>
-                          <CardFooter class="justify-end">
-                            <Skeleton class="h-8 w-28" />
-                          </CardFooter>
-                        </Card>
-                      )}
-                    </For>
-                  </Grid>
-                }
-              >
-                <Grid colsLg={2} class="gap-4">
-                  <For each={memoryQuery.data?.sections ?? []}>
-                    {(section) => (
-                      <MemorySectionForm
-                        section={section}
-                        pending={memoryMutation.isPending}
-                        onSave={(markdown) =>
-                          memoryMutation.mutate({ id: section.id, markdown })
-                        }
-                      />
-                    )}
-                  </For>
-                </Grid>
-              </Show>
-            </CardContent>
-          </Card>
         </Flex>
       </CardContent>
     </Card>

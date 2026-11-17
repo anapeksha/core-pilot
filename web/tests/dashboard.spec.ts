@@ -2739,11 +2739,20 @@ test("covers AI chat, provider setup, encrypted memory, and tool permissions", a
   ).toBeVisible();
   expect(state.posts.at(-1)?.path).toBe("/api/v1/ai/provider");
 
+  await page.getByRole("link", { name: "Saved context", exact: true }).click();
   await expect(
-    page.getByText(
-      "Markdown sections are stored only as encrypted SD records.",
-    ),
-  ).toBeVisible();
+    page.getByRole("tab", { name: "Saved context" }),
+  ).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: /Home facts/ }).click();
+  await page
+    .getByRole("textbox", { name: "Saved context Markdown" })
+    .fill("Prefer verified local device state.");
+  await page.getByRole("button", { name: "Save encrypted" }).click();
+  await expect(page.getByText("Memory saved.", { exact: true })).toBeVisible();
+  expect(state.posts.at(-1)).toMatchObject({
+    path: "/api/v1/ai/memory/section",
+    body: { id: "home", markdown: "Prefer verified local device state." },
+  });
 
   await page.goto("/#/ai/tools");
   const deviceListSwitch = page.getByRole("switch", {
@@ -2818,17 +2827,505 @@ test("covers encrypted assistant prompt editing and preview", async ({
     page.getByRole("dialog", { name: "System prompt" }),
   ).toBeVisible();
   await page
-    .locator("textarea")
+    .getByRole("textbox", { name: "Prompt Markdown" })
     .fill("# Updated\n- **Bounded** action\n`safe`");
   await page.getByRole("tab", { name: "Preview" }).click();
   await expect(page.getByRole("heading", { name: "Updated" })).toBeVisible();
   await expect(
-    page.locator("strong").filter({ hasText: "Bounded" }),
+    page
+      .getByRole("listitem")
+      .filter({ hasText: "Bounded action" })
+      .locator("strong"),
   ).toBeVisible();
   await page.getByRole("button", { name: "Save encrypted" }).click();
   await expect(page.getByText("Prompt file saved.")).toBeVisible();
   expect(state.posts.at(-1)?.path).toBe("/api/v1/ai/prompts/file");
 });
+
+test("unverified baseline preview cannot overwrite an unseen encrypted prompt", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  const custom =
+    "# Private override\n\nKeep this existing encrypted content. é";
+  state.aiPrompts.files[0].markdown = custom;
+  let failed = true;
+  await page.route("**/api/v1/ai/prompts", async (route) => {
+    if (failed)
+      await json(route, { detail: "Prompt storage unavailable" }, 503);
+    else await route.fallback();
+  });
+  await page.goto("/#/ai/prompts");
+  await expect(
+    page.getByText(
+      "Encrypted overrides could not be loaded. Only built-in prompts are shown.",
+    ),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Assistant system prompt/ }).click();
+  const dialog = page.getByRole("dialog", {
+    name: "Assistant system prompt",
+    exact: true,
+  });
+  const field = dialog.getByRole("textbox", { name: "Prompt Markdown" });
+  await expect(field).toHaveJSProperty("readOnly", true);
+  await expect(field).toHaveValue(/Core Pilot assistant/);
+  await expect(dialog.getByRole("status")).toContainText(
+    "Close it, retry loading, and reopen",
+  );
+  await expect(
+    dialog.getByRole("button", { name: "Save encrypted" }),
+  ).toBeDisabled();
+  await dialog.getByRole("tab", { name: "Preview" }).click();
+  await expect(
+    dialog.getByRole("heading", { name: "Core Pilot assistant", exact: true }),
+  ).toBeVisible();
+  await dialog
+    .locator("form")
+    .evaluate((form) =>
+      form.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      ),
+    );
+  expect(state.posts).toEqual([]);
+  expect(state.aiPrompts.files[0].markdown).toBe(custom);
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  failed = false;
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: /Assistant system prompt/ }),
+  ).toHaveCount(0);
+  await page.getByRole("button", { name: /System prompt/ }).click();
+  const verified = page.getByRole("dialog", {
+    name: "System prompt",
+    exact: true,
+  });
+  const verifiedField = verified.getByRole("textbox", {
+    name: "Prompt Markdown",
+  });
+  await expect(verifiedField).toHaveValue(custom);
+  await expect(verifiedField).toBeEditable();
+  const updated = custom + "\n\nUser-approved addition.";
+  await verifiedField.fill(updated);
+  await verified.getByRole("button", { name: "Save encrypted" }).click();
+  await expect(verified).toHaveCount(0);
+  expect(state.posts).toHaveLength(1);
+  expect(state.posts[0]).toMatchObject({
+    path: "/api/v1/ai/prompts/file",
+    body: { path: "assistant/system.md", markdown: "" },
+  });
+  expect(
+    Buffer.from(String(state.posts[0].body.markdown_base64), "base64").toString(
+      "utf8",
+    ),
+  ).toBe(updated);
+});
+
+test("prompt refresh failure makes cached entries read-only and preserves an existing draft", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.goto("/#/ai/prompts");
+  const open = page.getByRole("button", { name: /System prompt/ });
+  await expect(open).toBeVisible();
+  let failed = true;
+  await page.route("**/api/v1/ai/prompts", async (route) => {
+    if (failed)
+      await json(route, { detail: "Prompt refresh unavailable" }, 503);
+    else await route.fallback();
+  });
+  const refresh = async () => {
+    await page.context().setOffline(true);
+    await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false);
+    await page.context().setOffline(false);
+  };
+  const stale = page.getByText(
+    "Prompt files could not be refreshed. Showing cached files and built-in prompts; data may be stale.",
+  );
+  await refresh();
+  await expect(stale).toBeVisible();
+  await open.click();
+  const dialog = page.getByRole("dialog", {
+    name: "System prompt",
+    exact: true,
+  });
+  const field = dialog.getByRole("textbox", { name: "Prompt Markdown" });
+  const save = dialog.getByRole("button", { name: "Save encrypted" });
+  await expect(field).toHaveJSProperty("readOnly", true);
+  await expect(save).toBeDisabled();
+  await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+  failed = false;
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(stale).toHaveCount(0);
+  await open.click();
+  const draft = "# Unsaved draft\n\nDo not erase this user edit.";
+  await field.fill(draft);
+  await expectDraftDirty(page, true);
+  failed = true;
+  await refresh();
+  await expect(save).toBeDisabled();
+  await expect(field).toHaveValue(draft);
+  await expect(field).toHaveJSProperty("readOnly", true);
+  await expect(dialog.getByRole("status")).toContainText(
+    "current content could not be verified",
+  );
+  await dialog
+    .locator("form")
+    .evaluate((form) =>
+      form.dispatchEvent(
+        new Event("submit", { bubbles: true, cancelable: true }),
+      ),
+    );
+  expect(state.posts).toEqual([]);
+  failed = false;
+  // Exercise the page's query retry without dismissing the modal or its dirty draft.
+  await page
+    .getByRole("button", { name: "Retry", exact: true, includeHidden: true })
+    .evaluate((button: HTMLButtonElement) => button.click());
+  await expect(save).toBeEnabled();
+  await expect(field).toHaveValue(draft);
+  await expect(field).toBeEditable();
+  await expectDraftDirty(page, true);
+  expect(state.posts).toEqual([]);
+});
+
+const previewMarkdown = [
+  "# Local guide",
+  "",
+  "## Nested guidance",
+  "",
+  "### Details",
+  "",
+  "- First item",
+  "  - Nested item",
+  "",
+  "1. Ordered item",
+  "2. Next item",
+  "",
+  "```js",
+  "const bounded = true;",
+  "```",
+  "",
+  "[Documentation](https://example.com/guide)",
+  "",
+  "| Setting | Value |",
+  "| --- | --- |",
+  "| Mode | Local |",
+].join("\n");
+
+test("assistant preview renders semantic styled Markdown and passes axe", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/ai/prompts");
+  await page.getByRole("button", { name: /System prompt/ }).click();
+  const dialog = page.getByRole("dialog", { name: "System prompt" });
+  await dialog
+    .getByRole("textbox", { name: "Prompt Markdown" })
+    .fill(previewMarkdown);
+  await dialog.getByRole("tab", { name: "Preview" }).click();
+  const preview = dialog.getByRole("region", { name: "Markdown preview" });
+  for (const [level, name] of [
+    [1, "Local guide"],
+    [2, "Nested guidance"],
+    [3, "Details"],
+  ] as const) {
+    await expect(
+      preview.getByRole("heading", { level, name, exact: true }),
+    ).toBeVisible();
+  }
+  await expect(preview.locator("ul ul li")).toHaveText("Nested item");
+  await expect(preview.locator("ol > li")).toHaveCount(2);
+  expect(
+    await preview
+      .locator("ul")
+      .first()
+      .evaluate((element) => getComputedStyle(element).listStyleType),
+  ).not.toBe("none");
+  expect(
+    await preview
+      .locator("ol")
+      .evaluate((element) => getComputedStyle(element).listStyleType),
+  ).toBe("decimal");
+  await expect(preview.locator("pre > code")).toContainText(
+    "const bounded = true;",
+  );
+  await expect(
+    preview.getByRole("link", { name: "Documentation" }),
+  ).toHaveAttribute("href", "https://example.com/guide");
+  await expect(
+    preview.getByRole("columnheader", { name: "Setting" }),
+  ).toBeVisible();
+  await expect(
+    preview.getByRole("cell", { name: "Local", exact: true }),
+  ).toBeVisible();
+  await expectAccessible(page);
+});
+
+test("assistant preview rejects executable HTML and unsafe URLs without image requests", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  const resources: string[] = [];
+  await page.route("https://markdown-resource.invalid/**", async (route) => {
+    resources.push(route.request().url());
+    await route.abort();
+  });
+  const dialogs: string[] = [];
+  page.on("dialog", async (dialog) => {
+    dialogs.push(dialog.message());
+    await dialog.dismiss();
+  });
+  await page.goto("/#/ai/prompts");
+  await page.getByRole("button", { name: /System prompt/ }).click();
+  await page
+    .getByRole("textbox", { name: "Prompt Markdown" })
+    .fill(
+      [
+        "# Safe preview",
+        "",
+        "[unsafe](javascript:alert%281%29)",
+        "[data](data:text/html,attack)",
+        "![image disabled](https://markdown-resource.invalid/image.png)",
+        "",
+        '<script>alert("executed")</script>',
+        '<img src="https://markdown-resource.invalid/raw.png" onerror="alert(1)">',
+        '<iframe src="https://markdown-resource.invalid/frame"></iframe>',
+        '<svg onload="alert(1)"></svg>',
+      ].join("\n"),
+    );
+  await page.getByRole("tab", { name: "Preview" }).click();
+  const preview = page.getByRole("region", { name: "Markdown preview" });
+  await expect(
+    preview.getByRole("heading", { name: "Safe preview" }),
+  ).toBeVisible();
+  await expect(
+    preview.locator("script,img,iframe,svg,[onerror],[onload]"),
+  ).toHaveCount(0);
+  await expect(
+    preview.locator('a[href^="javascript:"],a[href^="data:"]'),
+  ).toHaveCount(0);
+  await expect(preview).toContainText("image disabled");
+  await page.waitForTimeout(100);
+  expect(resources).toEqual([]);
+  expect(dialogs).toEqual([]);
+});
+
+for (const kind of ["prompt", "memory"] as const) {
+  test(`assistant ${kind} enforces UTF-8 bounds from Editor and Preview`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    const limit = kind === "prompt" ? 4096 : 12288;
+    await page.goto(
+      `/#/ai/prompts${kind === "memory" ? "?section=memory" : ""}`,
+    );
+    await page
+      .getByRole("button", {
+        name: kind === "prompt" ? /System prompt/ : /Home facts/,
+      })
+      .click();
+    const field = page.getByRole("textbox", {
+      name: kind === "prompt" ? "Prompt Markdown" : "Saved context Markdown",
+    });
+    const oversized = "é".repeat(limit / 2) + "a";
+    expect(new TextEncoder().encode(oversized).length).toBe(limit + 1);
+    await field.fill(oversized);
+    await page.getByRole("button", { name: "Save encrypted" }).click();
+    await expect(
+      page.getByText(
+        kind === "prompt"
+          ? "Prompt must be 4 KiB or less."
+          : "Saved context must be 12 KiB or less.",
+        { exact: true },
+      ),
+    ).toBeVisible();
+    await expectDraftDirty(page, true);
+    await page.getByRole("tab", { name: "Preview" }).click();
+    const preview = page.getByRole("region", { name: "Markdown preview" });
+    await expect(preview.getByRole("status")).toHaveText(
+      `${kind === "prompt" ? "Prompt must be 4 KiB or less." : "Saved context must be 12 KiB or less."} Reduce the draft in Editor to preview it.`,
+    );
+    await expect(preview.locator(".markdown-viewer")).toHaveCount(0);
+    await page.getByRole("button", { name: "Save encrypted" }).click();
+    expect(state.posts).toEqual([]);
+    await page.getByRole("tab", { name: "Editor", exact: true }).click();
+    await expect(field).toHaveValue(oversized);
+    const valid = "é".repeat(limit / 2);
+    await field.fill(valid);
+    const editorNode = await field.elementHandle();
+    await field.focus();
+    await field.evaluate((element: HTMLTextAreaElement) =>
+      element.setSelectionRange(7, 7),
+    );
+    await page.keyboard.insertText("Z");
+    await expect(field).toHaveValue(valid.slice(0, 7) + "Z" + valid.slice(7));
+    await page.getByRole("tab", { name: "Preview" }).click();
+    await expect(preview.getByRole("status")).toBeVisible();
+    await expect(preview.locator(".markdown-viewer")).toHaveCount(0);
+    await page.getByRole("tab", { name: "Editor", exact: true }).click();
+    expect(
+      await field.evaluate(
+        (element, original) => element === original,
+        editorNode,
+      ),
+    ).toBe(true);
+    expect(
+      await field.evaluate((element: HTMLTextAreaElement) => [
+        element.selectionStart,
+        element.selectionEnd,
+      ]),
+    ).toEqual([8, 8]);
+    await field.focus();
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(field).toHaveValue(valid);
+    await page.getByRole("tab", { name: "Preview" }).click();
+    await expect(preview.locator(".markdown-viewer")).toHaveText(valid);
+    await page.getByRole("button", { name: "Save encrypted" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    expect(state.posts.at(-1)).toMatchObject({
+      path:
+        kind === "prompt"
+          ? "/api/v1/ai/prompts/file"
+          : "/api/v1/ai/memory/section",
+      body: {
+        ...(kind === "prompt"
+          ? { path: "assistant/system.md" }
+          : { id: "home" }),
+        ...(kind === "prompt" ? { markdown: "" } : { markdown: valid }),
+      },
+    });
+    const savedMarkdown =
+      kind === "prompt"
+        ? Buffer.from(
+            String(state.posts.at(-1)?.body.markdown_base64),
+            "base64",
+          ).toString("utf8")
+        : state.posts.at(-1)?.body.markdown;
+    expect(savedMarkdown).toBe(valid);
+    expect(Buffer.byteLength(String(savedMarkdown), "utf8")).toBe(limit);
+  });
+}
+
+test("assistant context tabs preserve URL history and existing memory records", async ({
+  page,
+}, testInfo) => {
+  const state = await mockFirmwareApi(page);
+  await page.goto("/#/ai/prompts?section=invalid&keep=yes");
+  const prompts = page.getByRole("tab", { name: "Prompt files", exact: true });
+  const memory = page.getByRole("tab", { name: "Saved context", exact: true });
+  await expect(prompts).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('[role="tabpanel"] section')).toHaveCount(1);
+  await expect(page.locator('[role="tabpanel"] section section')).toHaveCount(
+    0,
+  );
+  await prompts.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(memory).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(memory).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/section=memory/);
+  await expect(page).toHaveURL(/keep=yes/);
+  for (const section of state.aiMemory.sections) {
+    await expect(
+      page.getByRole("button", { name: new RegExp(section.title) }),
+    ).toBeVisible();
+  }
+  await page.goBack();
+  await expect(prompts).toHaveAttribute("aria-selected", "true");
+  await page.goForward();
+  await expect(memory).toHaveAttribute("aria-selected", "true");
+  await expect(page).toHaveURL(/keep=yes/);
+  await page.screenshot({
+    path: testInfo.outputPath("saved-context.png"),
+    animations: "disabled",
+  });
+  expect(state.posts).toEqual([]);
+});
+
+test("assistant draft guards close, retains rejected save and closes accepted retry once", async ({
+  page,
+}) => {
+  const state = await mockFirmwareApi(page);
+  await page.goto("/#/ai/prompts?section=memory");
+  const open = page.getByRole("button", { name: /Preferences/ });
+  await open.click();
+  const field = page.getByRole("textbox", { name: "Saved context Markdown" });
+  await expectDraftDirty(page, false);
+  await field.fill("Changed preference");
+  await expectDraftDirty(page, true);
+  await field.fill("Prefer local actions.");
+  await expectDraftDirty(page, false);
+  await field.fill("Changed preference");
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toBeVisible();
+  await page.getByRole("button", { name: "Keep editing" }).click();
+  const reject = async (route: Route) =>
+    json(route, { accepted: false, detail: "Context save rejected." });
+  await page.route("**/api/v1/ai/memory/section", reject);
+  await page.getByRole("button", { name: "Save encrypted" }).click();
+  await expect(
+    page.getByText("Context save rejected.", { exact: true }),
+  ).toBeVisible();
+  await expect(field).toHaveValue("Changed preference");
+  await expectDraftDirty(page, true);
+  await page.unroute("**/api/v1/ai/memory/section", reject);
+  await page.getByRole("button", { name: "Save encrypted" }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByText("Memory saved.", { exact: true })).toHaveCount(1);
+  expect(state.posts.at(-1)).toMatchObject({
+    body: { id: "prefs", markdown: "Changed preference" },
+  });
+  await open.click();
+  await expectDraftDirty(page, false);
+  await expect(field).toHaveValue("Changed preference");
+  const editor = page.getByRole("tab", { name: "Editor", exact: true });
+  await editor.focus();
+  await page.keyboard.press("ArrowRight");
+  const preview = page.getByRole("tab", { name: "Preview", exact: true });
+  await expect(preview).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(preview).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
+  await page.keyboard.press("Enter");
+  await expect(editor).toHaveAttribute("aria-selected", "true");
+});
+
+for (const width of [320, 768]) {
+  test(`assistant Markdown table and code stay contained at ${width}px`, async ({
+    page,
+  }) => {
+    await mockFirmwareApi(page);
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/#/ai/prompts");
+    await page.getByRole("button", { name: /System prompt/ }).click();
+    await page
+      .getByRole("textbox", { name: "Prompt Markdown" })
+      .fill(
+        previewMarkdown +
+          "\n\n```\n" +
+          "long_code_".repeat(100) +
+          "\n```\n\n| Long | Value |\n| --- | --- |\n| " +
+          "wide".repeat(100) +
+          " | local |",
+      );
+    await page.getByRole("tab", { name: "Preview" }).click();
+    await expect(page.getByRole("table")).toHaveCount(2);
+    const bounds = await page
+      .getByRole("region", { name: "Markdown preview" })
+      .evaluate((element) => {
+        const rect = element.getBoundingClientRect();
+        return {
+          left: rect.left,
+          right: rect.right,
+          overflow: document.documentElement.scrollWidth > innerWidth,
+        };
+      });
+    expect(bounds.left).toBeGreaterThanOrEqual(0);
+    expect(bounds.right).toBeLessThanOrEqual(width);
+    expect(bounds.overflow).toBe(false);
+    await expectAccessible(page);
+  });
+}
 
 test("shows saved Wi‑Fi state and confirms forgetting without exposing passwords", async ({
   page,

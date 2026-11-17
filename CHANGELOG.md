@@ -4,6 +4,15 @@ All notable changes to Core Pilot are documented here. The project follows [Sema
 
 ## [Unreleased]
 
+### Changed
+
+- Manage assistant prompt files and saved context together, with a shared editor and a simpler, unnested layout.
+
+### Fixed
+
+- Render Markdown with a full parser, sanitized output, readable typography, and keyboard-accessible code and table scrolling. Disable embedded resources and preserve drafts across preview changes.
+- Prevent saving built-in fallback prompts over encrypted overrides that could not be loaded.
+
 ## [0.2.0] - 2026-11-17
 
 ### Changed

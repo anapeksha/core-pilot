@@ -1,16 +1,11 @@
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import { useSearchParams } from "@solidjs/router";
+import { createMemo, createSignal, For, Show } from "solid-js";
+import { createForm } from "solid-hook-form";
 import { toast } from "solid-sonner";
 
 import { Alert } from "~/components/alert";
 import { Badge } from "~/components/badge";
 import { Button } from "~/components/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "~/components/card";
 import {
   Dialog,
   DialogContent,
@@ -19,22 +14,25 @@ import {
   DialogHeader,
   DialogTitle,
 } from "~/components/dialog";
-import { Flex } from "~/components/flex";
-import { Grid } from "~/components/grid";
-import { Skeleton } from "~/components/skeleton";
+import { MarkdownViewer } from "~/components/markdown-viewer";
+import { PageHeader } from "~/components/page-header";
 import { Spinner } from "~/components/spinner";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "~/components/tabs";
 import {
   TextField,
+  TextFieldErrorMessage,
   TextFieldLabel,
   TextFieldTextArea,
 } from "~/components/text-field";
-import type { AiPromptFile } from "~/lib/api";
-import { createToastGate } from "~/lib/toast";
-import { aiPromptMutation } from "~/mutations/ai";
-import { aiPromptsQuery } from "~/queries/ai";
+import type { AiMemorySection, AiPromptFile } from "~/lib/api";
+import { bytesAtMost, entityLimits } from "~/lib/request-contracts";
+import { createUnsavedChanges } from "~/lib/unsaved-changes";
+import { aiMemoryMutation, aiPromptMutation } from "~/mutations/ai";
+import { aiMemoryQuery, aiPromptsQuery } from "~/queries/ai";
 
-type PromptTab = "editor" | "preview";
+type EditorTarget =
+  | { kind: "prompt"; file: AiPromptFile }
+  | { kind: "memory"; section: AiMemorySection };
 
 const baselinePrompts: readonly AiPromptFile[] = [
   {
@@ -53,303 +51,418 @@ const baselinePrompts: readonly AiPromptFile[] = [
   },
 ];
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function renderInlineMarkdown(value: string): string {
-  return escapeHtml(value)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-}
-
-function renderPromptPreview(markdown: string): string {
-  const blocks: string[] = [];
-  const listItems: string[] = [];
-  let codeLines: string[] | null = null;
-  const flushList = () => {
-    if (listItems.length)
-      blocks.push(`<ul>${listItems.splice(0).join("")}</ul>`);
-  };
-
-  for (const rawLine of markdown.split("\n")) {
-    const line = rawLine.trimEnd();
-    if (line.startsWith("```")) {
-      if (codeLines) {
-        blocks.push(
-          `<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`,
-        );
-        codeLines = null;
-      } else {
-        flushList();
-        codeLines = [];
-      }
-      continue;
-    }
-    if (codeLines) {
-      codeLines.push(line);
-      continue;
-    }
-    const trimmed = line.trim();
-    if (!trimmed) {
-      flushList();
-      continue;
-    }
-    const listMatch = /^[-*]\s+(.+)$/.exec(trimmed);
-    if (listMatch) {
-      listItems.push(`<li>${renderInlineMarkdown(listMatch[1])}</li>`);
-      continue;
-    }
-    flushList();
-    const headingMatch = /^(#{1,3})\s+(.+)$/.exec(trimmed);
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      blocks.push(
-        `<h${level}>${renderInlineMarkdown(headingMatch[2])}</h${level}>`,
-      );
-    } else {
-      blocks.push(`<p>${renderInlineMarkdown(trimmed)}</p>`);
-    }
-  }
-  flushList();
-  if (codeLines)
-    blocks.push(`<pre><code>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
-  return blocks.join("");
-}
-
 export default function AiPrompts() {
   const promptsResult = aiPromptsQuery();
+  const memoryResult = aiMemoryQuery();
   const promptMutation = aiPromptMutation();
-  const [selectedPrompt, setSelectedPrompt] = createSignal<AiPromptFile | null>(
-    null,
+  const memoryMutation = aiMemoryMutation();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const section = () =>
+    searchParams.section === "memory" ? "memory" : "prompts";
+  const [target, setTarget] = createSignal<EditorTarget | null>(null);
+  const [editorTab, setEditorTab] = createSignal("editor");
+  const [previewOnly, setPreviewOnly] = createSignal(false);
+  const defaultValues = { markdown: "" };
+  const {
+    register,
+    reset: resetFields,
+    values,
+    errors,
+    handleSubmit,
+    formState,
+  } = createForm({ defaultValues, mode: "onTouched" });
+  const markdownField = register("markdown", {
+    validate: (value) => {
+      const memory = target()?.kind === "memory";
+      const result = bytesAtMost(
+        memory ? entityLimits.memoryMarkdown : entityLimits.promptMarkdown,
+        memory
+          ? "Saved context must be 12 KiB or less."
+          : "Prompt must be 4 KiB or less.",
+      ).safeParse(value);
+      return result.success || result.error.issues[0]?.message;
+    },
+  });
+  const markdownBytes = createMemo(
+    () => new TextEncoder().encode(values().markdown).byteLength,
   );
-  const [promptDraft, setPromptDraft] = createSignal("");
-  const [promptTab, setPromptTab] = createSignal<PromptTab>("editor");
-  const shouldShowToast = createToastGate();
-
+  const markdownLimit = () =>
+    target()?.kind === "memory"
+      ? entityLimits.memoryMarkdown
+      : entityLimits.promptMarkdown;
+  const previewAllowed = () => markdownBytes() <= markdownLimit();
+  const pending = () => promptMutation.isPending || memoryMutation.isPending;
+  const contentVerified = (kind: EditorTarget["kind"]) => {
+    const query = kind === "prompt" ? promptsResult : memoryResult;
+    return (
+      query.data !== undefined && !query.isPlaceholderData && !query.isError
+    );
+  };
+  const saveAllowed = () => {
+    const selected = target();
+    return (
+      selected !== null && !previewOnly() && contentVerified(selected.kind)
+    );
+  };
+  function reset(markdown: string) {
+    Object.assign(defaultValues, { markdown });
+    resetFields({ markdown });
+  }
+  const unsaved = createUnsavedChanges({
+    open: () => target() !== null,
+    dirty: formState.isDirty,
+    label: "assistant context",
+  });
+  function close() {
+    setTarget(null);
+    reset("");
+    setEditorTab("editor");
+    setPreviewOnly(false);
+  }
+  function requestClose() {
+    if (!pending()) unsaved.request(close);
+  }
+  function edit(next: EditorTarget) {
+    setPreviewOnly(!contentVerified(next.kind));
+    setTarget(next);
+    reset(next.kind === "prompt" ? next.file.markdown : next.section.markdown);
+    setEditorTab("editor");
+  }
+  const save = handleSubmit(async ({ markdown }) => {
+    const selected = target();
+    if (!selected || pending() || !saveAllowed()) return;
+    try {
+      const response =
+        selected.kind === "prompt"
+          ? await promptMutation.mutateAsync({
+              path: selected.file.path,
+              markdown,
+            })
+          : await memoryMutation.mutateAsync({
+              id: selected.section.id,
+              markdown,
+            });
+      close();
+      toast.success(response.detail ?? "Assistant context saved.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Assistant context could not be saved.",
+      );
+    }
+  });
+  const title = () => {
+    const selected = target();
+    return selected?.kind === "prompt"
+      ? selected.file.title
+      : selected?.section.title;
+  };
+  const identifier = () => {
+    const selected = target();
+    return selected?.kind === "prompt"
+      ? selected.file.path
+      : selected?.section.id;
+  };
   const promptFolders = createMemo(() => {
-    const encryptedByPath = new Map(
-      (promptsResult.data?.files ?? []).map((file) => [file.path, file]),
-    );
-    const merged = baselinePrompts.map(
-      (baseline) => encryptedByPath.get(baseline.path) ?? baseline,
-    );
-    for (const file of encryptedByPath.values()) {
-      if (!baselinePrompts.some((baseline) => baseline.path === file.path))
-        merged.push(file);
-    }
-
-    const folders: Record<string, AiPromptFile[]> = {};
-    for (const file of merged) {
+    const files = new Map(baselinePrompts.map((file) => [file.path, file]));
+    for (const file of promptsResult.data?.files ?? [])
+      files.set(file.path, file);
+    const folders = new Map<string, AiPromptFile[]>();
+    for (const file of files.values()) {
       const folder = file.path.includes("/")
-        ? file.path.split("/").slice(0, -1).join("/")
+        ? file.path.slice(0, file.path.lastIndexOf("/"))
         : "root";
-      (folders[folder] ??= []).push(file);
+      const entries = folders.get(folder) ?? [];
+      entries.push(file);
+      folders.set(folder, entries);
     }
-    return Object.entries(folders).map(([path, files]) => ({ path, files }));
+    return Array.from(folders, ([path, files]) => ({ path, files }));
   });
-
-  const closePromptEditor = () => {
-    setSelectedPrompt(null);
-    setPromptDraft("");
-    setPromptTab("editor");
-  };
-  const editPrompt = (file: AiPromptFile) => {
-    setSelectedPrompt(file);
-    setPromptDraft(file.markdown);
-    setPromptTab("editor");
-  };
-  const savePrompt = () => {
-    const file = selectedPrompt();
-    if (!file) return;
-    promptMutation.mutate(
-      { path: file.path, markdown: promptDraft() },
-      { onSuccess: closePromptEditor },
-    );
-  };
-
-  createEffect(() => {
-    const message = promptMutation.isSuccess
-      ? (promptMutation.data?.detail ?? "Prompt file saved.")
-      : promptMutation.isError
-        ? (promptMutation.error?.message ?? "Prompt file could not be saved.")
-        : "";
-    const key = `${promptMutation.isSuccess ? "success" : "error"}:${message}`;
-    if (!shouldShowToast(message ? key : "")) return;
-    if (promptMutation.isSuccess) toast.success(message);
-    if (promptMutation.isError) toast.error(message);
-  });
-
-  const loading = () => promptsResult.isFetching && !promptsResult.data;
+  const promptsLoading = () =>
+    promptsResult.isFetching &&
+    (promptsResult.isPlaceholderData || !promptsResult.data);
+  const memoryLoading = () =>
+    memoryResult.isFetching &&
+    (memoryResult.isPlaceholderData || !memoryResult.data);
 
   return (
-    <>
-      <Card class="w-full overflow-hidden">
-        <CardHeader class="gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div class="max-w-3xl">
-            <div class="mb-3 h-px w-12 bg-foreground" />
-            <h1 class="text-xl font-semibold tracking-tight">
-              Assistant Prompts
-            </h1>
-            <CardDescription>
-              Review and edit the encrypted instructions used by the optional
-              assistant.
-            </CardDescription>
-          </div>
-          <Flex class="w-full flex-wrap gap-2 sm:w-auto">
+    <div class="space-y-6">
+      <PageHeader
+        title="Assistant Prompts"
+        description="Prompt files define assistant instructions; saved context records information to remember. Both are included with chat and saved as encrypted SD records."
+        actions={
+          <>
             <Button as="a" href="#/ai" variant="outline" size="sm">
               Assistant
             </Button>
             <Button as="a" href="#/ai/tools" variant="outline" size="sm">
               Permissions
             </Button>
-          </Flex>
-        </CardHeader>
-        <CardContent class="space-y-5">
-          <Flex
-            alignItems="start"
-            class="flex-col gap-3 sm:flex-row sm:justify-between"
-          >
-            <div>
-              <h2 class="font-semibold">Prompt files</h2>
-              <p class="text-sm text-muted-foreground">
-                Baseline prompts become encrypted editable Markdown after they
-                are saved.
+          </>
+        }
+      />
+      <Tabs
+        value={section()}
+        onChange={(value) =>
+          setSearchParams({
+            section: value === "memory" ? "memory" : undefined,
+          })
+        }
+      >
+        <TabsList aria-label="Assistant context sections">
+          <TabsTrigger value="prompts">Prompt files</TabsTrigger>
+          <TabsTrigger value="memory">Saved context</TabsTrigger>
+        </TabsList>
+        <TabsContent value="prompts" class="space-y-5">
+          <div>
+            <h2 class="font-semibold">Prompt files</h2>
+            <p class="text-sm text-muted-foreground">
+              Baseline prompts become encrypted editable Markdown after they are
+              saved.
+            </p>
+          </div>
+          <Show when={promptsResult.isError}>
+            <Alert>
+              <p>
+                {promptsResult.data
+                  ? "Prompt files could not be refreshed. Showing cached files and built-in prompts; data may be stale."
+                  : "Encrypted overrides could not be loaded. Only built-in prompts are shown."}
               </p>
-            </div>
-            <Show
-              when={!loading()}
-              fallback={<Skeleton class="h-5 w-20 rounded-full" />}
-            >
-              <Badge variant="secondary">
-                {promptsResult.data?.encrypted && !promptsResult.isError
-                  ? "encrypted"
-                  : "baseline"}
-              </Badge>
-            </Show>
-          </Flex>
-
-          <Show
-            when={!loading()}
-            fallback={
-              <Grid
-                cols={1}
-                colsLg={2}
-                class="gap-4"
-                aria-busy="true"
-                aria-live="polite"
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={promptsResult.isFetching}
+                onClick={() => void promptsResult.refetch()}
               >
-                <For each={[1, 2]}>
-                  {() => <Skeleton class="h-48 w-full rounded-lg" />}
-                </For>
-              </Grid>
+                Retry
+              </Button>
+            </Alert>
+          </Show>
+          <Show
+            when={!promptsLoading()}
+            fallback={
+              <p role="status" class="text-sm text-muted-foreground">
+                Loading prompt files…
+              </p>
             }
           >
-            <Grid cols={1} colsLg={2} class="gap-4">
-              <For each={promptFolders()}>
-                {(folder) => (
-                  <Card>
-                    <CardHeader class="pb-3">
-                      <CardTitle class="text-sm">{folder.path}</CardTitle>
-                    </CardHeader>
-                    <CardContent class="flex flex-col gap-2">
-                      <For each={folder.files}>
-                        {(file) => (
-                          <Button
-                            variant="outline"
-                            class="h-auto w-full justify-start py-3 text-left whitespace-normal"
-                            onClick={() => editPrompt(file)}
-                          >
-                            <span class="min-w-0 flex-1">
-                              <span class="block wrap-break-word font-semibold">
-                                {file.title}
-                              </span>
-                              <span class="block wrap-break-word font-mono text-xs text-muted-foreground">
-                                {file.path}
-                              </span>
+            <For each={promptFolders()}>
+              {(folder) => (
+                <section class="space-y-2">
+                  <h3 class="font-mono text-sm font-semibold">{folder.path}</h3>
+                  <div class="divide-y border-y">
+                    <For each={folder.files}>
+                      {(file) => (
+                        <Button
+                          variant="ghost"
+                          class="h-auto w-full justify-start gap-3 rounded-none px-0 py-4 text-left whitespace-normal"
+                          onClick={() => edit({ kind: "prompt", file })}
+                        >
+                          <span class="min-w-0 flex-1">
+                            <span class="block wrap-break-word font-semibold">
+                              {file.title}
                             </span>
-                            <Badge variant="secondary" class="shrink-0">
-                              {file.baseline ? "baseline" : "custom"}
-                            </Badge>
-                          </Button>
-                        )}
-                      </For>
-                    </CardContent>
-                  </Card>
-                )}
-              </For>
-            </Grid>
+                            <span class="block wrap-break-word font-mono text-xs text-muted-foreground">
+                              {file.path}
+                            </span>
+                          </span>
+                          <Badge variant="secondary">
+                            {file.baseline ? "baseline" : "custom"}
+                          </Badge>
+                        </Button>
+                      )}
+                    </For>
+                  </div>
+                </section>
+              )}
+            </For>
+            <Show
+              when={
+                !promptsResult.isError &&
+                !promptsResult.isPlaceholderData &&
+                promptsResult.data?.detail
+              }
+            >
+              <p class="text-sm text-muted-foreground">
+                {promptsResult.data?.detail}
+              </p>
+            </Show>
           </Show>
-          <Alert>
-            <p>
-              {promptsResult.isError
-                ? "Built-in prompts are available, but encrypted overrides could not be loaded."
-                : (promptsResult.data?.detail ??
-                  "Built-in prompts are ready. Save one to create an encrypted override.")}
+        </TabsContent>
+        <TabsContent value="memory" class="space-y-5">
+          <div>
+            <h2 class="font-semibold">Saved context</h2>
+            <p class="text-sm text-muted-foreground">
+              Information the assistant remembers, stored as encrypted Markdown
+              sections.
             </p>
-          </Alert>
-        </CardContent>
-      </Card>
-
+          </div>
+          <Show when={memoryResult.isError}>
+            <Alert>
+              <p>
+                {memoryResult.data
+                  ? "Saved context could not be refreshed. Showing cached sections; data may be stale."
+                  : "Saved context could not be loaded."}
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={memoryResult.isFetching}
+                onClick={() => void memoryResult.refetch()}
+              >
+                Retry
+              </Button>
+            </Alert>
+          </Show>
+          <Show
+            when={!memoryLoading()}
+            fallback={
+              <p role="status" class="text-sm text-muted-foreground">
+                Loading saved context…
+              </p>
+            }
+          >
+            <Show when={memoryResult.data && !memoryResult.isPlaceholderData}>
+              <div class="divide-y border-y">
+                <For
+                  each={memoryResult.data?.sections}
+                  fallback={
+                    <p class="py-4 text-sm text-muted-foreground">
+                      No saved context sections are available.
+                    </p>
+                  }
+                >
+                  {(saved) => (
+                    <Button
+                      variant="ghost"
+                      class="h-auto w-full justify-start rounded-none px-0 py-4 text-left whitespace-normal"
+                      onClick={() => edit({ kind: "memory", section: saved })}
+                    >
+                      <span class="min-w-0">
+                        <span class="block wrap-break-word font-semibold">
+                          {saved.title}
+                        </span>
+                        <span class="block wrap-break-word font-mono text-xs text-muted-foreground">
+                          {saved.id}
+                        </span>
+                      </span>
+                    </Button>
+                  )}
+                </For>
+              </div>
+              <Show when={memoryResult.data?.detail}>
+                <p class="text-sm text-muted-foreground">
+                  {memoryResult.data?.detail}
+                </p>
+              </Show>
+            </Show>
+          </Show>
+        </TabsContent>
+      </Tabs>
       <Dialog
-        open={Boolean(selectedPrompt())}
-        onOpenChange={(open) => !open && closePromptEditor()}
+        open={target() !== null}
+        onOpenChange={(open) => !open && requestClose()}
       >
-        <DialogContent class="max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-3xl overflow-y-auto p-4 sm:max-h-[calc(100dvh-2rem)] sm:w-full sm:p-6">
+        <DialogContent class="max-h-[calc(100dvh-2rem)] w-[calc(100vw-2rem)] max-w-3xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>
-              {selectedPrompt()?.title ?? "Edit prompt"}
-            </DialogTitle>
-            <DialogDescription>
-              {selectedPrompt()?.path ?? "Prompt Markdown"}
+            <DialogTitle>{title()}</DialogTitle>
+            <DialogDescription class="wrap-break-word font-mono">
+              {identifier()}
             </DialogDescription>
           </DialogHeader>
-          <Tabs
-            value={promptTab()}
-            onChange={(value) => setPromptTab(value as PromptTab)}
-          >
-            <TabsList aria-label="Prompt editor tabs">
-              <TabsTrigger value="editor">Editor</TabsTrigger>
-              <TabsTrigger value="preview">Preview</TabsTrigger>
-            </TabsList>
-            <TabsContent value="editor">
-              <TextField>
-                <TextFieldLabel class="sr-only">Prompt Markdown</TextFieldLabel>
-                <TextFieldTextArea
-                  class="min-h-64 font-mono text-xs leading-relaxed sm:min-h-100"
-                  value={promptDraft()}
-                  onInput={(event) => setPromptDraft(event.currentTarget.value)}
-                />
-              </TextField>
-            </TabsContent>
-            <TabsContent value="preview">
-              <div
-                class="prose prose-sm min-h-64 max-w-none overflow-x-auto rounded-md border p-4 text-foreground prose-headings:text-foreground prose-p:text-foreground prose-strong:text-foreground prose-code:text-foreground sm:min-h-100"
-                innerHTML={renderPromptPreview(promptDraft())}
-              />
-            </TabsContent>
-          </Tabs>
-          <DialogFooter>
-            <Button variant="outline" onClick={closePromptEditor}>
-              Cancel
-            </Button>
-            <Button
-              disabled={promptMutation.isPending || !selectedPrompt()}
-              onClick={savePrompt}
+          <Show when={target() !== null && !saveAllowed()}>
+            <p role="status" class="text-sm text-muted-foreground">
+              This is a read-only preview because current content could not be
+              verified. Close it, retry loading, and reopen the current entry
+              before saving.
+            </p>
+          </Show>
+          <form onSubmit={save} class="min-w-0 space-y-4">
+            <Tabs
+              value={editorTab()}
+              onChange={(value) => !pending() && setEditorTab(value)}
             >
-              <Show when={promptMutation.isPending}>
-                <Spinner />
-              </Show>
-              Save encrypted
-            </Button>
-          </DialogFooter>
+              <TabsList aria-label="Assistant context editor tabs">
+                <TabsTrigger value="editor" disabled={pending()}>
+                  Editor
+                </TabsTrigger>
+                <TabsTrigger value="preview" disabled={pending()}>
+                  Preview
+                </TabsTrigger>
+              </TabsList>
+              <TabsContent
+                value="editor"
+                forceMount
+                hidden={editorTab() !== "editor"}
+              >
+                <TextField
+                  value={values().markdown}
+                  validationState={errors.markdown ? "invalid" : "valid"}
+                  disabled={pending()}
+                >
+                  <TextFieldLabel class="sr-only">
+                    {target()?.kind === "memory"
+                      ? "Saved context Markdown"
+                      : "Prompt Markdown"}
+                  </TextFieldLabel>
+                  <TextFieldTextArea
+                    {...markdownField}
+                    value={values().markdown}
+                    disabled={pending()}
+                    readOnly={!saveAllowed()}
+                    class="max-h-[50dvh] min-h-64 font-mono text-sm leading-relaxed sm:min-h-80"
+                  />
+                  <Show when={errors.markdown?.message}>
+                    {(message) => (
+                      <TextFieldErrorMessage>{message()}</TextFieldErrorMessage>
+                    )}
+                  </Show>
+                </TextField>
+              </TabsContent>
+              <TabsContent value="preview">
+                <div
+                  class="max-h-[50dvh] min-h-64 overflow-auto rounded-md border p-4 sm:min-h-80"
+                  role="region"
+                  aria-label="Markdown preview"
+                  tabIndex={0}
+                >
+                  <Show
+                    when={previewAllowed()}
+                    fallback={
+                      <p role="status" class="text-sm text-muted-foreground">
+                        {target()?.kind === "memory"
+                          ? "Saved context must be 12 KiB or less."
+                          : "Prompt must be 4 KiB or less."}{" "}
+                        Reduce the draft in Editor to preview it.
+                      </p>
+                    }
+                  >
+                    <MarkdownViewer markdown={values().markdown} />
+                  </Show>
+                </div>
+              </TabsContent>
+            </Tabs>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={pending()}
+                onClick={requestClose}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={pending() || !saveAllowed()}>
+                <Show when={pending()}>
+                  <Spinner />
+                </Show>
+                Save encrypted
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
-    </>
+      <unsaved.Confirmation />
+    </div>
   );
 }
