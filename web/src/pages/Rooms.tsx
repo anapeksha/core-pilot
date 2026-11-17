@@ -72,20 +72,33 @@ export default function Rooms() {
   const deleteMutation = roomDeleteMutation();
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [isSheetOpen, setIsSheetOpen] = createSignal(false);
-  const { errors, handleSubmit, register, reset, values } =
-    createForm<RoomFormValues>({
-      defaultValues: { name: "" },
-      mode: "onTouched",
-    });
+  const defaultValues: RoomFormValues = { name: "" };
+  const {
+    errors,
+    handleSubmit,
+    register,
+    reset: resetFields,
+    formState,
+  } = createForm<RoomFormValues>({
+    defaultValues,
+    mode: "onTouched",
+  });
   const nameField = register("name", {
     validate: (value) => {
       const result = roomSchema.shape.name.safeParse(value);
       return result.success || result.error.issues[0]?.message;
     },
   });
+  // The library compares against this object, even after reset(values).
+  function reset(next: RoomFormValues) {
+    const initial = next;
+    Object.assign(defaultValues, initial);
+    resetFields(initial);
+  }
+
   const unsaved = createUnsavedChanges({
     open: isSheetOpen,
-    values: values,
+    dirty: formState.isDirty,
     label: "room",
   });
 
@@ -105,14 +118,12 @@ export default function Rooms() {
   const createRoom = () => {
     setEditingId(null);
     reset({ name: "" });
-    unsaved.initialize();
     setIsSheetOpen(true);
   };
 
   const edit = (room: Room) => {
     setEditingId(room.id);
     reset({ name: room.name });
-    unsaved.initialize();
     setIsSheetOpen(true);
   };
 

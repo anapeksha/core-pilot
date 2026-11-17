@@ -8,33 +8,15 @@ import {
 } from "~/components/alert-dialog";
 import { Button } from "~/components/button";
 
-// Serialize only the caller's bounded, non-secret form values, in memory.
-function snapshot(value: unknown): string {
-  return JSON.stringify(value, (_key, entry: unknown) =>
-    entry && typeof entry === "object" && !Array.isArray(entry)
-      ? Object.fromEntries(
-          Object.entries(entry).sort(([a], [b]) => a.localeCompare(b)),
-        )
-      : entry,
-  );
-}
-
 export function createUnsavedChanges(options: {
   open: () => boolean;
-  values: () => unknown;
+  dirty: () => boolean;
   label: string;
 }) {
-  const [initial, setInitial] = createSignal("");
   const [pending, setPending] = createSignal<(() => void) | null>(null);
   let returnFocus: HTMLElement | null = null;
   let keepEditingButton: HTMLButtonElement | undefined;
-  const dirty = createMemo(
-    () => options.open() && snapshot(options.values()) !== initial(),
-  );
-
-  function initialize() {
-    setInitial(snapshot(options.values()));
-  }
+  const dirty = createMemo(() => options.open() && options.dirty());
 
   function request(action: () => void) {
     if (!dirty()) {
@@ -58,7 +40,6 @@ export function createUnsavedChanges(options: {
   createEffect(() => {
     if (!options.open()) {
       setPending(null);
-      setInitial("");
     }
   });
 
@@ -120,5 +101,5 @@ export function createUnsavedChanges(options: {
     );
   }
 
-  return { initialize, request, Confirmation };
+  return { request, Confirmation };
 }

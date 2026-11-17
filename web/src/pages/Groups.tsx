@@ -1,5 +1,12 @@
 import { createUnsavedChanges } from "~/lib/unsaved-changes";
-import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
+import {
+  createEffect,
+  on,
+  createMemo,
+  createSignal,
+  For,
+  Show,
+} from "solid-js";
 import { createForm } from "solid-hook-form";
 import { HiOutlinePencil, HiOutlineSquares2x2 } from "solid-icons/hi";
 import { toast } from "solid-sonner";
@@ -69,7 +76,9 @@ const groupSchema = z.object({
     .max(entityLimits.groupMembers, "A group can contain at most 32 devices."),
 });
 
-type GroupFormValues = z.input<typeof groupSchema>;
+type GroupFormValues = z.input<typeof groupSchema> & {
+  memberSelection?: string;
+};
 type DeviceOption = { id: string; name: string };
 
 function deviceId(device: Device): string {
@@ -83,16 +92,44 @@ export default function Groups() {
   const deleteMutation = groupDeleteMutation();
   const [editingId, setEditingId] = createSignal<string | null>(null);
   const [sheetOpen, setSheetOpen] = createSignal(false);
-  const { errors, handleSubmit, register, reset, setError, setValue, values } =
-    createForm<GroupFormValues>({
-      defaultValues: { name: "", members: [] },
-    });
+  const defaultValues: GroupFormValues = {
+    name: "",
+    members: [],
+    memberSelection: "[]",
+  };
+  const {
+    errors,
+    handleSubmit,
+    register,
+    reset: resetFields,
+    formState,
+    setError,
+    setValue,
+    values,
+  } = createForm<GroupFormValues>({
+    defaultValues,
+  });
+  // The library compares against this object, even after reset(values).
+  function reset(next: GroupFormValues) {
+    const initial = {
+      ...next,
+      memberSelection: JSON.stringify([...next.members].sort()),
+    };
+    Object.assign(defaultValues, initial);
+    resetFields(initial);
+  }
+  createEffect(
+    on(
+      () => JSON.stringify([...values().members].sort()),
+      (value) => {
+        if (values().memberSelection !== value)
+          setValue("memberSelection", value, { shouldDirty: true });
+      },
+    ),
+  );
   const unsaved = createUnsavedChanges({
     open: sheetOpen,
-    values: () => ({
-      name: values().name,
-      members: [...values().members].sort(),
-    }),
+    dirty: formState.isDirty,
     label: "group",
   });
 
@@ -118,14 +155,12 @@ export default function Groups() {
   const openCreate = () => {
     setEditingId(null);
     reset({ name: "", members: [] });
-    unsaved.initialize();
     setSheetOpen(true);
   };
 
   const edit = (group: Group) => {
     setEditingId(group.id);
     reset({ name: group.name, members: group.device_ids });
-    unsaved.initialize();
     setSheetOpen(true);
   };
 

@@ -2442,6 +2442,10 @@ test("prefills automation templates backed by device-side execution", async ({
   await expect(sheet.getByLabel("Time")).toHaveValue("23:00");
   await sheet.getByRole("button", { name: "Continue" }).click();
   await expect(sheet.getByText("Turn off a device")).toBeVisible();
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(
+    page.getByRole("alertdialog", { name: "Discard unsaved changes?" }),
+  ).toBeVisible();
 });
 
 test("shows reported room assignments and blocks deletion of referenced scenes", async ({
@@ -4415,6 +4419,145 @@ test("activity background error retains cached history", async ({ page }) => {
   ).toBe(true);
 });
 
+async function expectDraftDirty(page: Page, dirty: boolean) {
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const event = new Event("beforeunload", { cancelable: true });
+        window.dispatchEvent(event);
+        return event.defaultPrevented;
+      }),
+    )
+    .toBe(dirty);
+}
+
+for (const [model, name, placeholder] of [
+  ["room", "Lab", "Kitchen"],
+  ["group", "Bench lights", "Downstairs lights"],
+  ["scene", "Evening", "Movie night"],
+  ["automation", "Morning", "Wind-down routine"],
+]) {
+  test(`${model} existing edit stays pristine after name revert`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    await page.goto(`/#/${model}s`);
+    const edit = page.getByRole("button", {
+      name: `Edit ${name}`,
+      exact: true,
+    });
+    await edit.click();
+    const sheet = page.getByRole("dialog");
+    const field = sheet.getByPlaceholder(placeholder);
+    await expect(field).toHaveValue(name);
+    await expectDraftDirty(page, false);
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+
+    await edit.click();
+    await field.fill(`${name} changed`);
+    await expectDraftDirty(page, true);
+    await field.fill(name);
+    await expectDraftDirty(page, false);
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+    expect(state.posts).toHaveLength(0);
+  });
+}
+
+test("group member change and revert restores the pristine edit baseline", async ({
+  page,
+}) => {
+  await mockFirmwareApi(page);
+  await page.goto("/#/groups");
+  await page
+    .getByRole("button", { name: "Edit Bench lights", exact: true })
+    .click();
+  const sheet = page.getByRole("dialog");
+  await expectDraftDirty(page, false);
+  await sheet.getByRole("button", { name: /^Devices/ }).click();
+  await page.getByRole("option", { name: "Bench Lamp" }).click();
+  await page.keyboard.press("Escape");
+  await expectDraftDirty(page, true);
+  await sheet.getByRole("button", { name: /^Devices/ }).click();
+  await page.getByRole("option", { name: "Bench Lamp" }).click();
+  await page.keyboard.press("Escape");
+  await expectDraftDirty(page, false);
+  await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+});
+
+for (const model of ["scene", "automation"]) {
+  test(`${model} action revert clears dirty while reordered actions persist and reopen pristine`, async ({
+    page,
+  }) => {
+    const state = await mockFirmwareApi(page);
+    const actions = ["notify|Baseline message", "delay|1000"];
+    if (model === "scene") state.scenes[0].actions = actions;
+    else state.automations[0].actions = actions;
+    const name = model === "scene" ? "Evening" : "Morning";
+    await page.goto(`/#/${model}s`);
+    const edit = page.getByRole("button", {
+      name: `Edit ${name}`,
+      exact: true,
+    });
+    const sheet = page.getByRole("dialog");
+    await edit.click();
+    await expectDraftDirty(page, false);
+    if (model === "automation") {
+      await sheet.getByRole("button", { name: "Continue" }).click();
+      await sheet.getByRole("button", { name: "Continue" }).click();
+    }
+    const message = sheet.getByLabel("Message");
+    await message.fill("Changed message");
+    await expectDraftDirty(page, true);
+    await message.fill("Baseline message");
+    await expectDraftDirty(page, false);
+    await sheet.getByRole("button", { name: "Move action 2 up" }).click();
+    await expectDraftDirty(page, true);
+    await sheet.getByRole("button", { name: "Move action 2 up" }).click();
+    await expectDraftDirty(page, false);
+    await sheet.getByRole("button", { name: "Move action 2 up" }).click();
+    await expectDraftDirty(page, true);
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    const warning = page.getByRole("alertdialog", {
+      name: "Discard unsaved changes?",
+    });
+    await expect(warning).toBeVisible();
+    await warning.getByRole("button", { name: "Keep editing" }).click();
+    if (model === "automation")
+      await sheet.getByRole("button", { name: "Continue" }).click();
+    await sheet
+      .getByRole("button", { name: `Update ${model}`, exact: true })
+      .click();
+    await expect(sheet).toHaveCount(0);
+    await expectDraftDirty(page, false);
+    expect(state.posts.at(-1)).toMatchObject({
+      path: `/api/v1/${model}s/upsert`,
+      body: { actions: ["delay|1000", "notify|Baseline message"] },
+    });
+    await edit.click();
+    await expectDraftDirty(page, false);
+    if (model === "automation") {
+      await sheet.getByRole("button", { name: "Continue" }).click();
+      await sheet.getByRole("button", { name: "Continue" }).click();
+    }
+    await expect(
+      sheet
+        .getByRole("list", { name: "Ordered actions" })
+        .getByRole("listitem")
+        .first()
+        .getByLabel("Milliseconds"),
+    ).toHaveValue("1000");
+    await sheet.getByRole("button", { name: "Cancel", exact: true }).click();
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  });
+}
+
 test("room failed save preserves draft and successful retry closes without warning", async ({
   page,
 }) => {
@@ -4435,11 +4578,21 @@ test("room failed save preserves draft and successful retry closes without warni
     .click();
   await expect(page.getByText("Save rejected", { exact: true })).toBeVisible();
   await expect(field).toHaveValue("Draft kitchen");
+  await expectDraftDirty(page, true);
   await page.unroute("**/api/v1/rooms/upsert", fail);
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "Create room", exact: true })
     .click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  await expectDraftDirty(page, false);
+  await page
+    .getByRole("button", { name: "Edit Draft kitchen", exact: true })
+    .click();
+  await expect(field).toHaveValue("Draft kitchen");
+  await expectDraftDirty(page, false);
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByRole("alertdialog")).toHaveCount(0);
 });

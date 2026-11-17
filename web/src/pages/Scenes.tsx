@@ -1,5 +1,5 @@
 import { createUnsavedChanges } from "~/lib/unsaved-changes";
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, on, createSignal, For, Show } from "solid-js";
 import { createForm } from "solid-hook-form";
 import { z } from "zod";
 import {
@@ -78,7 +78,9 @@ const sceneFormSchema = z.object({
   ).refine((value) => value.trim().length > 0, "Enter a scene name."),
 });
 
-type SceneFormValues = z.input<typeof sceneFormSchema>;
+type SceneFormValues = z.input<typeof sceneFormSchema> & {
+  actionSequence?: string;
+};
 
 const deviceId = (device: Device) =>
   typeof device.id === "string" ? device.id : device.id[0];
@@ -102,28 +104,51 @@ export default function Scenes() {
   const [isSheetOpen, setIsSheetOpen] = createSignal(false);
   const [sceneActions, setSceneActions] = createSignal<ActionDraft[]>([]);
   const [actionError, setActionError] = createSignal<string | null>(null);
-  const { errors, handleSubmit, register, reset, values } =
-    createForm<SceneFormValues>({
-      defaultValues: { name: "" },
-      mode: "onSubmit",
-      resolver: async (formValues: SceneFormValues) => {
-        const result = sceneFormSchema.safeParse(formValues);
-        if (result.success) return { values: result.data, errors: {} };
+  const defaultValues: SceneFormValues = { name: "", actionSequence: "[]" };
+  const {
+    errors,
+    handleSubmit,
+    register,
+    reset: resetFields,
+    formState,
+    setValue,
+    values: formValues,
+  } = createForm<SceneFormValues>({
+    defaultValues,
+    mode: "onSubmit",
+    resolver: async (formValues: SceneFormValues) => {
+      const result = sceneFormSchema.safeParse(formValues);
+      if (result.success) return { values: formValues, errors: {} };
 
-        return {
-          values: {},
-          errors: Object.fromEntries(
-            result.error.issues.map((issue) => [
-              issue.path.join("."),
-              { type: issue.code, message: issue.message },
-            ]),
-          ),
-        };
+      return {
+        values: {},
+        errors: Object.fromEntries(
+          result.error.issues.map((issue) => [
+            issue.path.join("."),
+            { type: issue.code, message: issue.message },
+          ]),
+        ),
+      };
+    },
+  });
+  // The library compares against this object, even after reset(values).
+  function reset(next: SceneFormValues) {
+    const initial = { ...next, actionSequence: JSON.stringify(sceneActions()) };
+    Object.assign(defaultValues, initial);
+    resetFields(initial);
+  }
+  createEffect(
+    on(
+      () => JSON.stringify(sceneActions()),
+      (value) => {
+        if (formValues().actionSequence !== value)
+          setValue("actionSequence", value, { shouldDirty: true });
       },
-    });
+    ),
+  );
   const unsaved = createUnsavedChanges({
     open: isSheetOpen,
-    values: () => ({ name: values().name, actions: sceneActions() }),
+    dirty: formState.isDirty,
     label: "scene",
   });
 
@@ -164,7 +189,6 @@ export default function Scenes() {
 
   const createScene = () => {
     resetForm();
-    unsaved.initialize();
     setIsSheetOpen(true);
   };
 
@@ -173,7 +197,6 @@ export default function Scenes() {
     setSceneActions(scene.actions.map(decodeAction));
     setActionError(null);
     reset({ name: scene.name });
-    unsaved.initialize();
     setIsSheetOpen(true);
   };
 

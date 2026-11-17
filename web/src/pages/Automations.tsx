@@ -1,5 +1,12 @@
 import { createUnsavedChanges } from "~/lib/unsaved-changes";
-import { For, Show, createSignal, type Component } from "solid-js";
+import {
+  For,
+  Show,
+  createSignal,
+  createEffect,
+  on,
+  type Component,
+} from "solid-js";
 import { createForm } from "solid-hook-form";
 import {
   HiOutlineBolt,
@@ -128,7 +135,11 @@ const automationFormSchema = z
       context.addIssue({ code: "custom", path: ["root"], message: error });
   });
 
-type AutomationFormValues = z.input<typeof automationFormSchema>;
+type AutomationFormValues = z.input<typeof automationFormSchema> & {
+  triggerValue?: string;
+  actionSequence?: string;
+  weekdaySelection?: string;
+};
 
 const blankFormValues = (): AutomationFormValues => ({
   name: "",
@@ -226,27 +237,76 @@ export default function Automations() {
   const [validationMessage, setValidationMessage] = createSignal<string | null>(
     null,
   );
-  const { handleSubmit, reset, setValue, values } =
-    createForm<AutomationFormValues>({
-      defaultValues: blankFormValues(),
-      mode: "onSubmit",
-      resolver: async (formValues: AutomationFormValues) => {
-        const result = automationFormSchema.safeParse(formValues);
-        if (result.success) return { values: result.data, errors: {} };
-        return {
-          values: {},
-          errors: Object.fromEntries(
-            result.error.issues.map((issue) => [
-              issue.path.join("."),
-              { type: issue.code, message: issue.message },
-            ]),
-          ),
-        };
+  const defaultValues: AutomationFormValues = {
+    ...blankFormValues(),
+    triggerValue: JSON.stringify({ type: "manual" }),
+    actionSequence: "[]",
+    weekdaySelection: "[]",
+  };
+  const {
+    handleSubmit,
+    reset: resetFields,
+    formState,
+    setValue,
+    values,
+  } = createForm<AutomationFormValues>({
+    defaultValues,
+    mode: "onSubmit",
+    resolver: async (formValues: AutomationFormValues) => {
+      const result = automationFormSchema.safeParse(formValues);
+      if (result.success) return { values: result.data, errors: {} };
+      return {
+        values: {},
+        errors: Object.fromEntries(
+          result.error.issues.map((issue) => [
+            issue.path.join("."),
+            { type: issue.code, message: issue.message },
+          ]),
+        ),
+      };
+    },
+  });
+  // The library compares against this object, even after reset(values).
+  function reset(next: AutomationFormValues) {
+    const initial = {
+      ...next,
+      triggerValue: JSON.stringify(next.trigger),
+      actionSequence: JSON.stringify(next.actions),
+      weekdaySelection: JSON.stringify([...next.selectedWeekdays].sort()),
+    };
+    Object.assign(defaultValues, initial);
+    resetFields(initial);
+  }
+  createEffect(
+    on(
+      () => JSON.stringify(values().trigger),
+      (value) => {
+        if (values().triggerValue !== value)
+          setValue("triggerValue", value, { shouldDirty: true });
       },
-    });
+    ),
+  );
+  createEffect(
+    on(
+      () => JSON.stringify(values().actions),
+      (value) => {
+        if (values().actionSequence !== value)
+          setValue("actionSequence", value, { shouldDirty: true });
+      },
+    ),
+  );
+  createEffect(
+    on(
+      () => JSON.stringify([...values().selectedWeekdays].sort()),
+      (value) => {
+        if (values().weekdaySelection !== value)
+          setValue("weekdaySelection", value, { shouldDirty: true });
+      },
+    ),
+  );
   const unsaved = createUnsavedChanges({
     open: isSheetOpen,
-    values: values,
+    dirty: formState.isDirty,
     label: "automation",
   });
 
@@ -344,14 +404,17 @@ export default function Automations() {
 
   function createAutomation() {
     resetForm();
-    unsaved.initialize();
     setIsSheetOpen(true);
   }
 
   function useTemplate(templateId: AutomationTemplateId) {
     const draft = applyAutomationTemplate(templateId, timezoneOffset());
     if (!draft) return;
-    reset(draft);
+    setValue("name", draft.name, { shouldDirty: true });
+    setValue("enabled", draft.enabled, { shouldDirty: true });
+    setValue("trigger", draft.trigger);
+    setValue("actions", draft.actions);
+    setValue("selectedWeekdays", draft.selectedWeekdays);
     setValidationMessage(null);
   }
 
@@ -370,7 +433,6 @@ export default function Automations() {
     });
     setStep(0);
     setValidationMessage(null);
-    unsaved.initialize();
     setIsSheetOpen(true);
   }
 
@@ -561,7 +623,9 @@ export default function Automations() {
                         </Show>
                         <TextField
                           value={name()}
-                          onChange={(value) => setValue("name", value)}
+                          onChange={(value) =>
+                            setValue("name", value, { shouldDirty: true })
+                          }
                           validationState={
                             validationMessage() && !name().trim()
                               ? "invalid"
@@ -580,7 +644,9 @@ export default function Automations() {
                         </TextField>
                         <Switch
                           checked={enabled()}
-                          onChange={(value) => setValue("enabled", value)}
+                          onChange={(value) =>
+                            setValue("enabled", value, { shouldDirty: true })
+                          }
                           class="flex items-start gap-3 rounded-md border p-3"
                         >
                           <SwitchControl class="mt-0.5">
