@@ -124,13 +124,18 @@ Do not run firmware formatting and the dashboard build concurrently because form
 
 CI has two deliberately separate test environments for firmware logic. Component-owned Unity cases remain beside their production components under `firmware/s3/components/core_*/test/`. The projects under `firmware/s3/test/` are runners: they assemble those policies for a specific execution environment without becoming part of the production firmware image.
 
-1. **Native host execution** configures `firmware/s3/test/host/` with the host compiler. Three sanitizer-backed executables run the existing logic checks, the real authorization implementation, and the shared component-owned cases for board geometry, display, gateway verification, Matter lifecycle/history, networking, and OTA. Cross-component cases exercise the production authorization-to-display mapping together with touch admission, code exchange, and reboot recovery. Missing required suites fail the runner; each executable has a 30-second limit:
+1. **Native host execution** configures `firmware/s3/test/host/` with the host compiler. Four sanitizer-backed executables run the existing logic checks, the real authorization implementation, and the shared component-owned cases for AI/domain, board geometry, display, gateway verification, Matter lifecycle/history, networking, and OTA. Cross-component cases exercise the production authorization-to-display mapping together with touch admission, code exchange, and reboot recovery. Missing required suites fail the runner; each executable has a 30-second limit:
 
    ```sh
-   cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
-   cmake --build firmware/s3/test/host/build
-   ctest --test-dir firmware/s3/test/host/build --output-on-failure --no-tests=error
+   eim run 'python firmware/s3/test/host/prepare_dependencies.py --build-dir firmware/s3/test/host/build' v6.0.2
+   eim run 'cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug' v6.0.2
+   eim run 'cmake --build firmware/s3/test/host/build' v6.0.2
+   eim run 'ctest --test-dir firmware/s3/test/host/build --output-on-failure --no-tests=error' v6.0.2
    ```
+
+   Dependency preparation uses ESP-IDF's Python component tools to fetch only the cJSON version and content hash in `firmware/s3/dependencies.lock` into the ignored host build directory; it does not require a populated `managed_components` tree or change the lock. The first fetch may access the Espressif registry; subsequent runs validate cached content. Configure with ESP-IDF 6.0.2's `IDF_PATH`, or pass `-DCORE_PILOT_PSA_SOURCE` pointing to its `components/mbedtls/mbedtls/tf-psa-crypto` directory. CI uses the same preparation step in the pinned SDK container.
+
+   The AI/domain executable uses production repositories, parsing, and encrypted-record code with real PSA HKDF/ChaCha20-Poly1305 and a minimal host-only crypto configuration. Native adapters replace allocation, mutexes, and entropy—not encryption. Project C++ retains strict warnings and disabled exceptions/RTTI; crypto retains upstream warnings and cJSON uses compiler-default warnings. All project and dependency sources are ASan/UBSan-instrumented with fatal undefined behavior. POSIX child-process isolation reports each failed case's exit code or signal and continues the remaining cases without hiding failures. This requires macOS/Linux and does not validate PSRAM capabilities, FreeRTOS scheduling, SD/flash, hardware entropy, or HTTP orchestration.
 
 2. **ESP32-S3 compile/link validation** builds `firmware/s3/test/esp32s3/` with the official ESP-IDF 6.0.2 toolchain. The image reuses the existing component Unity test sources and verifies that they compile and link for the actual `esp32s3` target:
 
@@ -180,7 +185,7 @@ Boot/API success is not a stress, soak, commissioning, or peripheral-validation 
 
 ## Releases
 
-Update the firmware/dashboard versions and add the release entry to `CHANGELOG.md` before tagging a release. Use only that version's changelog body as the GitHub release text, preserving its section headings; do not copy other versions or append PR descriptions and validation logs. Wait for CI and CodeQL before merging, then use the production release workflow to sign and verify the published images. Never publish development authentication-bypass builds or program eFuses as part of a release.
+Update the firmware/dashboard versions and add the release entry to `CHANGELOG.md` before tagging a release. Use only that version's changelog body as the GitHub release text, preserving its section headings; do not copy other versions or append PR descriptions and validation logs. Wait for CI and CodeQL to pass before merging, then tag the merged commit and publish through the production release workflow to sign and verify the images. Manual workflow runs produce artifacts without publishing a release. Native or browser test results do not establish device validation. Never publish development authentication-bypass builds or program eFuses as part of a release.
 
 ## Pull requests
 

@@ -85,6 +85,8 @@ jobs:
           . "$IDF_PATH/export.sh"
           echo "PATH=$PATH" >> "$GITHUB_ENV"
 
+      - name: Resolve locked native test dependencies
+        run: python firmware/s3/test/host/prepare_dependencies.py --build-dir firmware/s3/test/host/build
       - name: Configure native host tests
         run: cmake -S firmware/s3/test/host -B firmware/s3/test/host/build -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - name: Build native host tests
